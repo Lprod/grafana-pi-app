@@ -10,6 +10,7 @@ The assistant uses the current Grafana user's datasource and dashboard permissio
 - At least one Prometheus datasource for metric exploration.
 - An OpenAI-compatible chat completions endpoint and API key.
 - Grafana image rendering if dashboard screenshot verification is required.
+- Grafana external service accounts for app-managed dashboard sync.
 
 ## Getting started
 
@@ -20,3 +21,5 @@ The assistant uses the current Grafana user's datasource and dashboard permissio
 5. Ask the assistant to inspect metrics, validate PromQL, or create dashboards.
 
 The assistant page does not expose model or datasource policy controls; all requests use the model and datasource allow-list configured in the plugin settings.
+
+Managed dashboard templates are rendered from embedded Jsonnet/Grafonnet assets in the backend. They are saved as plugin-managed dashboard resources and should be changed by re-syncing through the app.

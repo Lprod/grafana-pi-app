@@ -30,9 +30,10 @@ type App struct {
 }
 
 type appSettings struct {
-	OpenAIBaseURL string `json:"openAIBaseUrl"`
-	DefaultModel  string `json:"defaultModel"`
-	OpenAIAPIKey  string
+	OpenAIBaseURL         string   `json:"openAIBaseUrl"`
+	DefaultModel          string   `json:"defaultModel"`
+	AllowedDatasourceUIDs []string `json:"allowedDatasourceUids"`
+	OpenAIAPIKey          string
 }
 
 // NewApp creates a new example *App instance.

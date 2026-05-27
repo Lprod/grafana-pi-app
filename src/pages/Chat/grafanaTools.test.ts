@@ -19,6 +19,7 @@ jest.mock('@grafana/runtime', () => ({
 
 jest.mock('typebox', () => ({
   Type: {
+    Array: jest.fn((items, config) => ({ ...config, items })),
     Boolean: jest.fn((config) => config ?? {}),
     Literal: jest.fn((value, config) => ({ ...config, const: value })),
     Number: jest.fn((config) => config ?? {}),
@@ -106,14 +107,25 @@ describe('grafana datasource tool policy', () => {
         {
           datasource: { type: '__expr__', uid: '__expr__' },
         },
+        {
+          datasource: { type: 'prometheus', uid: '$datasource' },
+        },
       ],
     };
     const uploadTool = getTool(createGrafanaTools({ allowedDatasourceUids: ['prom-a'] }), 'grafana_upload_dashboard');
 
-    expect(getDisallowedDashboardDatasourceUids(dashboard, { allowedDatasourceUids: ['prom-a'] })).toEqual(['prom-b']);
+    expect(getDisallowedDashboardDatasourceUids(dashboard, { allowedDatasourceUids: ['prom-a'] })).toEqual(['$datasource', 'prom-b']);
     await expect(uploadTool.execute('call-1', { dashboard_json: JSON.stringify(dashboard) }, undefined)).rejects.toThrow(
-      'Dashboard references datasource UIDs not available to the assistant: prom-b'
+      'Dashboard references datasource UIDs not available to the assistant: $datasource, prom-b'
     );
+  });
+
+  it('rejects managed dashboard sync calls outside the datasource allow-list', async () => {
+    const tool = getTool(createGrafanaTools({ allowedDatasourceUids: ['prom-a'] }), 'grafana_sync_managed_dashboard');
+
+    await expect(
+      tool.execute('call-1', { templateId: 'service-red', datasourceUid: 'prom-b', title: 'Bad dashboard' }, undefined)
+    ).rejects.toThrow('Datasource is not available to the assistant: prom-b');
   });
 });
 

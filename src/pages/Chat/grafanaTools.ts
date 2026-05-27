@@ -15,6 +15,7 @@ import {
 import { config, getBackendSrv, getDataSourceSrv } from '@grafana/runtime';
 import { lastValueFrom, type Observable } from 'rxjs';
 import { Type } from 'typebox';
+import { PLUGIN_ID } from '../../constants';
 import type { PiAppJsonData } from '../../types';
 
 type TextToolResult<TDetails = Record<string, unknown>> = AgentToolResult<TDetails>;
@@ -66,6 +67,17 @@ type UploadDashboardParams = {
   folderUid?: string;
 };
 
+type ManagedDashboardParams = {
+  templateId?: string;
+  uid?: string;
+  title?: string;
+  datasourceUid: string;
+  folderUid?: string;
+  job?: string;
+  tags?: string[];
+  overwrite?: boolean;
+};
+
 type DashboardUidParams = {
   uid: string;
 };
@@ -84,6 +96,21 @@ type ScreenshotParams = DashboardUidParams & {
   theme?: 'dark' | 'light';
 };
 
+type JsonnetLibSearchParams = {
+  pattern: string;
+  path?: string;
+};
+
+type JsonnetLibReadParams = {
+  path: string;
+  offset?: number;
+  limit?: number;
+};
+
+type JsonnetLibListParams = {
+  path?: string;
+};
+
 const REQUIRED_DASHBOARD_TAG = 'genai';
 const BUILTIN_DASHBOARD_DATASOURCE_UIDS = new Set(['__expr__', '-- Mixed --', '-- Dashboard --', 'mixed', 'grafana', 'dashboard', '-100']);
 
@@ -94,6 +121,13 @@ export function createGrafanaTools(toolConfig: GrafanaToolConfig = {}): AgentToo
     makeListLabelValuesTool(toolConfig),
     makeQueryPrometheusTool(toolConfig),
     makeGrafanaUploadDashboardTool(toolConfig),
+    makeGrafanaListManagedDashboardTemplatesTool(),
+    makeGrafanaListManagedDashboardsTool(),
+    makeGrafanaRenderManagedDashboardTool(toolConfig),
+    makeGrafanaSyncManagedDashboardTool(toolConfig),
+    makeSearchJsonnetLibsTool(),
+    makeReadJsonnetLibTool(),
+    makeListJsonnetLibsTool(),
     grafanaGetDashboardTool,
     grafanaListDashboardsTool,
     grafanaDeleteDashboardTool,
@@ -277,6 +311,112 @@ const makeGrafanaUploadDashboardTool = (toolConfig: GrafanaToolConfig): AgentToo
   },
 });
 
+const makeGrafanaListManagedDashboardTemplatesTool = (): AgentTool => ({
+  name: 'grafana_list_managed_dashboard_templates',
+  label: 'List managed dashboard templates',
+  description: 'List Jsonnet/Grafonnet dashboard templates bundled with this app.',
+  parameters: Type.Object({}),
+  async execute(_toolCallId, _params, signal) {
+    throwIfAborted(signal);
+    const result = await pluginResourceFetch<{ templates: unknown[] }>('/managed-dashboards/templates');
+    return textResult(JSON.stringify(result.templates, null, 2), { count: result.templates.length });
+  },
+});
+
+const makeGrafanaListManagedDashboardsTool = (): AgentTool => ({
+  name: 'grafana_list_managed_dashboards',
+  label: 'List managed dashboards',
+  description: 'List dashboards currently managed by this app plugin, including stored template configuration when available.',
+  parameters: Type.Object({}),
+  async execute(_toolCallId, _params, signal) {
+    throwIfAborted(signal);
+    const result = await pluginResourceFetch<{ dashboards: unknown[] }>('/managed-dashboards');
+    return textResult(JSON.stringify(result.dashboards, null, 2), { count: result.dashboards.length });
+  },
+});
+
+const makeGrafanaRenderManagedDashboardTool = (toolConfig: GrafanaToolConfig): AgentTool => ({
+  name: 'grafana_render_managed_dashboard',
+  label: 'Render managed dashboard',
+  description: 'Render an app-managed Jsonnet/Grafonnet dashboard template without saving it.',
+  parameters: managedDashboardParameters(),
+  async execute(_toolCallId, params, signal) {
+    const args = params as ManagedDashboardParams;
+    throwIfAborted(signal);
+    assertManagedDashboardDatasourceAllowed(toolConfig, args.datasourceUid);
+    const result = await pluginResourceFetch<unknown>('/managed-dashboards/render', { method: 'POST', data: args });
+    return textResult(truncateText(JSON.stringify(result, null, 2), 120000), {
+      templateId: args.templateId ?? 'service-red',
+      datasourceUid: args.datasourceUid,
+    });
+  },
+});
+
+const makeGrafanaSyncManagedDashboardTool = (toolConfig: GrafanaToolConfig): AgentTool => ({
+  name: 'grafana_sync_managed_dashboard',
+  label: 'Sync managed dashboard',
+  description: 'Create or update a dashboard from an app-managed Jsonnet/Grafonnet template. The Grafana UI remains read-only; future edits should go through this app.',
+  parameters: managedDashboardParameters(),
+  async execute(_toolCallId, params, signal) {
+    const args = params as ManagedDashboardParams;
+    throwIfAborted(signal);
+    assertManagedDashboardDatasourceAllowed(toolConfig, args.datasourceUid);
+    const result = await pluginResourceFetch<{ uid: string; url: string; status: string; sourceChecksum: string }>('/managed-dashboards/sync', {
+      method: 'POST',
+      data: args,
+    });
+    return textResult(`Managed dashboard ${result.status}: ${result.url}\nUID: ${result.uid}\nSource: ${result.sourceChecksum}`, result);
+  },
+});
+
+const makeSearchJsonnetLibsTool = (): AgentTool => ({
+  name: 'search_jsonnet_libs',
+  label: 'Search Jsonnet libraries',
+  description: 'Search vendored Grafonnet/Jsonnet library files for API names and examples.',
+  parameters: Type.Object({
+    pattern: Type.String({ description: 'Plain text search pattern, at least 2 characters.' }),
+    path: Type.Optional(Type.String({ description: 'Optional vendored library path prefix, such as github.com/grafana/grafonnet/gen/grafonnet-v11.4.0/panel.' })),
+  }),
+  async execute(_toolCallId, params, signal) {
+    const args = params as JsonnetLibSearchParams;
+    throwIfAborted(signal);
+    const result = await pluginResourceFetch<unknown>('/jsonnet-libs/search', { method: 'POST', data: args });
+    return textResult(truncateText(JSON.stringify(result, null, 2), 80000), { pattern: args.pattern });
+  },
+});
+
+const makeReadJsonnetLibTool = (): AgentTool => ({
+  name: 'read_jsonnet_lib',
+  label: 'Read Jsonnet library file',
+  description: 'Read a range of lines from a vendored Grafonnet/Jsonnet library file.',
+  parameters: Type.Object({
+    path: Type.String({ description: 'Vendored library path, such as github.com/grafana/grafonnet/gen/grafonnet-v11.4.0/docs/panel/timeSeries/index.md.' }),
+    offset: Type.Optional(Type.Number({ description: '1-based start line. Defaults to 1.' })),
+    limit: Type.Optional(Type.Number({ description: 'Maximum number of lines. Defaults to 200 and caps at 500.' })),
+  }),
+  async execute(_toolCallId, params, signal) {
+    const args = params as JsonnetLibReadParams;
+    throwIfAborted(signal);
+    const result = await pluginResourceFetch<unknown>('/jsonnet-libs/read', { method: 'POST', data: args });
+    return textResult(truncateText(JSON.stringify(result, null, 2), 80000), { path: args.path });
+  },
+});
+
+const makeListJsonnetLibsTool = (): AgentTool => ({
+  name: 'list_jsonnet_libs',
+  label: 'List Jsonnet library files',
+  description: 'List vendored .libsonnet files under a Grafonnet/Jsonnet library path.',
+  parameters: Type.Object({
+    path: Type.Optional(Type.String({ description: 'Optional vendored library path prefix. Defaults to Grafonnet v11.4.0.' })),
+  }),
+  async execute(_toolCallId, params, signal) {
+    const args = params as JsonnetLibListParams;
+    throwIfAborted(signal);
+    const result = await pluginResourceFetch<unknown>('/jsonnet-libs/list', { method: 'POST', data: args });
+    return textResult(truncateText(JSON.stringify(result, null, 2), 80000), { path: args.path });
+  },
+});
+
 const grafanaGetDashboardTool: AgentTool = {
   name: 'grafana_get_dashboard',
   label: 'Get dashboard',
@@ -443,6 +583,33 @@ async function backendFetch<T>(url: string, options: { method?: string; data?: u
     })
   );
   return response.data;
+}
+
+async function pluginResourceFetch<T>(path: string, options: { method?: string; data?: unknown; params?: Record<string, unknown> } = {}): Promise<T> {
+  return backendFetch<T>(`/api/plugins/${PLUGIN_ID}/resources${path}`, options);
+}
+
+function managedDashboardParameters() {
+  return Type.Object({
+    templateId: Type.Optional(Type.String({ description: 'Bundled managed dashboard template ID. Defaults to service-red.' })),
+    uid: Type.Optional(Type.String({ description: 'Optional dashboard UID. Defaults to a normalized UID from the title.' })),
+    title: Type.Optional(Type.String({ description: 'Dashboard title.' })),
+    datasourceUid: Type.String({ description: 'Prometheus datasource UID. Must be returned by grafana_get_datasources.' }),
+    folderUid: Type.Optional(Type.String({ description: 'Optional folder UID.' })),
+    job: Type.Optional(Type.String({ description: 'Optional Prometheus job label value used by the service-red template.' })),
+    tags: Type.Optional(Type.Array(Type.String(), { description: 'Optional extra dashboard tags.' })),
+    overwrite: Type.Optional(Type.Boolean({ description: 'Whether to update an existing dashboard with the same UID. Defaults to true.' })),
+  });
+}
+
+function assertManagedDashboardDatasourceAllowed(toolConfig: GrafanaToolConfig, datasourceUid: string) {
+  const allowed = new Set((toolConfig.allowedDatasourceUids ?? []).filter(Boolean));
+  if (!datasourceUid) {
+    throw new Error('datasourceUid is required');
+  }
+  if (allowed.size > 0 && !allowed.has(datasourceUid)) {
+    throw new Error(`Datasource is not available to the assistant: ${datasourceUid}`);
+  }
 }
 
 function makeTimeRange(fromRaw: string, toRaw: string): TimeRange {

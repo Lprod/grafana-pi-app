@@ -2,7 +2,10 @@ module github.com/elohmeier/grafana-pi-app
 
 go 1.26.3
 
-require github.com/grafana/grafana-plugin-sdk-go v0.292.1
+require (
+	github.com/google/go-jsonnet v0.22.0
+	github.com/grafana/grafana-plugin-sdk-go v0.292.1
+)
 
 require (
 	github.com/BurntSushi/toml v1.5.0 // indirect
@@ -74,6 +77,7 @@ require (
 	go.opentelemetry.io/otel/trace v1.43.0 // indirect
 	go.opentelemetry.io/proto/otlp v1.10.0 // indirect
 	go.yaml.in/yaml/v2 v2.4.3 // indirect
+	golang.org/x/crypto v0.51.0 // indirect
 	golang.org/x/exp v0.0.0-20260112195511-716be5621a96 // indirect
 	golang.org/x/net v0.55.0 // indirect
 	golang.org/x/sys v0.45.0 // indirect
@@ -82,4 +86,5 @@ require (
 	google.golang.org/grpc v1.80.0 // indirect
 	google.golang.org/protobuf v1.36.11 // indirect
 	gopkg.in/fsnotify/fsnotify.v1 v1.4.7 // indirect
+	sigs.k8s.io/yaml v1.6.0 // indirect
 )
