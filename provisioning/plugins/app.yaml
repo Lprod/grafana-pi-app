@@ -9,5 +9,6 @@ apps:
       openAIBaseUrl: https://api.openai.com/v1
       defaultModel: gpt-4.1
       isOpenAIAPIKeySet: true
+      allowedDatasourceUids: []
     secureJsonData:
       openAIAPIKey: $__env{OPENAI_API_KEY}

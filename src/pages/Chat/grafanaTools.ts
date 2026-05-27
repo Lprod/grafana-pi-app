@@ -9,13 +9,17 @@ import {
   type DataQueryResponse,
   type DataQueryRequest,
   type DataSourceApi,
+  type DataSourceInstanceSettings,
   type TimeRange,
 } from '@grafana/data';
 import { config, getBackendSrv, getDataSourceSrv } from '@grafana/runtime';
 import { lastValueFrom, type Observable } from 'rxjs';
 import { Type } from 'typebox';
+import type { PiAppJsonData } from '../../types';
 
 type TextToolResult<TDetails = Record<string, unknown>> = AgentToolResult<TDetails>;
+
+export type GrafanaToolConfig = Pick<PiAppJsonData, 'allowedDatasourceUids'>;
 
 type ResourceCapableDataSource = DataSourceApi & {
   getResource?: <T = unknown>(path: string, params?: Record<string, unknown>) => Promise<T>;
@@ -81,14 +85,15 @@ type ScreenshotParams = DashboardUidParams & {
 };
 
 const REQUIRED_DASHBOARD_TAG = 'genai';
+const BUILTIN_DASHBOARD_DATASOURCE_UIDS = new Set(['__expr__', '-- Mixed --', '-- Dashboard --', 'mixed', 'grafana', 'dashboard', '-100']);
 
-export function createGrafanaTools(): AgentTool[] {
+export function createGrafanaTools(toolConfig: GrafanaToolConfig = {}): AgentTool[] {
   return [
-    grafanaGetDatasourcesTool,
-    listMetricsTool,
-    listLabelValuesTool,
-    queryPrometheusTool,
-    grafanaUploadDashboardTool,
+    makeGrafanaGetDatasourcesTool(toolConfig),
+    makeListMetricsTool(toolConfig),
+    makeListLabelValuesTool(toolConfig),
+    makeQueryPrometheusTool(toolConfig),
+    makeGrafanaUploadDashboardTool(toolConfig),
     grafanaGetDashboardTool,
     grafanaListDashboardsTool,
     grafanaDeleteDashboardTool,
@@ -96,13 +101,13 @@ export function createGrafanaTools(): AgentTool[] {
   ];
 }
 
-const grafanaGetDatasourcesTool: AgentTool = {
+const makeGrafanaGetDatasourcesTool = (toolConfig: GrafanaToolConfig): AgentTool => ({
   name: 'grafana_get_datasources',
   label: 'Get Grafana datasources',
-  description: 'List Prometheus-compatible datasources available to the current Grafana user.',
+  description: 'List Prometheus-compatible datasources available to the assistant and current Grafana user.',
   parameters: Type.Object({}),
   async execute() {
-    const datasources = getPrometheusDatasourceSettings().map((ds) => ({
+    const datasources = getPrometheusDatasourceSettings(toolConfig).map((ds) => ({
       name: ds.name,
       uid: ds.uid,
       type: ds.type,
@@ -111,9 +116,9 @@ const grafanaGetDatasourcesTool: AgentTool = {
 
     return textResult(JSON.stringify(datasources, null, 2), { datasources });
   },
-};
+});
 
-const listMetricsTool: AgentTool = {
+const makeListMetricsTool = (toolConfig: GrafanaToolConfig): AgentTool => ({
   name: 'list_metrics',
   label: 'List metrics',
   description: 'List Prometheus metric names, optionally filtered by prefix.',
@@ -124,7 +129,7 @@ const listMetricsTool: AgentTool = {
   async execute(_toolCallId, params, signal) {
     const args = params as ListMetricsParams;
     throwIfAborted(signal);
-    const ds = await getPrometheusDatasource(args.datasourceUid);
+    const ds = await getPrometheusDatasource(toolConfig, args.datasourceUid);
     const response = await getDatasourceResource<PrometheusMetadataResponse<string[]>>(ds, 'api/v1/label/__name__/values');
     const metrics = (response.data ?? []).filter((name) => !args.prefix || name.startsWith(args.prefix));
     const limited = metrics.slice(0, 1000);
@@ -136,9 +141,9 @@ const listMetricsTool: AgentTool = {
       truncated: metrics.length > limited.length,
     });
   },
-};
+});
 
-const listLabelValuesTool: AgentTool = {
+const makeListLabelValuesTool = (toolConfig: GrafanaToolConfig): AgentTool => ({
   name: 'list_label_values',
   label: 'List label values',
   description: 'List Prometheus label values, optionally scoped by a metric selector in match[].',
@@ -150,7 +155,7 @@ const listLabelValuesTool: AgentTool = {
   async execute(_toolCallId, params, signal) {
     const args = params as ListLabelValuesParams;
     throwIfAborted(signal);
-    const ds = await getPrometheusDatasource(args.datasourceUid);
+    const ds = await getPrometheusDatasource(toolConfig, args.datasourceUid);
     const response = await getDatasourceResource<PrometheusMetadataResponse<string[]>>(
       ds,
       `api/v1/label/${encodeURIComponent(args.label)}/values`,
@@ -167,9 +172,9 @@ const listLabelValuesTool: AgentTool = {
       truncated: values.length > limited.length,
     });
   },
-};
+});
 
-const queryPrometheusTool: AgentTool = {
+const makeQueryPrometheusTool = (toolConfig: GrafanaToolConfig): AgentTool => ({
   name: 'query_prometheus',
   label: 'Query Prometheus',
   description: 'Run an instant or range PromQL query through Grafana as the current user.',
@@ -184,7 +189,7 @@ const queryPrometheusTool: AgentTool = {
   async execute(_toolCallId, params, signal) {
     const args = params as QueryPrometheusParams;
     throwIfAborted(signal);
-    const ds = await getPrometheusDatasource(args.datasourceUid);
+    const ds = await getPrometheusDatasource(toolConfig, args.datasourceUid);
     const queryType = args.type ?? 'instant';
     const timeRange = queryType === 'range' ? makeTimeRange(args.start ?? 'now-1h', args.end ?? 'now') : getDefaultTimeRange();
     const interval = args.step ?? '1m';
@@ -227,9 +232,9 @@ const queryPrometheusTool: AgentTool = {
       frames: frames.length,
     });
   },
-};
+});
 
-const grafanaUploadDashboardTool: AgentTool = {
+const makeGrafanaUploadDashboardTool = (toolConfig: GrafanaToolConfig): AgentTool => ({
   name: 'grafana_upload_dashboard',
   label: 'Upload dashboard',
   description: 'Create or update a Grafana dashboard JSON model as the current user.',
@@ -244,6 +249,10 @@ const grafanaUploadDashboardTool: AgentTool = {
     const dashboard = parseDashboard(args.dashboard_json);
     if (!dashboard.title) {
       throw new Error('Dashboard JSON must include a title');
+    }
+    const disallowedDatasourceUids = getDisallowedDashboardDatasourceUids(dashboard, toolConfig);
+    if (disallowedDatasourceUids.length > 0) {
+      throw new Error(`Dashboard references datasource UIDs not available to the assistant: ${disallowedDatasourceUids.join(', ')}`);
     }
 
     dashboard.uid = normalizeDashboardUid(dashboard.uid, String(dashboard.title));
@@ -266,7 +275,7 @@ const grafanaUploadDashboardTool: AgentTool = {
       status: result.status,
     });
   },
-};
+});
 
 const grafanaGetDashboardTool: AgentTool = {
   name: 'grafana_get_dashboard',
@@ -386,16 +395,25 @@ const grafanaScreenshotTool: AgentTool = {
   },
 };
 
-function getPrometheusDatasourceSettings() {
-  return getDataSourceSrv()
-    .getList({ metrics: true })
-    .filter((ds) => ds.type === 'prometheus');
+export function filterAllowedPrometheusDatasourceSettings(
+  datasources: DataSourceInstanceSettings[],
+  allowedDatasourceUids?: string[]
+) {
+  const allowedUids = new Set((allowedDatasourceUids ?? []).filter(Boolean));
+
+  return datasources.filter((ds) => ds.type === 'prometheus' && (allowedUids.size === 0 || allowedUids.has(ds.uid)));
 }
 
-async function getPrometheusDatasource(uid?: string): Promise<ResourceCapableDataSource> {
-  const selected = uid ? getDataSourceSrv().getInstanceSettings({ uid }) : getPrometheusDatasourceSettings()[0];
+function getPrometheusDatasourceSettings(toolConfig: GrafanaToolConfig) {
+  return filterAllowedPrometheusDatasourceSettings(getDataSourceSrv().getList({ metrics: true }), toolConfig.allowedDatasourceUids);
+}
+
+async function getPrometheusDatasource(toolConfig: GrafanaToolConfig, uid?: string): Promise<ResourceCapableDataSource> {
+  const available = getPrometheusDatasourceSettings(toolConfig);
+  const selected = uid ? available.find((ds) => ds.uid === uid) : available[0];
+
   if (!selected) {
-    throw new Error(uid ? `Prometheus datasource not found: ${uid}` : 'No Prometheus datasource is available');
+    throw new Error(uid ? `Datasource is not available to the assistant: ${uid}` : 'No Prometheus datasource is available to the assistant');
   }
 
   return getDataSourceSrv().get({ uid: selected.uid, type: selected.type }) as Promise<ResourceCapableDataSource>;
@@ -479,6 +497,49 @@ function parseDashboard(source: string): Record<string, any> {
     throw new Error('Dashboard JSON must be an object');
   }
   return parsed as Record<string, any>;
+}
+
+export function getDisallowedDashboardDatasourceUids(dashboard: unknown, toolConfig: GrafanaToolConfig): string[] {
+  const allowedUids = new Set((toolConfig.allowedDatasourceUids ?? []).filter(Boolean));
+  if (allowedUids.size === 0) {
+    return [];
+  }
+
+  return [...collectDashboardDatasourceUids(dashboard)]
+    .filter((uid) => !allowedUids.has(uid))
+    .sort((left, right) => left.localeCompare(right));
+}
+
+function collectDashboardDatasourceUids(value: unknown, result = new Set<string>()): Set<string> {
+  if (Array.isArray(value)) {
+    value.forEach((item) => collectDashboardDatasourceUids(item, result));
+    return result;
+  }
+  if (!value || typeof value !== 'object') {
+    return result;
+  }
+
+  const record = value as Record<string, unknown>;
+  if ('datasource' in record) {
+    addDatasourceUid(record.datasource, result);
+  }
+  Object.values(record).forEach((item) => collectDashboardDatasourceUids(item, result));
+
+  return result;
+}
+
+function addDatasourceUid(datasourceRef: unknown, result: Set<string>) {
+  const uid =
+    typeof datasourceRef === 'string'
+      ? datasourceRef.trim()
+      : datasourceRef && typeof datasourceRef === 'object' && !Array.isArray(datasourceRef)
+        ? String((datasourceRef as Record<string, unknown>).uid ?? '').trim()
+        : '';
+
+  if (!uid || BUILTIN_DASHBOARD_DATASOURCE_UIDS.has(uid)) {
+    return;
+  }
+  result.add(uid);
 }
 
 function normalizeDashboardUid(uid: unknown, title: string): string {

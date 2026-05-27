@@ -51,7 +51,7 @@ function ChatApp() {
   const storage = usePluginUserStorage();
   const pluginMeta = usePluginMeta();
   const jsonData = useMemo(() => (pluginMeta?.jsonData ?? {}) as PiAppJsonData, [pluginMeta?.jsonData]);
-  const tools = useMemo(() => createGrafanaTools(), []);
+  const tools = useMemo(() => createGrafanaTools(jsonData), [jsonData]);
   const [agent, setAgent] = useState<Agent>();
   const [revision, setRevision] = useState(0);
   const [input, setInput] = useState('');

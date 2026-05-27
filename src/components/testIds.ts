@@ -4,6 +4,7 @@ export const testIds = {
     openAIAPIKey: 'data-testid ac-openai-api-key',
     openAIBaseUrl: 'data-testid ac-openai-base-url',
     defaultModel: 'data-testid ac-default-model',
+    allowedDatasourceUids: 'data-testid ac-allowed-datasource-uids',
     submit: 'data-testid ac-submit-form',
   },
   chat: {

@@ -1,10 +1,7 @@
 import type { Model } from '@earendil-works/pi-ai';
+import type { PiAppJsonData } from '../../types';
 
-export type PiAppJsonData = {
-  openAIBaseUrl?: string;
-  defaultModel?: string;
-  isOpenAIAPIKeySet?: boolean;
-};
+export type { PiAppJsonData } from '../../types';
 
 export function createOpenAICompatibleModel(jsonData?: PiAppJsonData): Model<'openai-completions'> {
   const modelId = jsonData?.defaultModel || 'gpt-4.1';

@@ -1,25 +1,21 @@
 import React, { ChangeEvent, FormEvent, useState } from 'react';
-import { Button, Field, Input, useStyles2, FieldSet, SecretInput } from '@grafana/ui';
+import { Button, Field, Input, useStyles2, FieldSet, SecretInput, MultiCombobox, type ComboboxOption } from '@grafana/ui';
 import { PluginConfigPageProps, AppPluginMeta, PluginMeta, GrafanaTheme2 } from '@grafana/data';
-import { getBackendSrv, locationService } from '@grafana/runtime';
+import { getBackendSrv, getDataSourceSrv, locationService } from '@grafana/runtime';
 import { css } from '@emotion/css';
 import { testIds } from '../testIds';
 import { lastValueFrom } from 'rxjs';
-
-type JsonData = {
-  openAIBaseUrl?: string;
-  defaultModel?: string;
-  isOpenAIAPIKeySet?: boolean;
-};
+import type { PiAppJsonData } from '../../types';
 
 type State = {
   openAIBaseUrl: string;
   defaultModel: string;
   isOpenAIAPIKeySet: boolean;
   openAIAPIKey: string;
+  allowedDatasourceUids: string[];
 };
 
-export interface AppConfigProps extends PluginConfigPageProps<AppPluginMeta<JsonData>> {}
+export interface AppConfigProps extends PluginConfigPageProps<AppPluginMeta<PiAppJsonData>> {}
 
 const AppConfig = ({ plugin }: AppConfigProps) => {
   const s = useStyles2(getStyles);
@@ -29,7 +25,9 @@ const AppConfig = ({ plugin }: AppConfigProps) => {
     defaultModel: jsonData?.defaultModel || 'gpt-4.1',
     openAIAPIKey: '',
     isOpenAIAPIKeySet: Boolean(jsonData?.isOpenAIAPIKeySet),
+    allowedDatasourceUids: Array.isArray(jsonData?.allowedDatasourceUids) ? jsonData.allowedDatasourceUids : [],
   });
+  const datasourceOptions = getPrometheusDatasourceOptions(state.allowedDatasourceUids);
 
   const isSubmitDisabled = Boolean(
     !state.openAIBaseUrl || !state.defaultModel || (!state.isOpenAIAPIKeySet && !state.openAIAPIKey)
@@ -63,6 +61,13 @@ const AppConfig = ({ plugin }: AppConfigProps) => {
     });
   };
 
+  const onChangeAllowedDatasourceUids = (options: Array<ComboboxOption<string>>) => {
+    setState({
+      ...state,
+      allowedDatasourceUids: options.map((option) => option.value),
+    });
+  };
+
   const onSubmit = (event: FormEvent) => {
     event.preventDefault();
     updatePluginAndReload(plugin.meta.id, {
@@ -72,6 +77,7 @@ const AppConfig = ({ plugin }: AppConfigProps) => {
         openAIBaseUrl: state.openAIBaseUrl,
         defaultModel: state.defaultModel,
         isOpenAIAPIKeySet: true,
+        allowedDatasourceUids: state.allowedDatasourceUids,
       },
       secureJsonData: state.isOpenAIAPIKeySet
         ? undefined
@@ -119,6 +125,23 @@ const AppConfig = ({ plugin }: AppConfigProps) => {
           />
         </Field>
 
+        <Field
+          label="Allowed Prometheus datasources"
+          description="Leave empty to allow all Prometheus datasources visible to the current Grafana user. Select datasources to restrict assistant discovery and queries."
+          className={s.marginTop}
+        >
+          <MultiCombobox
+            width={60}
+            id="allowed-datasource-uids"
+            data-testid={testIds.appConfig.allowedDatasourceUids}
+            options={datasourceOptions}
+            value={state.allowedDatasourceUids}
+            placeholder="All visible Prometheus datasources"
+            isClearable
+            onChange={onChangeAllowedDatasourceUids}
+          />
+        </Field>
+
         <div className={s.marginTop}>
           <Button type="submit" data-testid={testIds.appConfig.submit} disabled={isSubmitDisabled}>
             Save LLM settings
@@ -143,7 +166,7 @@ const getStyles = (theme: GrafanaTheme2) => ({
   `,
 });
 
-const updatePluginAndReload = async (pluginId: string, data: Partial<PluginMeta<JsonData>>) => {
+const updatePluginAndReload = async (pluginId: string, data: Partial<PluginMeta<PiAppJsonData>>) => {
   try {
     await updatePlugin(pluginId, data);
 
@@ -153,6 +176,28 @@ const updatePluginAndReload = async (pluginId: string, data: Partial<PluginMeta<
   } catch (e) {
     console.error('Error while updating the plugin', e);
   }
+};
+
+const getPrometheusDatasourceOptions = (selectedUids: string[]): Array<ComboboxOption<string>> => {
+  const options = getDataSourceSrv()
+    .getList({ metrics: true, type: 'prometheus' })
+    .filter((ds) => Boolean(ds.uid))
+    .map((ds) => ({
+      label: ds.name,
+      value: ds.uid,
+      description: `${ds.uid}${ds.isDefault ? ' (default)' : ''}`,
+    }))
+    .sort((left, right) => left.label.localeCompare(right.label));
+  const availableUids = new Set(options.map((option) => option.value));
+  const missingOptions = selectedUids
+    .filter((uid) => uid && !availableUids.has(uid))
+    .map((uid) => ({
+      label: uid,
+      value: uid,
+      description: 'Configured UID not visible in this session',
+    }));
+
+  return [...options, ...missingOptions];
 };
 
 const updatePlugin = async (pluginId: string, data: Partial<PluginMeta>) => {

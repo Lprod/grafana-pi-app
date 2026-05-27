@@ -15,8 +15,8 @@ The assistant uses the current Grafana user's datasource and dashboard permissio
 
 1. Enable the app plugin.
 2. Open the plugin configuration page.
-3. Set the OpenAI-compatible base URL, central model, and API key.
+3. Set the OpenAI-compatible base URL, central model, API key, and optional Prometheus datasource allow-list.
 4. Open **Pi Assistant** from the app navigation.
 5. Ask the assistant to inspect metrics, validate PromQL, or create dashboards.
 
-The assistant page does not expose model selection; all requests use the model configured in the plugin settings.
+The assistant page does not expose model or datasource policy controls; all requests use the model and datasource allow-list configured in the plugin settings.

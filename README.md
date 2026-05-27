@@ -16,9 +16,10 @@ Configure the app plugin from Grafana's plugin settings page:
 
 - `openAIBaseUrl`: OpenAI-compatible API base URL, for example `https://api.openai.com/v1`.
 - `defaultModel`: Central model ID used for all assistant requests, for example `gpt-4.1`.
+- `allowedDatasourceUids`: Optional list of Prometheus datasource UIDs the assistant may discover, query, and reference in uploaded dashboards. Leave empty to allow all Prometheus datasources visible to the current Grafana user.
 - `openAIAPIKey`: Secret API key stored in `secureJsonData`.
 
-Chat users cannot override the model from the assistant page. The backend always uses the centrally configured model when proxying LLM requests.
+Chat users cannot override the model or datasource allow-list from the assistant page. The backend always uses the centrally configured model when proxying LLM requests, and Grafana datasource tools enforce the central allow-list before querying.
 
 For local Docker provisioning, `provisioning/plugins/app.yaml` reads `OPENAI_API_KEY`.
 
