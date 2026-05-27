@@ -106,6 +106,34 @@ func TestLLMStreamRelaysOpenAICompatibleChunks(t *testing.T) {
 	}
 }
 
+func TestOpenAIRequestKeepsUserAndToolContentNonEmpty(t *testing.T) {
+	app := App{settings: appSettings{DefaultModel: "gpt-default"}}
+
+	payload := app.openAIRequest(proxyStreamRequest{
+		Context: proxyContext{
+			Messages: []proxyMessage{
+				{Role: "user", Content: json.RawMessage(`""`)},
+				{
+					Role:       "toolResult",
+					ToolCallID: "call_1",
+					ToolName:   "list_label_values",
+					Content:    json.RawMessage(`[{"type":"text","text":""}]`),
+				},
+			},
+		},
+	})
+
+	if len(payload.Messages) != 2 {
+		t.Fatalf("expected 2 messages, got %d", len(payload.Messages))
+	}
+	if payload.Messages[0].Content == "" {
+		t.Fatalf("user content should not be empty")
+	}
+	if payload.Messages[1].Content != "(empty tool result)" {
+		t.Fatalf("unexpected tool fallback content: %q", payload.Messages[1].Content)
+	}
+}
+
 func TestManagedDashboardRenderUsesVendoredJsonnetAndManagerMetadata(t *testing.T) {
 	jsonData, _ := json.Marshal(appSettings{AllowedDatasourceUIDs: []string{"prom-main"}})
 	inst, err := NewApp(context.Background(), backend.AppInstanceSettings{JSONData: jsonData})

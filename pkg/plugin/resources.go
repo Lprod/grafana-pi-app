@@ -349,7 +349,7 @@ func (a *App) relayOpenAIStream(body io.Reader, stream proxyEventWriter) error {
 func convertMessage(message proxyMessage) openAIMessage {
 	switch message.Role {
 	case "user":
-		return openAIMessage{Role: "user", Content: contentText(message.Content)}
+		return openAIMessage{Role: "user", Content: nonEmptyContent(message.Content, " ")}
 	case "assistant":
 		text, toolCalls := assistantContent(message.Content)
 		return openAIMessage{Role: "assistant", Content: text, ToolCalls: toolCalls}
@@ -358,11 +358,19 @@ func convertMessage(message proxyMessage) openAIMessage {
 			Role:       "tool",
 			ToolCallID: message.ToolCallID,
 			Name:       message.ToolName,
-			Content:    contentText(message.Content),
+			Content:    nonEmptyContent(message.Content, "(empty tool result)"),
 		}
 	default:
 		return openAIMessage{}
 	}
+}
+
+func nonEmptyContent(raw json.RawMessage, fallback string) string {
+	text := contentText(raw)
+	if strings.TrimSpace(text) == "" {
+		return fallback
+	}
+	return text
 }
 
 func contentText(raw json.RawMessage) string {

@@ -45,6 +45,11 @@ export type ListLabelValuesParams = DatasourceParams & {
   match?: string;
 };
 
+export type InspectMetricSeriesParams = DatasourceParams & {
+  match: string;
+  limit?: number;
+};
+
 export type QueryPrometheusParams = DatasourceParams & {
   query: string;
   type?: 'instant' | 'range';

@@ -216,6 +216,8 @@ function ChatApp() {
       await agent.prompt(prompt);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setRevision((value) => value + 1);
     }
   };
 

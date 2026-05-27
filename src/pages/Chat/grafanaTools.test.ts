@@ -88,6 +88,30 @@ describe('grafana datasource tool policy', () => {
     expect(result.details.datasourceUid).toBe('prom-b');
   });
 
+  it('inspects metric series labels through the selected datasource', async () => {
+    const dataSource = {
+      uid: 'prom-b',
+      type: 'prometheus',
+      getResource: jest.fn().mockResolvedValue({
+        data: [
+          { __name__: 'http_requests_total', job: 'web', route: '/', status: '200' },
+          { __name__: 'http_requests_total', job: 'web', route: '/', status: '500' },
+        ],
+      }),
+    };
+    mockDataSourceSrv.get.mockResolvedValue(dataSource);
+    const tool = getTool(createGrafanaTools({ allowedDatasourceUids: ['prom-b'] }), 'inspect_metric_series');
+
+    const result = await tool.execute('call-1', { match: 'http_requests_total', limit: 1 }, undefined);
+    const body = JSON.parse(result.content[0].text);
+
+    expect(dataSource.getResource).toHaveBeenCalledWith('api/v1/series', { 'match[]': 'http_requests_total' });
+    expect(body.labelNames).toEqual(['job', 'route', 'status']);
+    expect(body.examples).toHaveLength(1);
+    expect(body.truncated).toBe(true);
+    expect(result.details.datasourceUid).toBe('prom-b');
+  });
+
   it('rejects an explicit datasource UID outside the allow-list', async () => {
     const tool = getTool(createGrafanaTools({ allowedDatasourceUids: ['prom-b'] }), 'list_metrics');
 

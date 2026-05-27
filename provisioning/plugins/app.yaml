@@ -6,9 +6,9 @@ apps:
     org_name: 'elohmeier'
     disabled: false
     jsonData:
-      openAIBaseUrl: https://api.openai.com/v1
-      defaultModel: gpt-4.1
+      openAIBaseUrl: http://host.docker.internal:8080/v1
+      defaultModel: unsloth/Qwen3.6-35B-A3B-MTP-GGUF:UD-Q4_K_XL
       isOpenAIAPIKeySet: true
-      allowedDatasourceUids: []
+      allowedDatasourceUids: ['prometheus']
     secureJsonData:
       openAIAPIKey: $__env{OPENAI_API_KEY}

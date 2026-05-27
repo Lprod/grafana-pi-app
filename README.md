@@ -24,6 +24,8 @@ Configure the app plugin from Grafana's plugin settings page:
 Chat users cannot override the model or datasource allow-list from the assistant page. The backend always uses the centrally configured model when proxying LLM requests, and Grafana datasource tools enforce the central allow-list before querying.
 
 For local Docker provisioning, `provisioning/plugins/app.yaml` reads `OPENAI_API_KEY`.
+The local demo config points Grafana at `http://host.docker.internal:8080/v1`, sets the model to the Qwen llama-server model, and limits assistant datasource access to the provisioned `prometheus` datasource.
+When `OPENAI_API_KEY` is unset, Compose provides a local dummy key because llama-server only needs a bearer token-shaped value.
 
 Managed dashboard writes use the plugin service account declared in `plugin.json`. In local Docker, `docker-compose.yaml` enables Grafana's external service account support for this.
 
@@ -81,6 +83,27 @@ Run Grafana with the plugin mounted:
 
 ```bash
 npm run server
+```
+
+The local Compose stack also seeds Prometheus with six hours of synthetic RED/USE metrics derived from the `agentic-observability` demo. It includes one hour of current-query overlap by default, so short-window `now` queries remain useful during a manual demo. To refresh the generated history after it ages out, remove the demo volumes before starting Grafana again:
+
+```bash
+docker compose down -v
+```
+
+For the default local LLM config, run an OpenAI-compatible llama-server on the host:
+
+```bash
+llama-server -hf unsloth/Qwen3.6-35B-A3B-MTP-GGUF:UD-Q4_K_XL \
+  --host 0.0.0.0 \
+  --port 8080 \
+  --temp 1.0 \
+  --top-p 0.95 \
+  --top-k 20 \
+  --presence-penalty 1.5 \
+  --min-p 0.00 \
+  --spec-type draft-mtp \
+  --spec-draft-n-max 2
 ```
 
 Open Grafana at http://localhost:3000 and navigate to the Pi Assistant app page.

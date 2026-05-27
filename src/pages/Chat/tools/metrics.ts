@@ -18,6 +18,7 @@ import { backendFetch } from './client';
 import { textResult, throwIfAborted, truncateText } from './result';
 import type {
   GrafanaToolConfig,
+  InspectMetricSeriesParams,
   ListLabelValuesParams,
   ListMetricsParams,
   PrometheusMetadataResponse,
@@ -30,6 +31,7 @@ export function createMetricTools(toolConfig: GrafanaToolConfig): AgentTool[] {
     makeGrafanaGetDatasourcesTool(toolConfig),
     makeListMetricsTool(toolConfig),
     makeListLabelValuesTool(toolConfig),
+    makeInspectMetricSeriesTool(toolConfig),
     makeQueryPrometheusTool(toolConfig),
   ];
 }
@@ -118,6 +120,41 @@ function makeListLabelValuesTool(toolConfig: GrafanaToolConfig): AgentTool {
         count: values.length,
         truncated: values.length > limited.length,
       });
+    },
+  };
+}
+
+function makeInspectMetricSeriesTool(toolConfig: GrafanaToolConfig): AgentTool {
+  return {
+    name: 'inspect_metric_series',
+    label: 'Inspect metric series',
+    description: 'Inspect Prometheus series label names and example label sets for a metric selector.',
+    parameters: Type.Object({
+      datasourceUid: Type.Optional(Type.String({ description: 'Prometheus datasource UID. Defaults to the first available Prometheus datasource.' })),
+      match: Type.String({ description: 'Prometheus match[] selector, such as http_requests_total or http_requests_total{job="web"}.' }),
+      limit: Type.Optional(Type.Number({ description: 'Maximum example series to return. Defaults to 20, maximum 100.' })),
+    }),
+    async execute(_toolCallId, params, signal) {
+      const args = params as InspectMetricSeriesParams;
+      throwIfAborted(signal);
+      const ds = await getPrometheusDatasource(toolConfig, args.datasourceUid);
+      const response = await getDatasourceResource<PrometheusMetadataResponse<Array<Record<string, string>>>>(ds, 'api/v1/series', {
+        'match[]': args.match,
+      });
+      const series = response.data ?? [];
+      const limit = clampInt(args.limit ?? 20, 1, 100);
+      const examples = series.slice(0, limit);
+      const labelNames = Array.from(new Set(series.flatMap((item) => Object.keys(item)).filter((name) => name !== '__name__'))).sort();
+      const result = {
+        datasourceUid: ds.uid,
+        match: args.match,
+        labelNames,
+        totalSeries: series.length,
+        truncated: series.length > examples.length,
+        examples,
+      };
+
+      return textResult(JSON.stringify(result, null, 2), result);
     },
   };
 }
@@ -267,4 +304,11 @@ function durationToMs(duration: string): number | undefined {
   const unit = match[2];
   const multipliers: Record<string, number> = { ms: 1, s: 1000, m: 60000, h: 3600000, d: 86400000 };
   return value * multipliers[unit];
+}
+
+function clampInt(value: number, min: number, max: number) {
+  if (!Number.isFinite(value)) {
+    return min;
+  }
+  return Math.min(max, Math.max(min, Math.floor(value)));
 }
