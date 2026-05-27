@@ -1,0 +1,13 @@
+apiVersion: 1
+
+apps:
+  - type: 'elohmeier-grafanapiapp-app'
+    org_id: 1
+    org_name: 'elohmeier'
+    disabled: false
+    jsonData:
+      openAIBaseUrl: https://api.openai.com/v1
+      defaultModel: gpt-4.1
+      isOpenAIAPIKeySet: true
+    secureJsonData:
+      openAIAPIKey: $__env{OPENAI_API_KEY}

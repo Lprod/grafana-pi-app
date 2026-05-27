@@ -1,0 +1,35 @@
+{
+  "$schema": "https://raw.githubusercontent.com/grafana/grafana/main/docs/sources/developers/plugins/plugin.schema.json",
+  "type": "app",
+  "name": "Grafana Pi App",
+  "id": "elohmeier-grafanapiapp-app",
+  "backend": true,
+  "executable": "gpx_grafana_pi_app",
+  "info": {
+    "keywords": ["app", "llm", "observability", "prometheus", "dashboards"],
+    "description": "Grafana-native Pi assistant for querying observability data and creating dashboards.",
+    "author": {
+      "name": "Elohmeier"
+    },
+    "logos": {
+      "small": "img/logo.svg",
+      "large": "img/logo.svg"
+    },
+    "screenshots": [],
+    "version": "%VERSION%",
+    "updated": "%TODAY%"
+  },
+  "includes": [
+    {
+      "type": "page",
+      "name": "Pi Assistant",
+      "path": "/a/%PLUGIN_ID%/chat",
+      "addToNav": true,
+      "defaultNav": true
+    }
+  ],
+  "dependencies": {
+    "grafanaDependency": ">=13.0.0",
+    "plugins": []
+  }
+}
