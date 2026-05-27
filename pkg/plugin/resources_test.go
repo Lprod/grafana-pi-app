@@ -214,6 +214,45 @@ func TestManagedDashboardRenderRejectsDisallowedDatasource(t *testing.T) {
 	}
 }
 
+func TestManagedDashboardTemplateSourceReadsBundledJsonnet(t *testing.T) {
+	inst, err := NewApp(context.Background(), backend.AppInstanceSettings{})
+	if err != nil {
+		t.Fatalf("new app: %s", err)
+	}
+	app := inst.(*App)
+
+	var sender mockCallResourceResponseSender
+	err = app.CallResource(context.Background(), &backend.CallResourceRequest{
+		Method: http.MethodPost,
+		Path:   "managed-dashboards/template-source",
+		Body: []byte(`{
+			"templateId": "service-red",
+			"offset": 1,
+			"limit": 20
+		}`),
+	}, &sender)
+	if err != nil {
+		t.Fatalf("CallResource error: %s", err)
+	}
+	if len(sender.responses) != 1 {
+		t.Fatalf("expected 1 response, got %d", len(sender.responses))
+	}
+	if sender.responses[0].Status != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", sender.responses[0].Status, string(sender.responses[0].Body))
+	}
+
+	var response managedDashboardTemplateSourceResponse
+	if err := json.Unmarshal(sender.responses[0].Body, &response); err != nil {
+		t.Fatalf("decode response: %s", err)
+	}
+	if response.Template.ID != "service-red" || response.Path != "jsonnet/templates/service-red.jsonnet" {
+		t.Fatalf("unexpected template source response: %#v", response)
+	}
+	if len(response.Result) == 0 || !strings.Contains(joinTemplateLines(response.Result), "grafonnet") {
+		t.Fatalf("expected bundled template source, got %#v", response.Result)
+	}
+}
+
 func TestManagedDashboardDatasourceAllowListRejectsVariables(t *testing.T) {
 	jsonData, _ := json.Marshal(appSettings{AllowedDatasourceUIDs: []string{"prom-main"}})
 	inst, err := NewApp(context.Background(), backend.AppInstanceSettings{JSONData: jsonData})
@@ -306,6 +345,15 @@ func TestManagedDashboardSyncWritesDashboardResource(t *testing.T) {
 	if response.Status != "created" || response.UID != "service-red-api" {
 		t.Fatalf("unexpected sync response: %#v", response)
 	}
+}
+
+func joinTemplateLines(lines []managedDashboardTemplateLine) string {
+	var result strings.Builder
+	for _, line := range lines {
+		result.WriteString(line.Text)
+		result.WriteByte('\n')
+	}
+	return result.String()
 }
 
 func joinBodies(responses []*backend.CallResourceResponse) string {

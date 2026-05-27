@@ -1,6 +1,6 @@
 import React, { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { css, cx } from '@emotion/css';
-import { Agent, type AgentMessage, streamProxy } from '@earendil-works/pi-agent-core';
+import { Agent, type AgentEvent, type AgentMessage, type StreamFn, streamProxy } from '@earendil-works/pi-agent-core';
 import { SceneComponentProps, SceneObjectBase, SceneObjectState } from '@grafana/scenes';
 import {
   Alert,
@@ -19,6 +19,7 @@ import { usePluginMeta } from '../../utils/utils.plugin';
 import { createGrafanaTools } from './grafanaTools';
 import { createOpenAICompatibleModel, type PiAppJsonData } from './model';
 import { SYSTEM_PROMPT } from './systemPrompt';
+import { ContentBlocks, ToolActivityPanel, ToolResultMessageBody, type ToolRunView } from './ToolRenderer';
 
 type ChatSceneObjectState = SceneObjectState;
 
@@ -33,6 +34,8 @@ type StoredSession = SessionIndexItem & {
   messages: AgentMessage[];
   modelId?: string;
 };
+
+type ToolRunState = Record<string, ToolRunView>;
 
 const SESSION_INDEX_KEY = 'sessions:index';
 const sessionKey = (id: string) => `sessions:${id}`;
@@ -51,7 +54,17 @@ function ChatApp() {
   const storage = usePluginUserStorage();
   const pluginMeta = usePluginMeta();
   const jsonData = useMemo(() => (pluginMeta?.jsonData ?? {}) as PiAppJsonData, [pluginMeta?.jsonData]);
-  const tools = useMemo(() => createGrafanaTools(jsonData), [jsonData]);
+  const llmModel = useMemo(() => createOpenAICompatibleModel(jsonData), [jsonData]);
+  const streamFn = useCallback<StreamFn>(
+    (model, context, options) =>
+      streamProxy(model, context, {
+        ...options,
+        authToken: 'grafana',
+        proxyUrl: `/api/plugins/${PLUGIN_ID}/resources/llm`,
+      }),
+    []
+  );
+  const tools = useMemo(() => createGrafanaTools({ ...jsonData, runtime: { model: llmModel, streamFn } }), [jsonData, llmModel, streamFn]);
   const [agent, setAgent] = useState<Agent>();
   const [revision, setRevision] = useState(0);
   const [input, setInput] = useState('');
@@ -59,6 +72,7 @@ function ChatApp() {
   const [currentSessionId, setCurrentSessionId] = useState<string>();
   const [currentTitle, setCurrentTitle] = useState('New chat');
   const [error, setError] = useState<string>();
+  const [toolRuns, setToolRuns] = useState<ToolRunState>({});
   const unsubscribeRef = useRef<() => void>();
   const sessionIdRef = useRef<string>();
   const titleRef = useRef('New chat');
@@ -106,21 +120,17 @@ function ChatApp() {
       const nextAgent = new Agent({
         initialState: {
           systemPrompt: SYSTEM_PROMPT,
-          model: createOpenAICompatibleModel(jsonData),
+          model: llmModel,
           thinkingLevel: 'off',
           messages,
           tools,
         },
-        streamFn: (model, context, options) =>
-          streamProxy(model, context, {
-            ...options,
-            authToken: 'grafana',
-            proxyUrl: `/api/plugins/${PLUGIN_ID}/resources/llm`,
-          }),
+        streamFn,
       });
 
       unsubscribeRef.current = nextAgent.subscribe((event) => {
         setRevision((value) => value + 1);
+        setToolRuns((value) => reduceToolRuns(value, event));
         if (event.type === 'agent_end') {
           const sessionId = sessionIdRef.current;
           if (sessionId) {
@@ -133,7 +143,7 @@ function ChatApp() {
       setRevision((value) => value + 1);
       return nextAgent;
     },
-    [jsonData, saveSession, tools]
+    [llmModel, saveSession, streamFn, tools]
   );
 
   const startNewSession = useCallback(() => {
@@ -143,6 +153,7 @@ function ChatApp() {
     setCurrentSessionId(id);
     setCurrentTitle('New chat');
     setError(undefined);
+    setToolRuns({});
     buildAgent([]);
   }, [buildAgent]);
 
@@ -221,6 +232,7 @@ function ChatApp() {
     setCurrentSessionId(id);
     setCurrentTitle(stored.title);
     setError(undefined);
+    setToolRuns({});
     buildAgent(stored.messages);
   };
 
@@ -235,6 +247,9 @@ function ChatApp() {
   const visibleMessages = agent
     ? [...agent.state.messages, ...(agent.state.streamingMessage ? [agent.state.streamingMessage] : [])]
     : [];
+  const activeToolRuns = Object.values(toolRuns)
+    .filter((run) => run.status === 'running')
+    .sort((left, right) => left.updatedAt - right.updatedAt);
   const hasLLMConfig = Boolean(jsonData.isOpenAIAPIKeySet);
 
   return (
@@ -299,6 +314,7 @@ function ChatApp() {
           ) : (
             visibleMessages.map((message, index) => <MessageView key={`${message.role}-${index}`} message={message} />)
           )}
+          <ToolActivityPanel runs={activeToolRuns} />
           {agent?.state.isStreaming && (
             <div className={styles.streaming}>
               <Spinner /> Working
@@ -351,59 +367,66 @@ function MessageView({ message }: { message: AgentMessage }) {
 
 function renderMessageContent(message: AgentMessage) {
   if (message.role === 'user') {
-    return renderContent(message.content);
+    return <ContentBlocks content={message.content} />;
   }
   if (message.role === 'assistant') {
-    return renderContent(message.content);
+    return <ContentBlocks content={message.content} />;
   }
   if (message.role === 'toolResult') {
-    return renderContent(message.content);
+    return <ToolResultMessageBody toolName={message.toolName} content={message.content} details={message.details} isError={message.isError} />;
   }
 
   return <pre>{JSON.stringify(message, null, 2)}</pre>;
 }
 
-function renderContent(content: unknown) {
-  if (typeof content === 'string') {
-    return <div>{content}</div>;
-  }
-  if (!Array.isArray(content)) {
-    return <pre>{JSON.stringify(content, null, 2)}</pre>;
+function reduceToolRuns(state: ToolRunState, event: AgentEvent): ToolRunState {
+  if (event.type === 'tool_execution_start') {
+    return {
+      ...state,
+      [event.toolCallId]: {
+        id: event.toolCallId,
+        name: event.toolName,
+        args: event.args,
+        status: 'running',
+        updatedAt: Date.now(),
+      },
+    };
   }
 
-  return (
-    <>
-      {content.map((block, index) => {
-        if (!block || typeof block !== 'object') {
-          return <pre key={index}>{JSON.stringify(block, null, 2)}</pre>;
-        }
-        const typedBlock = block as Record<string, any>;
-        if (typedBlock.type === 'text') {
-          return <div key={index}>{typedBlock.text}</div>;
-        }
-        if (typedBlock.type === 'thinking') {
-          return (
-            <details key={index}>
-              <summary>Thinking</summary>
-              <pre>{typedBlock.thinking}</pre>
-            </details>
-          );
-        }
-        if (typedBlock.type === 'toolCall') {
-          return (
-            <div key={index}>
-              <strong>{typedBlock.name}</strong>
-              <pre>{JSON.stringify(typedBlock.arguments, null, 2)}</pre>
-            </div>
-          );
-        }
-        if (typedBlock.type === 'image') {
-          return <img key={index} alt="Tool result" src={`data:${typedBlock.mimeType};base64,${typedBlock.data}`} />;
-        }
-        return <pre key={index}>{JSON.stringify(typedBlock, null, 2)}</pre>;
-      })}
-    </>
-  );
+  if (event.type === 'tool_execution_update') {
+    const existing = state[event.toolCallId];
+    return {
+      ...state,
+      [event.toolCallId]: {
+        ...existing,
+        id: event.toolCallId,
+        name: event.toolName,
+        args: event.args,
+        status: 'running',
+        partialResult: event.partialResult,
+        updatedAt: Date.now(),
+      },
+    };
+  }
+
+  if (event.type === 'tool_execution_end') {
+    const existing = state[event.toolCallId];
+    return {
+      ...state,
+      [event.toolCallId]: {
+        ...existing,
+        id: event.toolCallId,
+        name: event.toolName,
+        args: existing?.args,
+        status: event.isError ? 'failed' : 'completed',
+        result: event.result,
+        isError: event.isError,
+        updatedAt: Date.now(),
+      },
+    };
+  }
+
+  return state;
 }
 
 function generateTitle(prompt: string): string {

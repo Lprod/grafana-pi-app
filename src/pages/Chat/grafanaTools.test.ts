@@ -33,6 +33,7 @@ jest.mock('typebox', () => ({
 import type { AgentTool } from '@earendil-works/pi-agent-core';
 import type { DataSourceInstanceSettings } from '@grafana/data';
 import {
+  createGrafanaToolRegistry,
   createGrafanaTools,
   filterAllowedPrometheusDatasourceSettings,
   getDisallowedDashboardDatasourceUids,
@@ -126,6 +127,20 @@ describe('grafana datasource tool policy', () => {
     await expect(
       tool.execute('call-1', { templateId: 'service-red', datasourceUid: 'prom-b', title: 'Bad dashboard' }, undefined)
     ).rejects.toThrow('Datasource is not available to the assistant: prom-b');
+  });
+
+  it('adds subagent tools only when a chat runtime is supplied', () => {
+    expect(createGrafanaToolRegistry().subagents).toEqual([]);
+
+    const registry = createGrafanaToolRegistry({
+      runtime: {
+        model: {} as any,
+        streamFn: jest.fn() as any,
+      },
+    });
+
+    expect(registry.subagents.map((tool) => tool.name)).toEqual(['grafana_explore_metrics', 'grafana_explore_jsonnet']);
+    expect(registry.all.slice(0, 2).map((tool) => tool.name)).toEqual(['grafana_explore_metrics', 'grafana_explore_jsonnet']);
   });
 });
 

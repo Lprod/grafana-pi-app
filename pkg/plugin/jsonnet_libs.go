@@ -72,7 +72,7 @@ func (a *App) handleJsonnetLibSearch(w http.ResponseWriter, req *http.Request) {
 	matches := []jsonnetLibMatch{}
 	const maxResults = 100
 	_ = fs.WalkDir(jsonnetAssets, root, func(filePath string, entry fs.DirEntry, err error) error {
-		if err != nil || entry.IsDir() || len(matches) >= maxResults || !strings.HasSuffix(entry.Name(), ".libsonnet") {
+		if err != nil || entry.IsDir() || len(matches) >= maxResults || !jsonnetLibSearchable(entry.Name()) {
 			return nil
 		}
 		content, err := fs.ReadFile(jsonnetAssets, filePath)
@@ -177,6 +177,10 @@ func (a *App) handleJsonnetLibList(w http.ResponseWriter, req *http.Request) {
 	sort.Strings(files)
 
 	writeJSON(w, http.StatusOK, map[string]any{"basePath": listPath, "result": files})
+}
+
+func jsonnetLibSearchable(name string) bool {
+	return strings.HasSuffix(name, ".libsonnet") || strings.HasSuffix(name, ".md")
 }
 
 func safeJsonnetLibPath(relPath string) (string, error) {

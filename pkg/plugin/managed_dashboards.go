@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"net/http"
 	"net/url"
 	"path"
@@ -49,6 +50,24 @@ type managedDashboardRequest struct {
 	Job           string   `json:"job,omitempty"`
 	Tags          []string `json:"tags,omitempty"`
 	Overwrite     *bool    `json:"overwrite,omitempty"`
+}
+
+type managedDashboardTemplateSourceRequest struct {
+	TemplateID string `json:"templateId"`
+	Offset     int    `json:"offset,omitempty"`
+	Limit      int    `json:"limit,omitempty"`
+}
+
+type managedDashboardTemplateLine struct {
+	Line int    `json:"line"`
+	Text string `json:"text"`
+}
+
+type managedDashboardTemplateSourceResponse struct {
+	Template   managedDashboardTemplate       `json:"template"`
+	Path       string                         `json:"path"`
+	TotalLines int                            `json:"totalLines"`
+	Result     []managedDashboardTemplateLine `json:"result"`
 }
 
 type managedDashboardRenderResponse struct {
@@ -123,6 +142,60 @@ func (a *App) handleManagedDashboardTemplates(w http.ResponseWriter, req *http.R
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"templates": managedDashboardTemplates})
+}
+
+func (a *App) handleManagedDashboardTemplateSource(w http.ResponseWriter, req *http.Request) {
+	if req.Method != http.MethodPost {
+		writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+
+	var body managedDashboardTemplateSourceRequest
+	if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
+		writeJSONError(w, http.StatusBadRequest, fmt.Sprintf("invalid request body: %s", err))
+		return
+	}
+	templateID := strings.TrimSpace(body.TemplateID)
+	if templateID == "" {
+		templateID = "service-red"
+	}
+	template, ok := templateByID[templateID]
+	if !ok {
+		writeJSONError(w, http.StatusBadRequest, fmt.Sprintf("unknown managed dashboard template: %s", templateID))
+		return
+	}
+
+	sourcePath := path.Join(jsonnetTemplateRoot, template.SourcePath)
+	content, err := fs.ReadFile(jsonnetAssets, sourcePath)
+	if err != nil {
+		writeJSONError(w, http.StatusNotFound, "template source not found")
+		return
+	}
+
+	lines := strings.Split(string(content), "\n")
+	offset := body.Offset
+	if offset < 1 {
+		offset = 1
+	}
+	limit := body.Limit
+	if limit < 1 {
+		limit = 200
+	}
+	if limit > 500 {
+		limit = 500
+	}
+
+	result := make([]managedDashboardTemplateLine, 0, limit)
+	for index := offset - 1; index < len(lines) && len(result) < limit; index++ {
+		result = append(result, managedDashboardTemplateLine{Line: index + 1, Text: strings.TrimRight(lines[index], "\r")})
+	}
+
+	writeJSON(w, http.StatusOK, managedDashboardTemplateSourceResponse{
+		Template:   template,
+		Path:       sourcePath,
+		TotalLines: len(lines),
+		Result:     result,
+	})
 }
 
 func (a *App) handleManagedDashboardList(w http.ResponseWriter, req *http.Request) {

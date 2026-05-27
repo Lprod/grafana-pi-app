@@ -9,6 +9,7 @@ Grafana Pi App is a Grafana app plugin that embeds a Pi-powered LLM chat assista
 - Runs PromQL through Grafana datasource query APIs.
 - Creates, updates, lists, fetches, deletes, and screenshots dashboards through Grafana APIs.
 - Creates app-managed dashboards from vendored Jsonnet/Grafonnet templates. These dashboards are marked as plugin-managed and should be edited through the app, not the standard Grafana dashboard editor.
+- Delegates broad metric and Jsonnet reconnaissance to restricted subagents with isolated chat context.
 - Stores chat sessions per Grafana user with plugin user storage.
 
 ## Configuration
@@ -32,13 +33,19 @@ The backend vendors Jsonnet libraries under `pkg/plugin/jsonnet/vendor` using th
 
 The assistant can render and sync bundled templates with:
 
+- `grafana_explore_jsonnet`
 - `grafana_list_managed_dashboard_templates`
 - `grafana_list_managed_dashboards`
 - `grafana_render_managed_dashboard`
 - `grafana_sync_managed_dashboard`
+- `read_managed_dashboard_template`
 - `search_jsonnet_libs`, `read_jsonnet_lib`, and `list_jsonnet_libs`
 
 Synced dashboards are saved through the `dashboard.grafana.app` resource API with `grafana.app/managedBy=plugin` and `grafana.app/managerId=elohmeier-grafanapiapp-app`. The app intentionally does not set `grafana.app/managerAllowsEdits`, so normal Grafana UI edits are treated as read-only/export flows while app sync remains the source of truth.
+
+## Subagents
+
+The chat registers `grafana_explore_metrics` and `grafana_explore_jsonnet` as high-level tools. Each starts a nested Pi agent with a narrow tool allow-list: the metrics subagent can only discover datasources, inspect Prometheus metadata, and validate PromQL; the Jsonnet subagent can only inspect bundled templates, search/read vendored Jsonnet libraries, and render managed dashboards without saving them. Dashboard write tools stay available only to the parent assistant.
 
 ## Development
 

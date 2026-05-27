@@ -3,6 +3,7 @@
 Grafana Pi App adds a Pi-powered assistant to Grafana for metric exploration, PromQL validation, and dashboard authoring.
 
 The assistant uses the current Grafana user's datasource and dashboard permissions. LLM requests are proxied through the app plugin backend with an OpenAI-compatible API key stored in secure plugin settings.
+Broad exploration can be delegated to restricted subagents for metrics and Jsonnet. These subagents use isolated context and narrow tool allow-lists, while dashboard writes remain with the parent assistant.
 
 ## Requirements
 
