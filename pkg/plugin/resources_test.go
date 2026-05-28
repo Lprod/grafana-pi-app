@@ -141,19 +141,34 @@ func TestManagedDashboardRenderUsesVendoredJsonnetAndManagerMetadata(t *testing.
 		t.Fatalf("new app: %s", err)
 	}
 	app := inst.(*App)
+	source := `local g = import 'github.com/grafana/grafonnet/gen/grafonnet-latest/main.libsonnet';
+local target =
+  g.query.prometheus.new('prom-main', 'sum(rate(http_requests_total{job="api"}[$__rate_interval]))')
+  + g.query.prometheus.withRefId('A')
+  + g.query.prometheus.withRange(true)
+  + g.query.prometheus.withEditorMode('code');
+
+g.dashboard.new('API Service RED')
++ g.dashboard.withUid('source-api')
++ g.dashboard.withTags(['service'])
++ g.dashboard.withPanels([
+  g.panel.timeSeries.new('Request rate')
+  + g.panel.timeSeries.panelOptions.withGridPos(h=8, w=12, x=0, y=0)
+  + g.panel.timeSeries.queryOptions.withDatasource('prometheus', 'prom-main')
+  + g.panel.timeSeries.queryOptions.withTargets([target])
+  + g.panel.timeSeries.standardOptions.withUnit('reqps'),
+])`
+	body, _ := json.Marshal(managedDashboardRequest{
+		DashboardJsonnet: source,
+		UID:              "direct-jsonnet-api",
+		FolderUID:        "observability",
+	})
 
 	var sender mockCallResourceResponseSender
 	err = app.CallResource(context.Background(), &backend.CallResourceRequest{
 		Method: http.MethodPost,
 		Path:   "managed-dashboards/render",
-		Body: []byte(`{
-			"templateId": "service-red",
-			"uid": "service-red-api",
-			"title": "API Service RED",
-			"datasourceUid": "prom-main",
-			"folderUid": "observability",
-			"job": "api"
-		}`),
+		Body:   body,
 	}, &sender)
 	if err != nil {
 		t.Fatalf("CallResource error: %s", err)
@@ -172,11 +187,14 @@ func TestManagedDashboardRenderUsesVendoredJsonnetAndManagerMetadata(t *testing.
 	if response.Dashboard["title"] != "API Service RED" {
 		t.Fatalf("unexpected title: %v", response.Dashboard["title"])
 	}
-	if response.Resource.Metadata.Name != "service-red-api" {
+	if response.Resource.Metadata.Name != "direct-jsonnet-api" {
 		t.Fatalf("unexpected resource name: %s", response.Resource.Metadata.Name)
 	}
 	if response.Dashboard["editable"] != false {
 		t.Fatalf("managed dashboards should render as not editable: %#v", response.Dashboard["editable"])
+	}
+	if !containsTag(response.Dashboard["tags"], "service") || !containsTag(response.Dashboard["tags"], "managed-by-pi") {
+		t.Fatalf("expected source and managed tags, got %#v", response.Dashboard["tags"])
 	}
 	annotations := response.Resource.Metadata.Annotations
 	if annotations[annotationManagedBy] != "plugin" || annotations[annotationManagerID] != pluginID {
@@ -188,13 +206,19 @@ func TestManagedDashboardRenderUsesVendoredJsonnetAndManagerMetadata(t *testing.
 	if annotations[annotationFolder] != "observability" {
 		t.Fatalf("missing folder annotation: %#v", annotations)
 	}
-	if !strings.HasPrefix(response.SourceChecksum, "sha256:") || !strings.HasPrefix(response.ConfigChecksum, "sha256:") {
-		t.Fatalf("missing checksums: source=%s config=%s", response.SourceChecksum, response.ConfigChecksum)
+	if annotations[annotationJsonnetSource] != source {
+		t.Fatalf("stored Jsonnet source was not preserved")
+	}
+	if annotations[annotationSourcePath] != "inline-jsonnet" {
+		t.Fatalf("unexpected source path annotation: %#v", annotations)
+	}
+	if !strings.HasPrefix(response.SourceChecksum, "sha256:") {
+		t.Fatalf("missing source checksum: %s", response.SourceChecksum)
 	}
 
 	panels, ok := response.Dashboard["panels"].([]any)
-	if !ok || len(panels) != 4 {
-		t.Fatalf("expected four rendered panels, got %#v", response.Dashboard["panels"])
+	if !ok || len(panels) != 1 {
+		t.Fatalf("expected one rendered panel, got %#v", response.Dashboard["panels"])
 	}
 	firstPanel := panels[0].(map[string]any)
 	target := firstPanel["targets"].([]any)[0].(map[string]any)
@@ -202,67 +226,59 @@ func TestManagedDashboardRenderUsesVendoredJsonnetAndManagerMetadata(t *testing.
 	if datasource["uid"] != "prom-main" {
 		t.Fatalf("expected target datasource prom-main, got %#v", datasource)
 	}
-	errorPanel := panels[1].(map[string]any)
-	errorTarget := errorPanel["targets"].([]any)[0].(map[string]any)
-	errorExpr := errorTarget["expr"].(string)
-	if strings.Contains(errorExpr, "}{") || !strings.Contains(errorExpr, `http_requests_total{job="api",status=~"5.."}`) {
-		t.Fatalf("unexpected error ratio expression: %s", errorExpr)
+	expr := target["expr"].(string)
+	if !strings.Contains(expr, `http_requests_total{job="api"}`) {
+		t.Fatalf("unexpected expression: %s", expr)
 	}
 }
 
-func TestManagedDashboardRenderGenericPrometheusTemplate(t *testing.T) {
+func TestManagedDashboardRenderStoresModelAuthoredJsonnet(t *testing.T) {
 	jsonData, _ := json.Marshal(appSettings{AllowedDatasourceUIDs: []string{"prom-main"}})
 	inst, err := NewApp(context.Background(), backend.AppInstanceSettings{JSONData: jsonData})
 	if err != nil {
 		t.Fatalf("new app: %s", err)
 	}
 	app := inst.(*App)
+	source := `{
+  title: 'Custom Prometheus Review',
+  uid: 'custom-prometheus-review',
+  tags: ['incident'],
+  panels: [
+    {
+      id: 1,
+      type: 'text',
+      title: 'Review summary',
+      gridPos: { x: 0, y: 0, w: 24, h: 5 },
+      options: { mode: 'markdown', content: 'CPU saturation on vm-web-01 impacted /render/report.' },
+    },
+    {
+      id: 2,
+      type: 'timeseries',
+      title: 'HTTP error ratio',
+      gridPos: { x: 0, y: 5, w: 12, h: 8 },
+      datasource: { type: 'prometheus', uid: 'prom-main' },
+      targets: [
+        {
+          refId: 'A',
+          datasource: { type: 'prometheus', uid: 'prom-main' },
+          expr: 'sum by (vm, route) (rate(http_requests_total{job="web",status=~"5.."}[$__rate_interval])) / clamp_min(sum by (vm, route) (rate(http_requests_total{job="web"}[$__rate_interval])), 1e-9)',
+        },
+      ],
+      fieldConfig: { defaults: { unit: 'percentunit', decimals: 3 }, overrides: [] },
+      options: {},
+    },
+  ],
+}`
+	body, _ := json.Marshal(managedDashboardRequest{
+		DashboardJsonnet: source,
+		Tags:             []string{"reviewable"},
+	})
 
 	var sender mockCallResourceResponseSender
 	err = app.CallResource(context.Background(), &backend.CallResourceRequest{
 		Method: http.MethodPost,
 		Path:   "managed-dashboards/render",
-		Body: []byte(`{
-			"templateId": "prometheus-dashboard",
-			"uid": "custom-prometheus-review",
-			"title": "Custom Prometheus Review",
-			"datasourceUid": "prom-main",
-			"from": "now-6h",
-			"to": "now",
-			"panels": [
-				{
-					"type": "text",
-					"title": "Review summary",
-					"content": "CPU saturation on vm-web-01 impacted /render/report.",
-					"x": 0,
-					"y": 0,
-					"w": 24,
-					"h": 5
-				},
-				{
-					"title": "HTTP error ratio",
-					"expr": "sum by (vm, route) (rate(http_requests_total{job=\"web\",status=~\"5..\"}[$__rate_interval])) / clamp_min(sum by (vm, route) (rate(http_requests_total{job=\"web\"}[$__rate_interval])), 1e-9)",
-					"legend": "{{vm}} {{route}}",
-					"unit": "percentunit",
-					"decimals": 3,
-					"x": 0,
-					"y": 5,
-					"w": 12,
-					"h": 8
-				},
-				{
-					"title": "Focused CPU utilization",
-					"expr": "avg(1 - rate(node_cpu_seconds_total{job=\"node\",vm=\"vm-web-01\",mode=\"idle\"}[$__rate_interval]))",
-					"legend": "focused",
-					"unit": "percentunit",
-					"decimals": 3,
-					"x": 12,
-					"y": 5,
-					"w": 12,
-					"h": 8
-				}
-			]
-		}`),
+		Body:   body,
 	}, &sender)
 	if err != nil {
 		t.Fatalf("CallResource error: %s", err)
@@ -278,22 +294,19 @@ func TestManagedDashboardRenderGenericPrometheusTemplate(t *testing.T) {
 	if err := json.Unmarshal(sender.responses[0].Body, &response); err != nil {
 		t.Fatalf("decode response: %s", err)
 	}
-	if response.Template.ID != "prometheus-dashboard" {
-		t.Fatalf("unexpected template: %#v", response.Template)
-	}
 	if response.Dashboard["title"] != "Custom Prometheus Review" {
 		t.Fatalf("unexpected title: %v", response.Dashboard["title"])
 	}
 	if response.Dashboard["editable"] != false {
 		t.Fatalf("managed dashboards should render as not editable: %#v", response.Dashboard["editable"])
 	}
-	if !containsTag(response.Dashboard["tags"], "prometheus-dashboard") {
-		t.Fatalf("missing prometheus-dashboard tag: %#v", response.Dashboard["tags"])
+	if !containsTag(response.Dashboard["tags"], "incident") || !containsTag(response.Dashboard["tags"], "reviewable") || !containsTag(response.Dashboard["tags"], "genai") {
+		t.Fatalf("missing expected tags: %#v", response.Dashboard["tags"])
 	}
 
 	panels, ok := response.Dashboard["panels"].([]any)
-	if !ok || len(panels) != 3 {
-		t.Fatalf("expected three rendered panels, got %#v", response.Dashboard["panels"])
+	if !ok || len(panels) != 2 {
+		t.Fatalf("expected two rendered panels, got %#v", response.Dashboard["panels"])
 	}
 	summaryPanel := panels[0].(map[string]any)
 	options := summaryPanel["options"].(map[string]any)
@@ -307,16 +320,10 @@ func TestManagedDashboardRenderGenericPrometheusTemplate(t *testing.T) {
 	if !strings.Contains(errorExpr, "clamp_min") || !strings.Contains(errorExpr, "sum by (vm, route)") {
 		t.Fatalf("unexpected error ratio expression: %s", errorExpr)
 	}
-	focusedCPU := panels[2].(map[string]any)
-	focusedTarget := focusedCPU["targets"].([]any)[0].(map[string]any)
-	focusedExpr := focusedTarget["expr"].(string)
-	if !strings.Contains(focusedExpr, "node_cpu_seconds_total") || !strings.Contains(focusedExpr, `vm="vm-web-01"`) {
-		t.Fatalf("unexpected focused CPU expression: %s", focusedExpr)
-	}
 
 	annotations := response.Resource.Metadata.Annotations
-	if annotations[annotationTemplateID] != "prometheus-dashboard" || !strings.Contains(annotations[annotationConfig], `"panels"`) {
-		t.Fatalf("missing generic dashboard annotations: %#v", annotations)
+	if annotations[annotationJsonnetSource] != source || annotations[annotationSourceChecksum] != response.SourceChecksum {
+		t.Fatalf("missing Jsonnet source annotations: %#v", annotations)
 	}
 }
 
@@ -327,16 +334,24 @@ func TestManagedDashboardRenderRejectsDisallowedDatasource(t *testing.T) {
 		t.Fatalf("new app: %s", err)
 	}
 	app := inst.(*App)
+	source := `{
+  title: 'Bad Service RED',
+  panels: [
+    {
+      type: 'timeseries',
+      title: 'Bad',
+      datasource: { type: 'prometheus', uid: 'prom-other' },
+      targets: [{ refId: 'A', datasource: { type: 'prometheus', uid: 'prom-other' }, expr: 'up' }],
+    },
+  ],
+}`
+	body, _ := json.Marshal(managedDashboardRequest{DashboardJsonnet: source})
 
 	var sender mockCallResourceResponseSender
 	err = app.CallResource(context.Background(), &backend.CallResourceRequest{
 		Method: http.MethodPost,
 		Path:   "managed-dashboards/render",
-		Body: []byte(`{
-			"templateId": "service-red",
-			"title": "Bad Service RED",
-			"datasourceUid": "prom-other"
-		}`),
+		Body:   body,
 	}, &sender)
 	if err != nil {
 		t.Fatalf("CallResource error: %s", err)
@@ -347,27 +362,52 @@ func TestManagedDashboardRenderRejectsDisallowedDatasource(t *testing.T) {
 	if sender.responses[0].Status != http.StatusBadRequest {
 		t.Fatalf("expected 400, got %d", sender.responses[0].Status)
 	}
-	if !strings.Contains(string(sender.responses[0].Body), "datasource is not available to the app: prom-other") {
+	if !strings.Contains(string(sender.responses[0].Body), "dashboard references datasource UIDs not available to the app: prom-other") {
 		t.Fatalf("unexpected response: %s", string(sender.responses[0].Body))
 	}
 }
 
-func TestManagedDashboardTemplateSourceReadsBundledJsonnet(t *testing.T) {
+func TestManagedDashboardSourceReturnsStoredJsonnet(t *testing.T) {
+	source := "{ title: 'Stored Source', uid: 'stored-source', panels: [] }"
+	grafana := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		if req.Method != http.MethodGet || req.URL.Path != "/apis/dashboard.grafana.app/v1/namespaces/default/dashboards/stored-source" {
+			t.Fatalf("unexpected Grafana request: %s %s", req.Method, req.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(dashboardResource{
+			Kind:       "Dashboard",
+			APIVersion: "dashboard.grafana.app/v1",
+			Metadata: dashboardResourceMetadata{
+				Name: "stored-source",
+				Annotations: map[string]string{
+					annotationManagedBy:      "plugin",
+					annotationManagerID:      pluginID,
+					annotationFolder:         "observability",
+					annotationSourcePath:     "inline-jsonnet",
+					annotationSourceChecksum: "sha256:test",
+					annotationJsonnetSource:  source,
+				},
+			},
+			Spec: map[string]any{"title": "Stored Source"},
+		})
+	}))
+	defer grafana.Close()
+
 	inst, err := NewApp(context.Background(), backend.AppInstanceSettings{})
 	if err != nil {
 		t.Fatalf("new app: %s", err)
 	}
 	app := inst.(*App)
+	ctx := backend.WithGrafanaConfig(context.Background(), backend.NewGrafanaCfg(map[string]string{
+		backend.AppURL:          grafana.URL,
+		backend.AppClientSecret: "service-account-token",
+	}))
 
 	var sender mockCallResourceResponseSender
-	err = app.CallResource(context.Background(), &backend.CallResourceRequest{
+	err = app.CallResource(ctx, &backend.CallResourceRequest{
 		Method: http.MethodPost,
-		Path:   "managed-dashboards/template-source",
-		Body: []byte(`{
-			"templateId": "service-red",
-			"offset": 1,
-			"limit": 20
-		}`),
+		Path:   "managed-dashboards/source",
+		Body:   []byte(`{"uid":"stored-source"}`),
 	}, &sender)
 	if err != nil {
 		t.Fatalf("CallResource error: %s", err)
@@ -379,15 +419,15 @@ func TestManagedDashboardTemplateSourceReadsBundledJsonnet(t *testing.T) {
 		t.Fatalf("expected 200, got %d: %s", sender.responses[0].Status, string(sender.responses[0].Body))
 	}
 
-	var response managedDashboardTemplateSourceResponse
+	var response managedDashboardSourceResponse
 	if err := json.Unmarshal(sender.responses[0].Body, &response); err != nil {
 		t.Fatalf("decode response: %s", err)
 	}
-	if response.Template.ID != "service-red" || response.Path != "jsonnet/templates/service-red.jsonnet" {
-		t.Fatalf("unexpected template source response: %#v", response)
+	if response.DashboardJsonnet != source || response.DashboardJsonnetSize != len([]byte(source)) {
+		t.Fatalf("unexpected source response: %#v", response)
 	}
-	if len(response.Result) == 0 || !strings.Contains(joinTemplateLines(response.Result), "grafonnet") {
-		t.Fatalf("expected bundled template source, got %#v", response.Result)
+	if _, exists := response.Annotations[annotationJsonnetSource]; exists {
+		t.Fatalf("public annotations should not include the full source: %#v", response.Annotations)
 	}
 }
 
@@ -445,17 +485,14 @@ func TestManagedDashboardSyncWritesDashboardResource(t *testing.T) {
 		backend.AppURL:          grafana.URL,
 		backend.AppClientSecret: "service-account-token",
 	}))
+	source := "{ title: 'API Service Direct', uid: 'direct-jsonnet-sync', panels: [] }"
+	body, _ := json.Marshal(managedDashboardRequest{DashboardJsonnet: source})
 
 	var sender mockCallResourceResponseSender
 	err = app.CallResource(ctx, &backend.CallResourceRequest{
 		Method: http.MethodPost,
 		Path:   "managed-dashboards/sync",
-		Body: []byte(`{
-			"templateId": "service-red",
-			"uid": "service-red-api",
-			"title": "API Service RED",
-			"datasourceUid": "prom-main"
-		}`),
+		Body:   body,
 	}, &sender)
 	if err != nil {
 		t.Fatalf("CallResource error: %s", err)
@@ -475,23 +512,17 @@ func TestManagedDashboardSyncWritesDashboardResource(t *testing.T) {
 	if saved.Metadata.Annotations[annotationManagedBy] != "plugin" || saved.Metadata.Annotations[annotationManagerID] != pluginID {
 		t.Fatalf("saved resource is not plugin managed: %#v", saved.Metadata.Annotations)
 	}
+	if saved.Metadata.Annotations[annotationJsonnetSource] != source {
+		t.Fatalf("saved resource did not store Jsonnet source: %#v", saved.Metadata.Annotations)
+	}
 
 	var response managedDashboardSyncResponse
 	if err := json.Unmarshal(sender.responses[0].Body, &response); err != nil {
 		t.Fatalf("decode response: %s", err)
 	}
-	if response.Status != "created" || response.UID != "service-red-api" {
+	if response.Status != "created" || response.UID != "direct-jsonnet-sync" {
 		t.Fatalf("unexpected sync response: %#v", response)
 	}
-}
-
-func joinTemplateLines(lines []managedDashboardTemplateLine) string {
-	var result strings.Builder
-	for _, line := range lines {
-		result.WriteString(line.Text)
-		result.WriteByte('\n')
-	}
-	return result.String()
 }
 
 func containsTag(raw any, expected string) bool {

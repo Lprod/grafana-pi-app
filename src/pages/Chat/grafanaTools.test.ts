@@ -32,6 +32,8 @@ jest.mock('typebox', () => ({
 
 import type { AgentTool } from '@earendil-works/pi-agent-core';
 import type { DataFrame, DataSourceInstanceSettings } from '@grafana/data';
+import { getBackendSrv } from '@grafana/runtime';
+import { of } from 'rxjs';
 import {
   createGrafanaToolRegistry,
   createGrafanaTools,
@@ -212,12 +214,32 @@ describe('grafana datasource tool policy', () => {
     );
   });
 
-  it('rejects managed dashboard sync calls outside the datasource allow-list', async () => {
+  it('sends Jsonnet source to the managed dashboard sync endpoint', async () => {
+    const fetch = jest.fn().mockReturnValue(
+      of({
+        data: {
+          uid: 'direct-jsonnet',
+          url: '/d/direct-jsonnet',
+          status: 'created',
+          sourceChecksum: 'sha256:test',
+        },
+      })
+    );
+    (getBackendSrv as jest.Mock).mockReturnValue({ fetch });
     const tool = getTool(createGrafanaTools({ allowedDatasourceUids: ['prom-a'] }), 'grafana_sync_managed_dashboard');
+    const source = "{ title: 'Direct Jsonnet', uid: 'direct-jsonnet', panels: [] }";
 
-    await expect(
-      tool.execute('call-1', { templateId: 'service-red', datasourceUid: 'prom-b', title: 'Bad dashboard' }, undefined)
-    ).rejects.toThrow('Datasource is not available to the assistant: prom-b');
+    const result = await tool.execute('call-1', { dashboard_jsonnet: source }, undefined);
+
+    expect(fetch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        url: '/api/plugins/elohmeier-grafanapiapp-app/resources/managed-dashboards/sync',
+        method: 'POST',
+        data: { dashboard_jsonnet: source },
+        showErrorAlert: false,
+      })
+    );
+    expect(result.content[0].text).toContain('Managed dashboard created');
   });
 
   it('adds subagent tools only when a chat runtime is supplied', () => {
@@ -245,10 +267,12 @@ describe('grafana datasource tool policy', () => {
     const names = registry.all.map((tool) => tool.name);
     expect(names).toContain('query_prometheus');
     expect(names).toContain('grafana_sync_managed_dashboard');
+    expect(names).toContain('grafana_get_managed_dashboard_source');
     expect(names).toContain('grafana_screenshot');
     expect(names).not.toContain('query_prometheus_raw');
     expect(names).not.toContain('grafana_upload_dashboard');
     expect(names).not.toContain('grafana_delete_dashboard');
+    expect(names).not.toContain('grafana_list_managed_dashboard_templates');
     expect(names).not.toContain('read_managed_dashboard_template');
     expect(names).not.toContain('search_jsonnet_libs');
     expect(names).not.toContain('read_jsonnet_lib');
@@ -265,7 +289,7 @@ describe('grafana datasource tool policy', () => {
     expect(names).toContain('query_prometheus_raw');
     expect(names).toContain('grafana_upload_dashboard');
     expect(names).toContain('grafana_delete_dashboard');
-    expect(names).toContain('read_managed_dashboard_template');
+    expect(names).toContain('grafana_get_managed_dashboard_source');
     expect(names).toContain('search_jsonnet_libs');
   });
 });

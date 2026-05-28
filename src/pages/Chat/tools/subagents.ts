@@ -11,7 +11,7 @@ type MetricsSubagentParams = {
 
 type JsonnetSubagentParams = {
   task: string;
-  templateId?: string;
+  uid?: string;
 };
 
 type SubagentToolOptions = {
@@ -62,15 +62,15 @@ function makeJsonnetExplorerTool(runtime: GrafanaToolRuntime, tools: AgentTool[]
   return {
     name: 'grafana_explore_jsonnet',
     label: 'Explore Jsonnet',
-    description: 'Delegate vendored Jsonnet/Grafonnet and managed-dashboard template reconnaissance to an isolated subagent. It cannot write dashboards.',
+    description: 'Delegate vendored Jsonnet/Grafonnet and managed-dashboard source reconnaissance to an isolated subagent. It cannot write dashboards.',
     executionMode: 'sequential',
     parameters: Type.Object({
       task: Type.String({ description: 'Specific Jsonnet/Grafonnet exploration task and expected output.' }),
-      templateId: Type.Optional(Type.String({ description: 'Optional bundled managed dashboard template ID to inspect.' })),
+      uid: Type.Optional(Type.String({ description: 'Optional app-managed dashboard UID whose stored Jsonnet source should be inspected.' })),
     }),
     async execute(_toolCallId, params, signal, onUpdate) {
       const args = params as JsonnetSubagentParams;
-      const task = [args.task, args.templateId ? `Inspect bundled template ID: ${args.templateId}.` : ''].filter(Boolean).join('\n');
+      const task = [args.task, args.uid ? `Inspect managed dashboard UID: ${args.uid}.` : ''].filter(Boolean).join('\n');
 
       return runGrafanaSubagent({
         kind: 'jsonnet',
@@ -106,16 +106,16 @@ Keep the final answer compact and directly usable by the parent assistant.`;
 const JSONNET_SUBAGENT_PROMPT = `You are a Grafana Jsonnet/Grafonnet exploration subagent.
 
 Scope:
-- Inspect bundled app-managed dashboard templates and vendored Grafonnet/Jsonnet libraries.
+- Inspect stored Jsonnet source for app-managed dashboards and vendored Grafonnet/Jsonnet libraries.
 - Use list/search/read tools to find APIs and examples.
-- Render managed dashboards only when it helps validate template output.
+- Render managed dashboards only when it helps validate Jsonnet output.
 - Do not create, update, delete, upload, or sync dashboards.
 - Do not request managerAllowsEdits.
 
 Output:
-- Template or library files inspected.
+- Managed dashboard source or library files inspected.
 - Grafonnet APIs or Jsonnet patterns to use.
-- Concrete template/config recommendations.
+- Concrete source edits or Jsonnet patterns to use.
 - Render validation findings if you rendered a dashboard.
 - Risks or missing inputs for the parent assistant.
 

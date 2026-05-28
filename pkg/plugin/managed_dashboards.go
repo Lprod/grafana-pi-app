@@ -8,10 +8,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"io/fs"
 	"net/http"
 	"net/url"
-	"path"
 	"regexp"
 	"sort"
 	"strings"
@@ -29,73 +27,39 @@ const (
 	annotationSourcePath     = "grafana.app/sourcePath"
 	annotationSourceChecksum = "grafana.app/sourceChecksum"
 	annotationSourceTS       = "grafana.app/sourceTimestamp"
-	annotationTemplateID     = "elohmeier.grafanapiapp/templateId"
-	annotationConfig         = "elohmeier.grafanapiapp/config"
-	annotationConfigChecksum = "elohmeier.grafanapiapp/configChecksum"
+	annotationJsonnetSource  = "elohmeier.grafanapiapp/jsonnetSource"
+
+	maxManagedDashboardJsonnetSourceBytes = 200 * 1024
 )
 
-type managedDashboardTemplate struct {
-	ID          string `json:"id"`
-	Name        string `json:"name"`
-	Description string `json:"description"`
-	SourcePath  string `json:"sourcePath"`
-}
-
 type managedDashboardRequest struct {
-	TemplateID    string      `json:"templateId"`
-	UID           string      `json:"uid,omitempty"`
-	Title         string      `json:"title,omitempty"`
-	FolderUID     string      `json:"folderUid,omitempty"`
-	DatasourceUID string      `json:"datasourceUid"`
-	Job           string      `json:"job,omitempty"`
-	From          string      `json:"from,omitempty"`
-	To            string      `json:"to,omitempty"`
-	Panels        []panelSpec `json:"panels,omitempty"`
-	Tags          []string    `json:"tags,omitempty"`
-	Overwrite     *bool       `json:"overwrite,omitempty"`
+	DashboardJsonnet string   `json:"dashboard_jsonnet"`
+	UID              string   `json:"uid,omitempty"`
+	FolderUID        string   `json:"folderUid,omitempty"`
+	Tags             []string `json:"tags,omitempty"`
+	Overwrite        *bool    `json:"overwrite,omitempty"`
 }
 
-type panelSpec struct {
-	Type     string `json:"type,omitempty"`
-	Title    string `json:"title,omitempty"`
-	Expr     string `json:"expr,omitempty"`
-	Legend   string `json:"legend,omitempty"`
-	Unit     string `json:"unit,omitempty"`
-	RefID    string `json:"refId,omitempty"`
-	Interval string `json:"interval,omitempty"`
-	Content  string `json:"content,omitempty"`
-	Mode     string `json:"mode,omitempty"`
-	X        *int   `json:"x,omitempty"`
-	Y        *int   `json:"y,omitempty"`
-	W        *int   `json:"w,omitempty"`
-	H        *int   `json:"h,omitempty"`
-	Decimals *int   `json:"decimals,omitempty"`
+type managedDashboardSourceRequest struct {
+	UID string `json:"uid"`
 }
 
-type managedDashboardTemplateSourceRequest struct {
-	TemplateID string `json:"templateId"`
-	Offset     int    `json:"offset,omitempty"`
-	Limit      int    `json:"limit,omitempty"`
-}
-
-type managedDashboardTemplateLine struct {
-	Line int    `json:"line"`
-	Text string `json:"text"`
-}
-
-type managedDashboardTemplateSourceResponse struct {
-	Template   managedDashboardTemplate       `json:"template"`
-	Path       string                         `json:"path"`
-	TotalLines int                            `json:"totalLines"`
-	Result     []managedDashboardTemplateLine `json:"result"`
+type managedDashboardSourceResponse struct {
+	UID                  string            `json:"uid"`
+	Title                string            `json:"title"`
+	URL                  string            `json:"url"`
+	FolderUID            string            `json:"folderUid,omitempty"`
+	SourceChecksum       string            `json:"sourceChecksum,omitempty"`
+	DashboardJsonnet     string            `json:"dashboard_jsonnet"`
+	DashboardJsonnetSize int               `json:"dashboardJsonnetSize"`
+	Annotations          map[string]string `json:"annotations"`
 }
 
 type managedDashboardRenderResponse struct {
-	Dashboard      map[string]any           `json:"dashboard"`
-	Resource       dashboardResource        `json:"resource"`
-	Template       managedDashboardTemplate `json:"template"`
-	SourceChecksum string                   `json:"sourceChecksum"`
-	ConfigChecksum string                   `json:"configChecksum"`
+	Dashboard      map[string]any          `json:"dashboard"`
+	Resource       dashboardResource       `json:"resource"`
+	SourceChecksum string                  `json:"sourceChecksum"`
+	Request        managedDashboardRequest `json:"-"`
 }
 
 type managedDashboardSyncResponse struct {
@@ -105,7 +69,6 @@ type managedDashboardSyncResponse struct {
 	Dashboard      map[string]any `json:"dashboard"`
 	Resource       map[string]any `json:"resource"`
 	SourceChecksum string         `json:"sourceChecksum"`
-	ConfigChecksum string         `json:"configChecksum"`
 }
 
 type managedDashboardListResponse struct {
@@ -113,16 +76,15 @@ type managedDashboardListResponse struct {
 }
 
 type managedDashboardListItem struct {
-	UID            string                   `json:"uid"`
-	Title          string                   `json:"title"`
-	URL            string                   `json:"url"`
-	TemplateID     string                   `json:"templateId,omitempty"`
-	FolderUID      string                   `json:"folderUid,omitempty"`
-	SourcePath     string                   `json:"sourcePath,omitempty"`
-	SourceChecksum string                   `json:"sourceChecksum,omitempty"`
-	ConfigChecksum string                   `json:"configChecksum,omitempty"`
-	Config         *managedDashboardRequest `json:"config,omitempty"`
-	Annotations    map[string]string        `json:"annotations"`
+	UID                  string            `json:"uid"`
+	Title                string            `json:"title"`
+	URL                  string            `json:"url"`
+	FolderUID            string            `json:"folderUid,omitempty"`
+	SourcePath           string            `json:"sourcePath,omitempty"`
+	SourceChecksum       string            `json:"sourceChecksum,omitempty"`
+	HasJsonnetSource     bool              `json:"hasJsonnetSource"`
+	DashboardJsonnetSize int               `json:"dashboardJsonnetSize,omitempty"`
+	Annotations          map[string]string `json:"annotations"`
 }
 
 type dashboardResourceList struct {
@@ -142,88 +104,8 @@ type dashboardResourceMetadata struct {
 }
 
 var (
-	managedDashboardTemplates = []managedDashboardTemplate{
-		{
-			ID:          "service-red",
-			Name:        "Service RED",
-			Description: "Request rate, errors, duration, and saturation for a Prometheus-backed service.",
-			SourcePath:  "service-red.jsonnet",
-		},
-		{
-			ID:          "prometheus-dashboard",
-			Name:        "Prometheus Dashboard",
-			Description: "Configurable Prometheus dashboard rendered from structured panel specs.",
-			SourcePath:  "prometheus-dashboard.jsonnet",
-		},
-	}
-	templateByID = map[string]managedDashboardTemplate{
-		"service-red":          managedDashboardTemplates[0],
-		"prometheus-dashboard": managedDashboardTemplates[1],
-	}
 	dashboardUIDPattern = regexp.MustCompile(`[^a-z0-9-]+`)
 )
-
-func (a *App) handleManagedDashboardTemplates(w http.ResponseWriter, req *http.Request) {
-	if req.Method != http.MethodGet {
-		writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"templates": managedDashboardTemplates})
-}
-
-func (a *App) handleManagedDashboardTemplateSource(w http.ResponseWriter, req *http.Request) {
-	if req.Method != http.MethodPost {
-		writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
-		return
-	}
-
-	var body managedDashboardTemplateSourceRequest
-	if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
-		writeJSONError(w, http.StatusBadRequest, fmt.Sprintf("invalid request body: %s", err))
-		return
-	}
-	templateID := strings.TrimSpace(body.TemplateID)
-	if templateID == "" {
-		templateID = "service-red"
-	}
-	template, ok := templateByID[templateID]
-	if !ok {
-		writeJSONError(w, http.StatusBadRequest, fmt.Sprintf("unknown managed dashboard template: %s", templateID))
-		return
-	}
-
-	sourcePath := path.Join(jsonnetTemplateRoot, template.SourcePath)
-	content, err := fs.ReadFile(jsonnetAssets, sourcePath)
-	if err != nil {
-		writeJSONError(w, http.StatusNotFound, "template source not found")
-		return
-	}
-
-	lines := strings.Split(string(content), "\n")
-	offset := body.Offset
-	if offset < 1 {
-		offset = 1
-	}
-	limit := body.Limit
-	if limit < 1 {
-		limit = 200
-	}
-	if limit > 500 {
-		limit = 500
-	}
-
-	result := make([]managedDashboardTemplateLine, 0, limit)
-	for index := offset - 1; index < len(lines) && len(result) < limit; index++ {
-		result = append(result, managedDashboardTemplateLine{Line: index + 1, Text: strings.TrimRight(lines[index], "\r")})
-	}
-
-	writeJSON(w, http.StatusOK, managedDashboardTemplateSourceResponse{
-		Template:   template,
-		Path:       sourcePath,
-		TotalLines: len(lines),
-		Result:     result,
-	})
-}
 
 func (a *App) handleManagedDashboardList(w http.ResponseWriter, req *http.Request) {
 	if req.Method != http.MethodGet {
@@ -249,29 +131,72 @@ func (a *App) handleManagedDashboardList(w http.ResponseWriter, req *http.Reques
 		if annotations[annotationManagedBy] != "plugin" || annotations[annotationManagerID] != pluginID {
 			continue
 		}
-		var config *managedDashboardRequest
-		if raw := annotations[annotationConfig]; raw != "" {
-			var parsed managedDashboardRequest
-			if err := json.Unmarshal([]byte(raw), &parsed); err == nil {
-				config = &parsed
-			}
-		}
+		source := annotations[annotationJsonnetSource]
 
 		items = append(items, managedDashboardListItem{
-			UID:            resource.Metadata.Name,
-			Title:          fmt.Sprint(resource.Spec["title"]),
-			URL:            a.dashboardURL(req, resource.Metadata.Name),
-			TemplateID:     annotations[annotationTemplateID],
-			FolderUID:      annotations[annotationFolder],
-			SourcePath:     annotations[annotationSourcePath],
-			SourceChecksum: annotations[annotationSourceChecksum],
-			ConfigChecksum: annotations[annotationConfigChecksum],
-			Config:         config,
-			Annotations:    annotations,
+			UID:                  resource.Metadata.Name,
+			Title:                fmt.Sprint(resource.Spec["title"]),
+			URL:                  a.dashboardURL(req, resource.Metadata.Name),
+			FolderUID:            annotations[annotationFolder],
+			SourcePath:           annotations[annotationSourcePath],
+			SourceChecksum:       annotations[annotationSourceChecksum],
+			HasJsonnetSource:     source != "",
+			DashboardJsonnetSize: len([]byte(source)),
+			Annotations:          publicDashboardAnnotations(annotations),
 		})
 	}
 
 	writeJSON(w, http.StatusOK, managedDashboardListResponse{Dashboards: items})
+}
+
+func (a *App) handleManagedDashboardSource(w http.ResponseWriter, req *http.Request) {
+	if req.Method != http.MethodPost {
+		writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+
+	var body managedDashboardSourceRequest
+	if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
+		writeJSONError(w, http.StatusBadRequest, fmt.Sprintf("invalid request body: %s", err))
+		return
+	}
+	uid := strings.TrimSpace(body.UID)
+	if uid == "" {
+		writeJSONError(w, http.StatusBadRequest, "uid is required")
+		return
+	}
+
+	resource, err := a.getDashboardResource(req, uid)
+	if err != nil {
+		var grafanaErr grafanaAPIError
+		if errors.As(err, &grafanaErr) && grafanaErr.status == http.StatusNotFound {
+			writeJSONError(w, http.StatusNotFound, "managed dashboard not found")
+			return
+		}
+		writeJSONError(w, http.StatusBadGateway, err.Error())
+		return
+	}
+	annotations := resource.Metadata.Annotations
+	if annotations[annotationManagedBy] != "plugin" || annotations[annotationManagerID] != pluginID {
+		writeJSONError(w, http.StatusNotFound, "dashboard is not managed by this app")
+		return
+	}
+	source := annotations[annotationJsonnetSource]
+	if source == "" {
+		writeJSONError(w, http.StatusNotFound, "managed dashboard does not have stored Jsonnet source")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, managedDashboardSourceResponse{
+		UID:                  resource.Metadata.Name,
+		Title:                fmt.Sprint(resource.Spec["title"]),
+		URL:                  a.dashboardURL(req, resource.Metadata.Name),
+		FolderUID:            annotations[annotationFolder],
+		SourceChecksum:       annotations[annotationSourceChecksum],
+		DashboardJsonnet:     source,
+		DashboardJsonnetSize: len([]byte(source)),
+		Annotations:          publicDashboardAnnotations(annotations),
+	})
 }
 
 func (a *App) handleManagedDashboardRender(w http.ResponseWriter, req *http.Request) {
@@ -342,7 +267,6 @@ func (a *App) handleManagedDashboardSync(w http.ResponseWriter, req *http.Reques
 		Dashboard:      rendered.Dashboard,
 		Resource:       resource,
 		SourceChecksum: rendered.SourceChecksum,
-		ConfigChecksum: rendered.ConfigChecksum,
 	})
 }
 
@@ -353,23 +277,14 @@ func (a *App) renderManagedDashboardRequest(body io.Reader) (*managedDashboardRe
 	}
 	request = normalizeManagedDashboardRequest(request)
 
-	template, ok := templateByID[request.TemplateID]
-	if !ok {
-		return nil, fmt.Errorf("unknown managed dashboard template: %s", request.TemplateID)
+	if strings.TrimSpace(request.DashboardJsonnet) == "" {
+		return nil, errors.New("dashboard_jsonnet is required")
 	}
-	if request.DatasourceUID == "" {
-		return nil, errors.New("datasourceUid is required")
-	}
-	if err := a.validateDatasourceAllowed(request.DatasourceUID); err != nil {
-		return nil, err
+	if len([]byte(request.DashboardJsonnet)) > maxManagedDashboardJsonnetSourceBytes {
+		return nil, fmt.Errorf("dashboard_jsonnet is too large: %d bytes exceeds %d bytes", len([]byte(request.DashboardJsonnet)), maxManagedDashboardJsonnetSourceBytes)
 	}
 
-	configJSON, err := json.Marshal(request)
-	if err != nil {
-		return nil, err
-	}
-
-	rendered, err := renderJsonnetTemplate(template.SourcePath, configJSON)
+	rendered, err := renderJsonnetSource(request.DashboardJsonnet)
 	if err != nil {
 		return nil, fmt.Errorf("jsonnet compilation failed: %w", err)
 	}
@@ -381,8 +296,16 @@ func (a *App) renderManagedDashboardRequest(body io.Reader) (*managedDashboardRe
 	if dashboard["title"] == nil || strings.TrimSpace(fmt.Sprint(dashboard["title"])) == "" {
 		return nil, errors.New("compiled dashboard must include a title")
 	}
+	if request.UID == "" {
+		if uid, ok := dashboard["uid"].(string); ok {
+			request.UID = uid
+		}
+	}
+	request.UID = normalizeManagedDashboardUID(request.UID, fmt.Sprint(dashboard["title"]))
 	dashboard["uid"] = request.UID
-	dashboard["tags"] = ensureStringTag(dashboard["tags"], "genai")
+	dashboard["editable"] = false
+	requiredTags := append(append([]string{}, request.Tags...), "genai", "managed-by-pi")
+	dashboard["tags"] = ensureStringTags(dashboard["tags"], requiredTags...)
 	delete(dashboard, "id")
 
 	disallowed := a.disallowedDatasourceUIDs(dashboard)
@@ -390,18 +313,14 @@ func (a *App) renderManagedDashboardRequest(body io.Reader) (*managedDashboardRe
 		return nil, fmt.Errorf("dashboard references datasource UIDs not available to the app: %s", strings.Join(disallowed, ", "))
 	}
 
-	sourceChecksum, err := jsonnetSourceChecksum(template.SourcePath, configJSON)
-	if err != nil {
-		return nil, err
-	}
-	configChecksum := checksumJSON(configJSON)
+	sourceChecksum := checksumBytes([]byte(request.DashboardJsonnet))
 
 	resource := dashboardResource{
 		Kind:       "Dashboard",
 		APIVersion: "dashboard.grafana.app/v1",
 		Metadata: dashboardResourceMetadata{
 			Name:        request.UID,
-			Annotations: managedDashboardAnnotations(request, template, sourceChecksum, configChecksum),
+			Annotations: managedDashboardAnnotations(request, sourceChecksum),
 		},
 		Spec: dashboard,
 	}
@@ -409,60 +328,16 @@ func (a *App) renderManagedDashboardRequest(body io.Reader) (*managedDashboardRe
 	return &managedDashboardRenderResponse{
 		Dashboard:      dashboard,
 		Resource:       resource,
-		Template:       template,
 		SourceChecksum: sourceChecksum,
-		ConfigChecksum: configChecksum,
+		Request:        request,
 	}, nil
 }
 
 func normalizeManagedDashboardRequest(request managedDashboardRequest) managedDashboardRequest {
-	request.TemplateID = strings.TrimSpace(request.TemplateID)
-	if request.TemplateID == "" {
-		request.TemplateID = "service-red"
-	}
-	request.Title = strings.TrimSpace(request.Title)
-	if request.Title == "" {
-		request.Title = templateTitle(request.TemplateID)
-	}
-	request.DatasourceUID = strings.TrimSpace(request.DatasourceUID)
 	request.FolderUID = strings.TrimSpace(request.FolderUID)
-	request.Job = strings.TrimSpace(request.Job)
-	request.From = strings.TrimSpace(request.From)
-	request.To = strings.TrimSpace(request.To)
-	request.Panels = normalizePanelSpecs(request.Panels)
-	request.UID = normalizeManagedDashboardUID(request.UID, request.Title)
+	request.UID = strings.TrimSpace(request.UID)
 	request.Tags = normalizeTags(request.Tags)
 	return request
-}
-
-func normalizePanelSpecs(panels []panelSpec) []panelSpec {
-	result := make([]panelSpec, 0, len(panels))
-	for _, panel := range panels {
-		panel.Type = strings.TrimSpace(panel.Type)
-		panel.Title = strings.TrimSpace(panel.Title)
-		panel.Expr = strings.TrimSpace(panel.Expr)
-		panel.Legend = strings.TrimSpace(panel.Legend)
-		panel.Unit = strings.TrimSpace(panel.Unit)
-		panel.RefID = strings.TrimSpace(panel.RefID)
-		panel.Interval = strings.TrimSpace(panel.Interval)
-		panel.Content = strings.TrimSpace(panel.Content)
-		panel.Mode = strings.TrimSpace(panel.Mode)
-		if panel.Type == "" {
-			panel.Type = "timeseries"
-		}
-		if panel.Type != "text" && panel.Expr == "" {
-			continue
-		}
-		result = append(result, panel)
-	}
-	return result
-}
-
-func templateTitle(templateID string) string {
-	if template, ok := templateByID[templateID]; ok {
-		return template.Name
-	}
-	return "Managed dashboard"
 }
 
 func normalizeManagedDashboardUID(uid string, title string) string {
@@ -497,46 +372,23 @@ func normalizeTags(tags []string) []string {
 	return result
 }
 
-func managedDashboardAnnotations(request managedDashboardRequest, template managedDashboardTemplate, sourceChecksum string, configChecksum string) map[string]string {
+func managedDashboardAnnotations(request managedDashboardRequest, sourceChecksum string) map[string]string {
 	annotations := map[string]string{
 		annotationManagedBy:      "plugin",
 		annotationManagerID:      pluginID,
-		annotationSourcePath:     path.Join("jsonnet/templates", template.SourcePath),
+		annotationSourcePath:     "inline-jsonnet",
 		annotationSourceChecksum: sourceChecksum,
 		annotationSourceTS:       fmt.Sprintf("%d", time.Now().UnixMilli()),
-		annotationTemplateID:     template.ID,
-		annotationConfigChecksum: configChecksum,
+		annotationJsonnetSource:  request.DashboardJsonnet,
 	}
 	if request.FolderUID != "" {
 		annotations[annotationFolder] = request.FolderUID
-	}
-	if config, err := json.Marshal(request); err == nil && len(config) <= 8192 {
-		annotations[annotationConfig] = string(config)
 	}
 	return annotations
 }
 
 func requestAllowsOverwrite(rendered *managedDashboardRenderResponse) bool {
-	raw := rendered.Resource.Metadata.Annotations[annotationConfig]
-	if raw == "" {
-		return true
-	}
-	var request managedDashboardRequest
-	if err := json.Unmarshal([]byte(raw), &request); err != nil {
-		return true
-	}
-	return request.Overwrite == nil || *request.Overwrite
-}
-
-func (a *App) validateDatasourceAllowed(uid string) error {
-	allowed := a.allowedDatasourceSet()
-	if len(allowed) == 0 {
-		return nil
-	}
-	if !allowed[uid] {
-		return fmt.Errorf("datasource is not available to the app: %s", uid)
-	}
-	return nil
+	return rendered.Request.Overwrite == nil || *rendered.Request.Overwrite
 }
 
 func (a *App) disallowedDatasourceUIDs(dashboard any) []string {
@@ -609,7 +461,18 @@ func isBuiltinDatasourceUID(uid string) bool {
 	}
 }
 
-func ensureStringTag(raw any, required string) []string {
+func publicDashboardAnnotations(annotations map[string]string) map[string]string {
+	result := map[string]string{}
+	for key, value := range annotations {
+		if key == annotationJsonnetSource {
+			continue
+		}
+		result[key] = value
+	}
+	return result
+}
+
+func ensureStringTags(raw any, required ...string) []string {
 	result := []string{}
 	seen := map[string]bool{}
 	if tags, ok := raw.([]any); ok {
@@ -621,19 +484,35 @@ func ensureStringTag(raw any, required string) []string {
 			}
 		}
 	}
-	if !seen[required] {
-		result = append(result, required)
+	for _, value := range required {
+		value = strings.TrimSpace(value)
+		if value != "" && !seen[value] {
+			seen[value] = true
+			result = append(result, value)
+		}
 	}
 	return result
 }
 
-func checksumJSON(value []byte) string {
+func checksumBytes(value []byte) string {
 	sum := sha256.Sum256(value)
 	return "sha256:" + hex.EncodeToString(sum[:])
 }
 
+func (a *App) getDashboardResource(req *http.Request, uid string) (dashboardResource, error) {
+	responseBody, err := a.grafanaAPI(req, http.MethodGet, "/apis/dashboard.grafana.app/v1/namespaces/default/dashboards/"+url.PathEscape(uid), nil)
+	if err != nil {
+		return dashboardResource{}, err
+	}
+	var resource dashboardResource
+	if err := json.Unmarshal(responseBody, &resource); err != nil {
+		return dashboardResource{}, fmt.Errorf("invalid Grafana API response: %w", err)
+	}
+	return resource, nil
+}
+
 func (a *App) dashboardResourceExists(req *http.Request, uid string) (bool, error) {
-	_, err := a.grafanaAPI(req, http.MethodGet, "/apis/dashboard.grafana.app/v1/namespaces/default/dashboards/"+url.PathEscape(uid), nil)
+	_, err := a.getDashboardResource(req, uid)
 	if err == nil {
 		return true, nil
 	}

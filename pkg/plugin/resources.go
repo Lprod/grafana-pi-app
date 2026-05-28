@@ -510,8 +510,7 @@ func (a *App) registerRoutes(mux *http.ServeMux) {
 	// can use Pi's client-side proxy stream implementation unchanged.
 	mux.HandleFunc("/llm/api/stream", a.handleLLMStream)
 	mux.HandleFunc("/managed-dashboards", a.handleManagedDashboardList)
-	mux.HandleFunc("/managed-dashboards/templates", a.handleManagedDashboardTemplates)
-	mux.HandleFunc("/managed-dashboards/template-source", a.handleManagedDashboardTemplateSource)
+	mux.HandleFunc("/managed-dashboards/source", a.handleManagedDashboardSource)
 	mux.HandleFunc("/managed-dashboards/render", a.handleManagedDashboardRender)
 	mux.HandleFunc("/managed-dashboards/sync", a.handleManagedDashboardSync)
 	mux.HandleFunc("/jsonnet-libs/search", a.handleJsonnetLibSearch)

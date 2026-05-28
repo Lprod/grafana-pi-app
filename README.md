@@ -7,7 +7,7 @@ Grafana Pi App is a Grafana app plugin that embeds a Pi-powered LLM chat assista
 - Discovers Prometheus datasources visible to the current user.
 - Lists metric names and label values through Grafana datasource resource APIs.
 - Runs PromQL through Grafana datasource query APIs, returning compact min/max/last/sample summaries for range queries by default.
-- Creates app-managed dashboards from vendored Jsonnet/Grafonnet templates. These dashboards are marked as plugin-managed and should be edited through the app, not the standard Grafana dashboard editor.
+- Creates app-managed dashboards from model-authored Jsonnet/Grafonnet source. The source is stored with each dashboard so future edits can update the Jsonnet and re-sync through the app.
 - Lists, fetches, and screenshots dashboards through Grafana APIs.
 - Delegates broad metric and Jsonnet reconnaissance to restricted subagents with isolated chat context.
 - Stores chat sessions per Grafana user with plugin user storage.
@@ -31,25 +31,23 @@ Managed dashboard writes use the plugin service account declared in `plugin.json
 
 ## Managed dashboards
 
-The backend vendors Jsonnet libraries under `pkg/plugin/jsonnet/vendor` using the same `jsonnet-bundler` layout as `agentic-observability`. Templates live in `pkg/plugin/jsonnet/templates` and are embedded into the backend binary.
+The backend vendors Jsonnet libraries under `pkg/plugin/jsonnet/vendor` using the same `jsonnet-bundler` layout as `agentic-observability`. The assistant writes self-contained Jsonnet/Grafonnet source and the backend compiles it with the embedded vendored libraries before saving the dashboard.
 
-Bundled templates currently include `service-red` and `prometheus-dashboard`.
-
-The assistant can render and sync bundled templates with:
+The assistant can render, sync, and later retrieve Jsonnet-backed dashboards with:
 
 - `grafana_explore_jsonnet`
-- `grafana_list_managed_dashboard_templates`
 - `grafana_list_managed_dashboards`
+- `grafana_get_managed_dashboard_source`
 - `grafana_render_managed_dashboard`
 - `grafana_sync_managed_dashboard`
 
-Synced dashboards are saved through the `dashboard.grafana.app` resource API with `grafana.app/managedBy=plugin` and `grafana.app/managerId=elohmeier-grafanapiapp-app`. The app intentionally does not set `grafana.app/managerAllowsEdits`, so normal Grafana UI edits are treated as read-only/export flows while app sync remains the source of truth.
+Synced dashboards are saved through the `dashboard.grafana.app` resource API with `grafana.app/managedBy=plugin`, `grafana.app/managerId=elohmeier-grafanapiapp-app`, the source checksum, and the exact Jsonnet source. The app intentionally does not set `grafana.app/managerAllowsEdits`, so normal Grafana UI edits are treated as read-only/export flows while stored Jsonnet remains the source of truth.
 
-The default chat toolset does not expose raw dashboard JSON upload/delete tools, raw Prometheus data-frame output, or direct vendored Jsonnet file browsing. Jsonnet inspection is delegated to the restricted Jsonnet subagent, and dashboard writes go through managed templates.
+The default chat toolset does not expose raw dashboard JSON upload/delete tools, raw Prometheus data-frame output, or direct vendored Jsonnet file browsing. Jsonnet inspection is delegated to the restricted Jsonnet subagent, and dashboard writes go through the Jsonnet-backed managed dashboard sync path.
 
 ## Subagents
 
-The chat registers `grafana_explore_metrics` and `grafana_explore_jsonnet` as high-level tools. Each starts a nested Pi agent with a narrow tool allow-list: the metrics subagent can only discover datasources, inspect Prometheus metadata, and validate PromQL; the Jsonnet subagent can only inspect bundled templates, search/read vendored Jsonnet libraries, and render managed dashboards without saving them. Dashboard write tools stay available only to the parent assistant.
+The chat registers `grafana_explore_metrics` and `grafana_explore_jsonnet` as high-level tools. Each starts a nested Pi agent with a narrow tool allow-list: the metrics subagent can only discover datasources, inspect Prometheus metadata, and validate PromQL; the Jsonnet subagent can only fetch stored managed-dashboard source, search/read vendored Jsonnet libraries, and render managed dashboards without saving them. Dashboard write tools stay available only to the parent assistant.
 
 ## Development
 

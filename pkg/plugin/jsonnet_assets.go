@@ -1,9 +1,7 @@
 package plugin
 
 import (
-	"crypto/sha256"
 	"embed"
-	"encoding/hex"
 	"fmt"
 	"io/fs"
 	"path"
@@ -12,12 +10,11 @@ import (
 	jsonnet "github.com/google/go-jsonnet"
 )
 
-//go:embed jsonnet/templates/*.jsonnet jsonnet/vendor
+//go:embed jsonnet/vendor
 var jsonnetAssets embed.FS
 
 const (
-	jsonnetTemplateRoot = "jsonnet/templates"
-	jsonnetVendorRoot   = "jsonnet/vendor"
+	jsonnetVendorRoot = "jsonnet/vendor"
 )
 
 type embeddedJsonnetImporter struct {
@@ -50,37 +47,16 @@ func (i *embeddedJsonnetImporter) Import(importedFrom, importedPath string) (jso
 	return jsonnet.Contents{}, "", fmt.Errorf("jsonnet import not found: %s", importedPath)
 }
 
-func renderJsonnetTemplate(templatePath string, configJSON []byte) ([]byte, error) {
-	fullPath := path.Clean(path.Join(jsonnetTemplateRoot, templatePath))
-	if !strings.HasPrefix(fullPath, jsonnetTemplateRoot+"/") {
-		return nil, fmt.Errorf("invalid template path: %s", templatePath)
-	}
-
-	source, err := fs.ReadFile(jsonnetAssets, fullPath)
-	if err != nil {
-		return nil, err
-	}
-
+func renderJsonnetSource(source string) ([]byte, error) {
 	vm := jsonnet.MakeVM()
 	vm.Importer(&embeddedJsonnetImporter{files: jsonnetAssets, contents: map[string]jsonnet.Contents{}})
-	vm.ExtCode("config", string(configJSON))
 
-	rendered, err := vm.EvaluateSnippet(fullPath, string(source))
+	rendered, err := vm.EvaluateSnippet("dashboard.jsonnet", source)
 	if err != nil {
 		return nil, err
 	}
 
 	return []byte(rendered), nil
-}
-
-func jsonnetSourceChecksum(templatePath string, configJSON []byte) (string, error) {
-	fullPath := path.Clean(path.Join(jsonnetTemplateRoot, templatePath))
-	source, err := fs.ReadFile(jsonnetAssets, fullPath)
-	if err != nil {
-		return "", err
-	}
-	sum := sha256.Sum256(append(source, configJSON...))
-	return "sha256:" + hex.EncodeToString(sum[:]), nil
 }
 
 func isEmbeddedJsonnetPathAllowed(candidate string) bool {
@@ -91,5 +67,5 @@ func isEmbeddedJsonnetPathAllowed(candidate string) bool {
 	if cleaned != candidate || strings.HasPrefix(cleaned, "../") || cleaned == ".." {
 		return false
 	}
-	return strings.HasPrefix(cleaned, jsonnetVendorRoot+"/") || strings.HasPrefix(cleaned, jsonnetTemplateRoot+"/")
+	return strings.HasPrefix(cleaned, jsonnetVendorRoot+"/")
 }

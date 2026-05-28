@@ -13,16 +13,6 @@ export function getDisallowedDashboardDatasourceUids(dashboard: unknown, toolCon
     .sort((left, right) => left.localeCompare(right));
 }
 
-export function assertManagedDashboardDatasourceAllowed(toolConfig: GrafanaToolConfig, datasourceUid: string) {
-  const allowed = new Set((toolConfig.allowedDatasourceUids ?? []).filter(Boolean));
-  if (!datasourceUid) {
-    throw new Error('datasourceUid is required');
-  }
-  if (allowed.size > 0 && !allowed.has(datasourceUid)) {
-    throw new Error(`Datasource is not available to the assistant: ${datasourceUid}`);
-  }
-}
-
 function collectDashboardDatasourceUids(value: unknown, result = new Set<string>()): Set<string> {
   if (Array.isArray(value)) {
     value.forEach((item) => collectDashboardDatasourceUids(item, result));

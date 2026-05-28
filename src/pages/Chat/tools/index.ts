@@ -16,14 +16,12 @@ export function createGrafanaToolRegistry(options: CreateGrafanaToolsOptions = {
   const dashboards = createDashboardTools(options, options.includeAdHocDashboardTools);
   const managedDashboards = createManagedDashboardTools(options);
   const jsonnet = createJsonnetLibTools();
-  const parentManagedDashboardTools = options.includeJsonnetLibraryTools
-    ? managedDashboards.all
-    : [managedDashboards.listTemplates, managedDashboards.listManaged, managedDashboards.render, managedDashboards.sync];
+  const parentManagedDashboardTools = managedDashboards.all;
   const subagents = options.runtime
     ? createSubagentTools({
         runtime: options.runtime,
         metricsTools: metrics,
-        jsonnetTools: [managedDashboards.listTemplates, managedDashboards.listManaged, managedDashboards.readTemplate, managedDashboards.render, ...jsonnet.all],
+        jsonnetTools: [managedDashboards.listManaged, managedDashboards.getSource, managedDashboards.render, ...jsonnet.all],
       })
     : [];
 

@@ -67,40 +67,15 @@ export type UploadDashboardParams = {
 };
 
 export type ManagedDashboardParams = {
-  templateId?: string;
+  dashboard_jsonnet: string;
   uid?: string;
-  title?: string;
-  datasourceUid: string;
   folderUid?: string;
-  job?: string;
-  from?: string;
-  to?: string;
-  panels?: ManagedDashboardPanelSpec[];
   tags?: string[];
   overwrite?: boolean;
 };
 
-export type ManagedDashboardPanelSpec = {
-  type?: 'timeseries' | 'text';
-  title?: string;
-  expr?: string;
-  legend?: string;
-  unit?: string;
-  refId?: string;
-  interval?: string;
-  content?: string;
-  mode?: 'markdown' | 'html' | 'code';
-  x?: number;
-  y?: number;
-  w?: number;
-  h?: number;
-  decimals?: number;
-};
-
-export type ManagedDashboardTemplateSourceParams = {
-  templateId: string;
-  offset?: number;
-  limit?: number;
+export type ManagedDashboardSourceParams = {
+  uid: string;
 };
 
 export type DashboardUidParams = {
@@ -138,11 +113,10 @@ export type JsonnetLibListParams = {
 
 export type ManagedDashboardToolSet = {
   all: AgentTool[];
-  listTemplates: AgentTool;
   listManaged: AgentTool;
+  getSource: AgentTool;
   render: AgentTool;
   sync: AgentTool;
-  readTemplate: AgentTool;
 };
 
 export type JsonnetLibToolSet = {

@@ -1,38 +1,21 @@
 import type { AgentTool } from '@earendil-works/pi-agent-core';
 import { Type } from 'typebox';
 import { pluginResourceFetch } from './client';
-import { assertManagedDashboardDatasourceAllowed } from './dashboardPolicy';
 import { textResult, throwIfAborted, truncateText } from './result';
-import type { GrafanaToolConfig, ManagedDashboardParams, ManagedDashboardTemplateSourceParams, ManagedDashboardToolSet } from './types';
+import type { GrafanaToolConfig, ManagedDashboardParams, ManagedDashboardSourceParams, ManagedDashboardToolSet } from './types';
 
-export function createManagedDashboardTools(toolConfig: GrafanaToolConfig): ManagedDashboardToolSet {
-  const listTemplates = makeGrafanaListManagedDashboardTemplatesTool();
+export function createManagedDashboardTools(_toolConfig: GrafanaToolConfig): ManagedDashboardToolSet {
   const listManaged = makeGrafanaListManagedDashboardsTool();
-  const render = makeGrafanaRenderManagedDashboardTool(toolConfig);
-  const sync = makeGrafanaSyncManagedDashboardTool(toolConfig);
-  const readTemplate = makeReadManagedDashboardTemplateTool();
+  const getSource = makeGrafanaGetManagedDashboardSourceTool();
+  const render = makeGrafanaRenderManagedDashboardTool();
+  const sync = makeGrafanaSyncManagedDashboardTool();
 
   return {
-    all: [listTemplates, listManaged, render, sync, readTemplate],
-    listTemplates,
+    all: [listManaged, getSource, render, sync],
     listManaged,
+    getSource,
     render,
     sync,
-    readTemplate,
-  };
-}
-
-function makeGrafanaListManagedDashboardTemplatesTool(): AgentTool {
-  return {
-    name: 'grafana_list_managed_dashboard_templates',
-    label: 'List managed dashboard templates',
-    description: 'List Jsonnet/Grafonnet dashboard templates bundled with this app.',
-    parameters: Type.Object({}),
-    async execute(_toolCallId, _params, signal) {
-      throwIfAborted(signal);
-      const result = await pluginResourceFetch<{ templates: unknown[] }>('/managed-dashboards/templates');
-      return textResult(JSON.stringify(result.templates, null, 2), { count: result.templates.length });
-    },
   };
 }
 
@@ -40,7 +23,7 @@ function makeGrafanaListManagedDashboardsTool(): AgentTool {
   return {
     name: 'grafana_list_managed_dashboards',
     label: 'List managed dashboards',
-    description: 'List dashboards currently managed by this app plugin, including stored template configuration when available.',
+    description: 'List dashboards currently managed by this app plugin, including Jsonnet source metadata.',
     parameters: Type.Object({}),
     async execute(_toolCallId, _params, signal) {
       throwIfAborted(signal);
@@ -50,95 +33,91 @@ function makeGrafanaListManagedDashboardsTool(): AgentTool {
   };
 }
 
-function makeGrafanaRenderManagedDashboardTool(toolConfig: GrafanaToolConfig): AgentTool {
+function makeGrafanaGetManagedDashboardSourceTool(): AgentTool {
+  return {
+    name: 'grafana_get_managed_dashboard_source',
+    label: 'Get managed dashboard source',
+    description: 'Fetch the stored Jsonnet/Grafonnet source for an app-managed dashboard so it can be edited and re-synced.',
+    parameters: Type.Object({
+      uid: Type.String({ description: 'Managed dashboard UID.' }),
+    }),
+    async execute(_toolCallId, params, signal) {
+      const args = params as ManagedDashboardSourceParams;
+      throwIfAborted(signal);
+      const result = await pluginResourceFetch<unknown>('/managed-dashboards/source', { method: 'POST', data: args });
+      return textResult(truncateText(JSON.stringify(result, null, 2), 120000), { uid: args.uid });
+    },
+  };
+}
+
+function makeGrafanaRenderManagedDashboardTool(): AgentTool {
   return {
     name: 'grafana_render_managed_dashboard',
     label: 'Render managed dashboard',
-    description: 'Render an app-managed Jsonnet/Grafonnet dashboard template without saving it.',
+    description: 'Compile Jsonnet/Grafonnet source into an app-managed Grafana dashboard resource without saving it.',
     parameters: managedDashboardParameters(),
     async execute(_toolCallId, params, signal) {
       const args = params as ManagedDashboardParams;
       throwIfAborted(signal);
-      assertManagedDashboardDatasourceAllowed(toolConfig, args.datasourceUid);
       const result = await pluginResourceFetch<unknown>('/managed-dashboards/render', { method: 'POST', data: args });
-      return textResult(truncateText(JSON.stringify(result, null, 2), 120000), {
-        templateId: args.templateId ?? 'service-red',
-        datasourceUid: args.datasourceUid,
+      return textResult(truncateText(JSON.stringify(omitStoredJsonnetSource(result), null, 2), 120000), {
+        uid: args.uid,
+        sourceBytes: args.dashboard_jsonnet.length,
       });
     },
   };
 }
 
-function makeGrafanaSyncManagedDashboardTool(toolConfig: GrafanaToolConfig): AgentTool {
+function makeGrafanaSyncManagedDashboardTool(): AgentTool {
   return {
     name: 'grafana_sync_managed_dashboard',
     label: 'Sync managed dashboard',
-    description: 'Create or update a dashboard from an app-managed Jsonnet/Grafonnet template. The Grafana UI remains read-only; future edits should go through this app.',
+    description:
+      'Create or update an app-managed dashboard from Jsonnet/Grafonnet source. The source is stored with the dashboard so future edits can fetch, modify, and re-sync it.',
     parameters: managedDashboardParameters(),
     async execute(_toolCallId, params, signal) {
       const args = params as ManagedDashboardParams;
       throwIfAborted(signal);
-      assertManagedDashboardDatasourceAllowed(toolConfig, args.datasourceUid);
       const result = await pluginResourceFetch<{ uid: string; url: string; status: string; sourceChecksum: string }>('/managed-dashboards/sync', {
         method: 'POST',
         data: args,
       });
-      return textResult(`Managed dashboard ${result.status}: ${result.url}\nUID: ${result.uid}\nSource: ${result.sourceChecksum}`, result);
-    },
-  };
-}
-
-function makeReadManagedDashboardTemplateTool(): AgentTool {
-  return {
-    name: 'read_managed_dashboard_template',
-    label: 'Read managed dashboard template',
-    description: 'Read source lines from a bundled app-managed Jsonnet dashboard template.',
-    parameters: Type.Object({
-      templateId: Type.String({ description: 'Bundled managed dashboard template ID, such as service-red.' }),
-      offset: Type.Optional(Type.Number({ description: '1-based start line. Defaults to 1.' })),
-      limit: Type.Optional(Type.Number({ description: 'Maximum number of lines. Defaults to 200 and caps at 500.' })),
-    }),
-    async execute(_toolCallId, params, signal) {
-      const args = params as ManagedDashboardTemplateSourceParams;
-      throwIfAborted(signal);
-      const result = await pluginResourceFetch<unknown>('/managed-dashboards/template-source', { method: 'POST', data: args });
-      return textResult(truncateText(JSON.stringify(result, null, 2), 80000), { templateId: args.templateId });
+      const details = {
+        uid: result.uid,
+        url: result.url,
+        status: result.status,
+        sourceChecksum: result.sourceChecksum,
+      };
+      return textResult(`Managed dashboard ${result.status}: ${result.url}\nUID: ${result.uid}\nSource: ${result.sourceChecksum}`, details);
     },
   };
 }
 
 function managedDashboardParameters() {
   return Type.Object({
-    templateId: Type.Optional(Type.String({ description: 'Bundled managed dashboard template ID. Defaults to service-red.' })),
-    uid: Type.Optional(Type.String({ description: 'Optional dashboard UID. Defaults to a normalized UID from the title.' })),
-    title: Type.Optional(Type.String({ description: 'Dashboard title.' })),
-    datasourceUid: Type.String({ description: 'Prometheus datasource UID. Must be returned by grafana_get_datasources.' }),
+    dashboard_jsonnet: Type.String({
+      description:
+        "Self-contained Grafonnet/Jsonnet source that evaluates to a Grafana dashboard object. Import grafonnet with: local g = import 'github.com/grafana/grafonnet/gen/grafonnet-latest/main.libsonnet';",
+    }),
+    uid: Type.Optional(Type.String({ description: 'Optional UID override. Defaults to the compiled dashboard uid or a normalized title.' })),
     folderUid: Type.Optional(Type.String({ description: 'Optional folder UID.' })),
-    job: Type.Optional(Type.String({ description: 'Optional Prometheus job label value used by the service-red template.' })),
-    from: Type.Optional(Type.String({ description: 'Optional dashboard time range start. Defaults to now-6h for prometheus-dashboard.' })),
-    to: Type.Optional(Type.String({ description: 'Optional dashboard time range end. Defaults to now.' })),
-    panels: Type.Optional(
-      Type.Array(
-        Type.Object({
-          type: Type.Optional(Type.Union([Type.Literal('timeseries'), Type.Literal('text')], { description: 'Panel type. Defaults to timeseries.' })),
-          title: Type.Optional(Type.String({ description: 'Panel title.' })),
-          expr: Type.Optional(Type.String({ description: 'PromQL expression for timeseries panels.' })),
-          legend: Type.Optional(Type.String({ description: 'Grafana legend format for timeseries panels.' })),
-          unit: Type.Optional(Type.String({ description: 'Grafana field unit, such as short, s, reqps, percentunit, or none.' })),
-          refId: Type.Optional(Type.String({ description: 'Query refId. Defaults to A.' })),
-          interval: Type.Optional(Type.String({ description: 'Panel query interval. Defaults to 30s.' })),
-          content: Type.Optional(Type.String({ description: 'Markdown/HTML/code content for text panels.' })),
-          mode: Type.Optional(Type.Union([Type.Literal('markdown'), Type.Literal('html'), Type.Literal('code')], { description: 'Text panel mode.' })),
-          x: Type.Optional(Type.Number({ description: 'Grid x position on Grafana 24-column grid.' })),
-          y: Type.Optional(Type.Number({ description: 'Grid y position.' })),
-          w: Type.Optional(Type.Number({ description: 'Grid width.' })),
-          h: Type.Optional(Type.Number({ description: 'Grid height.' })),
-          decimals: Type.Optional(Type.Number({ description: 'Optional field decimals.' })),
-        }),
-        { description: 'Structured panels for the prometheus-dashboard template.' }
-      )
-    ),
     tags: Type.Optional(Type.Array(Type.String(), { description: 'Optional extra dashboard tags.' })),
     overwrite: Type.Optional(Type.Boolean({ description: 'Whether to update an existing dashboard with the same UID. Defaults to true.' })),
   });
+}
+
+function omitStoredJsonnetSource(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map(omitStoredJsonnetSource);
+  }
+  if (!value || typeof value !== 'object') {
+    return value;
+  }
+
+  return Object.fromEntries(
+    Object.entries(value as Record<string, unknown>).map(([key, entry]) => [
+      key,
+      key === 'elohmeier.grafanapiapp/jsonnetSource' ? '[omitted: stored Jsonnet source]' : omitStoredJsonnetSource(entry),
+    ])
+  );
 }

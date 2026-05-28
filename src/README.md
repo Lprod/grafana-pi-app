@@ -23,4 +23,4 @@ Broad exploration can be delegated to restricted subagents for metrics and Jsonn
 
 The assistant page does not expose model or datasource policy controls; all requests use the model and datasource allow-list configured in the plugin settings.
 
-Managed dashboard templates are rendered from embedded Jsonnet/Grafonnet assets in the backend. They are saved as plugin-managed dashboard resources and should be changed by re-syncing through the app.
+Managed dashboards are compiled from model-authored Jsonnet/Grafonnet source in the backend. The source is stored on the plugin-managed dashboard resource and should be changed by fetching, editing, and re-syncing through the app.
