@@ -31,13 +31,16 @@ Managed dashboard writes use the plugin service account declared in `plugin.json
 
 ## Managed dashboards
 
-The backend vendors Jsonnet libraries under `pkg/plugin/jsonnet/vendor` using the same `jsonnet-bundler` layout as `agentic-observability`. The assistant writes self-contained Jsonnet/Grafonnet source and the backend compiles it with the embedded vendored libraries before saving the dashboard.
+The backend vendors Jsonnet libraries under `pkg/plugin/jsonnet/vendor` using the same `jsonnet-bundler` layout as `agentic-observability`. The assistant writes self-contained Jsonnet/Grafonnet source to a session-scoped virtual `dashboard.jsonnet` file, applies compact line edits to that file, and the backend compiles it with the embedded vendored libraries before saving the dashboard.
 
 The assistant can render, sync, and later retrieve Jsonnet-backed dashboards with:
 
 - `grafana_explore_jsonnet`
 - `grafana_list_managed_dashboards`
 - `grafana_get_managed_dashboard_source`
+- `grafana_write_jsonnet_file`
+- `grafana_edit_jsonnet_file`
+- `grafana_read_jsonnet_file`
 - `grafana_render_managed_dashboard`
 - `grafana_sync_managed_dashboard`
 
@@ -111,5 +114,7 @@ llama-server -hf unsloth/Qwen3.6-35B-A3B-MTP-GGUF:UD-Q4_K_XL \
   --spec-type draft-mtp \
   --spec-draft-n-max 2
 ```
+
+Use a recent llama.cpp build with `draft-mtp` support; older `llama-server` builds reject that `--spec-type` value or fail to load the MTP GGUF.
 
 Open Grafana at http://localhost:3000 and navigate to the Pi Assistant app page.

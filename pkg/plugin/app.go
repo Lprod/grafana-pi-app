@@ -25,8 +25,9 @@ var (
 // App is an example app plugin with a backend which can respond to data queries.
 type App struct {
 	backend.CallResourceHandler
-	settings   appSettings
-	httpClient *http.Client
+	settings     appSettings
+	httpClient   *http.Client
+	jsonnetFiles *virtualJsonnetFileStore
 }
 
 type appSettings struct {
@@ -39,8 +40,9 @@ type appSettings struct {
 // NewApp creates a new example *App instance.
 func NewApp(_ context.Context, settings backend.AppInstanceSettings) (instancemgmt.Instance, error) {
 	app := App{
-		settings:   loadSettings(settings),
-		httpClient: &http.Client{Timeout: 10 * time.Minute},
+		settings:     loadSettings(settings),
+		httpClient:   &http.Client{Timeout: 10 * time.Minute},
+		jsonnetFiles: newVirtualJsonnetFileStore(),
 	}
 
 	// Use a httpadapter (provided by the SDK) for resource calls. This allows us

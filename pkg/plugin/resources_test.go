@@ -382,6 +382,143 @@ func TestManagedDashboardRenderStoresModelAuthoredJsonnet(t *testing.T) {
 	}
 }
 
+func TestVirtualJsonnetFileWriteEditRead(t *testing.T) {
+	inst, err := NewApp(context.Background(), backend.AppInstanceSettings{})
+	if err != nil {
+		t.Fatalf("new app: %s", err)
+	}
+	app := inst.(*App)
+	source := "{\n  title: 'Virtual Dashboard',\n  uid: 'virtual-dashboard',\n  panels: [],\n}\n"
+	writeBody, _ := json.Marshal(jsonnetFileWriteRequest{
+		SessionID: "session-a",
+		Path:      "dashboard.jsonnet",
+		Content:   source,
+	})
+
+	var writeSender mockCallResourceResponseSender
+	err = app.CallResource(context.Background(), &backend.CallResourceRequest{
+		Method: http.MethodPost,
+		Path:   "managed-dashboards/jsonnet-files/write",
+		Body:   writeBody,
+	}, &writeSender)
+	if err != nil {
+		t.Fatalf("CallResource error: %s", err)
+	}
+	if writeSender.responses[0].Status != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", writeSender.responses[0].Status, string(writeSender.responses[0].Body))
+	}
+	var writeResponse jsonnetFileResponse
+	if err := json.Unmarshal(writeSender.responses[0].Body, &writeResponse); err != nil {
+		t.Fatalf("decode write response: %s", err)
+	}
+	if writeResponse.Version != 1 || writeResponse.LineCount != 5 || writeResponse.DashboardJsonnet != source {
+		t.Fatalf("unexpected write response: %#v", writeResponse)
+	}
+
+	expectedTitle := "  title: 'Virtual Dashboard',"
+	editBody, _ := json.Marshal(jsonnetFileEditRequest{
+		SessionID:   "session-a",
+		Path:        "dashboard.jsonnet",
+		BaseVersion: &writeResponse.Version,
+		Edits: []jsonnetLineEdit{
+			{StartLine: 2, EndLine: 2, ExpectedText: &expectedTitle, Replacement: "  title: 'Edited Virtual Dashboard',"},
+			{StartLine: 4, EndLine: 3, Replacement: "  tags: ['edited'],"},
+		},
+	})
+
+	var editSender mockCallResourceResponseSender
+	err = app.CallResource(context.Background(), &backend.CallResourceRequest{
+		Method: http.MethodPost,
+		Path:   "managed-dashboards/jsonnet-files/edit",
+		Body:   editBody,
+	}, &editSender)
+	if err != nil {
+		t.Fatalf("CallResource error: %s", err)
+	}
+	if editSender.responses[0].Status != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", editSender.responses[0].Status, string(editSender.responses[0].Body))
+	}
+	var editResponse jsonnetFileResponse
+	if err := json.Unmarshal(editSender.responses[0].Body, &editResponse); err != nil {
+		t.Fatalf("decode edit response: %s", err)
+	}
+	if editResponse.Version != 2 || !strings.Contains(editResponse.DashboardJsonnet, "Edited Virtual Dashboard") || !strings.Contains(editResponse.Diff, "+  tags: ['edited'],") {
+		t.Fatalf("unexpected edit response: %#v", editResponse)
+	}
+
+	readBody, _ := json.Marshal(jsonnetFileReadRequest{SessionID: "session-a", Path: "dashboard.jsonnet", Offset: 2, Limit: 3})
+	var readSender mockCallResourceResponseSender
+	err = app.CallResource(context.Background(), &backend.CallResourceRequest{
+		Method: http.MethodPost,
+		Path:   "managed-dashboards/jsonnet-files/read",
+		Body:   readBody,
+	}, &readSender)
+	if err != nil {
+		t.Fatalf("CallResource error: %s", err)
+	}
+	var readResponse jsonnetFileResponse
+	if err := json.Unmarshal(readSender.responses[0].Body, &readResponse); err != nil {
+		t.Fatalf("decode read response: %s", err)
+	}
+	if len(readResponse.Lines) != 3 || readResponse.Lines[0].Line != 2 || readResponse.Lines[0].Text != "  title: 'Edited Virtual Dashboard'," {
+		t.Fatalf("unexpected read response: %#v", readResponse)
+	}
+	if readResponse.DashboardJsonnet != "" {
+		t.Fatalf("read response should not include full source")
+	}
+}
+
+func TestManagedDashboardRenderFromVirtualJsonnetFile(t *testing.T) {
+	inst, err := NewApp(context.Background(), backend.AppInstanceSettings{})
+	if err != nil {
+		t.Fatalf("new app: %s", err)
+	}
+	app := inst.(*App)
+	source := "{ title: 'Virtual Render', uid: 'virtual-render', panels: [] }"
+	writeBody, _ := json.Marshal(jsonnetFileWriteRequest{
+		SessionID: "session-render",
+		Content:   source,
+	})
+	var writeSender mockCallResourceResponseSender
+	err = app.CallResource(context.Background(), &backend.CallResourceRequest{
+		Method: http.MethodPost,
+		Path:   "managed-dashboards/jsonnet-files/write",
+		Body:   writeBody,
+	}, &writeSender)
+	if err != nil {
+		t.Fatalf("CallResource error: %s", err)
+	}
+
+	renderBody, _ := json.Marshal(managedDashboardRequest{
+		SessionID: "session-render",
+		Path:      "dashboard.jsonnet",
+	})
+	var renderSender mockCallResourceResponseSender
+	err = app.CallResource(context.Background(), &backend.CallResourceRequest{
+		Method: http.MethodPost,
+		Path:   "managed-dashboards/render",
+		Body:   renderBody,
+	}, &renderSender)
+	if err != nil {
+		t.Fatalf("CallResource error: %s", err)
+	}
+	if renderSender.responses[0].Status != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", renderSender.responses[0].Status, string(renderSender.responses[0].Body))
+	}
+
+	var response managedDashboardRenderResponse
+	if err := json.Unmarshal(renderSender.responses[0].Body, &response); err != nil {
+		t.Fatalf("decode response: %s", err)
+	}
+	annotations := response.Resource.Metadata.Annotations
+	if annotations[annotationJsonnetSource] != source {
+		t.Fatalf("virtual source was not stored in annotations: %#v", annotations)
+	}
+	if annotations[annotationSourcePath] != "dashboard.jsonnet" {
+		t.Fatalf("unexpected source path: %#v", annotations)
+	}
+}
+
 func TestManagedDashboardRenderRejectsDisallowedDatasource(t *testing.T) {
 	jsonData, _ := json.Marshal(appSettings{AllowedDatasourceUIDs: []string{"prom-main"}})
 	inst, err := NewApp(context.Background(), backend.AppInstanceSettings{JSONData: jsonData})

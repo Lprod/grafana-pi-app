@@ -34,10 +34,13 @@ const (
 
 type managedDashboardRequest struct {
 	DashboardJsonnet string   `json:"dashboard_jsonnet"`
+	SessionID        string   `json:"sessionId,omitempty"`
+	Path             string   `json:"path,omitempty"`
 	UID              string   `json:"uid,omitempty"`
 	FolderUID        string   `json:"folderUid,omitempty"`
 	Tags             []string `json:"tags,omitempty"`
 	Overwrite        *bool    `json:"overwrite,omitempty"`
+	SourcePath       string   `json:"-"`
 }
 
 type managedDashboardSourceRequest struct {
@@ -278,7 +281,13 @@ func (a *App) renderManagedDashboardRequest(body io.Reader) (*managedDashboardRe
 	request = normalizeManagedDashboardRequest(request)
 
 	if strings.TrimSpace(request.DashboardJsonnet) == "" {
-		return nil, errors.New("dashboard_jsonnet is required")
+		file, err := a.jsonnetFiles.get(jsonnetFileReference{SessionID: request.SessionID, Path: request.Path})
+		if err != nil {
+			return nil, fmt.Errorf("dashboard_jsonnet is required unless a virtual Jsonnet file is available: %w", err)
+		}
+		request.DashboardJsonnet = file.Content
+		request.Path = file.Path
+		request.SourcePath = file.Path
 	}
 	if len([]byte(request.DashboardJsonnet)) > maxManagedDashboardJsonnetSourceBytes {
 		return nil, fmt.Errorf("dashboard_jsonnet is too large: %d bytes exceeds %d bytes", len([]byte(request.DashboardJsonnet)), maxManagedDashboardJsonnetSourceBytes)
@@ -286,6 +295,9 @@ func (a *App) renderManagedDashboardRequest(body io.Reader) (*managedDashboardRe
 
 	rendered, err := renderJsonnetSource(request.DashboardJsonnet)
 	if err != nil {
+		if sourceWindow := sourceWindowForJsonnetError(request.DashboardJsonnet, err); sourceWindow != "" {
+			return nil, fmt.Errorf("jsonnet compilation failed: %w\n%s", err, sourceWindow)
+		}
 		return nil, fmt.Errorf("jsonnet compilation failed: %w", err)
 	}
 
@@ -336,6 +348,8 @@ func (a *App) renderManagedDashboardRequest(body io.Reader) (*managedDashboardRe
 func normalizeManagedDashboardRequest(request managedDashboardRequest) managedDashboardRequest {
 	request.FolderUID = strings.TrimSpace(request.FolderUID)
 	request.UID = strings.TrimSpace(request.UID)
+	request.Path = strings.TrimSpace(request.Path)
+	request.SessionID = strings.TrimSpace(request.SessionID)
 	request.Tags = normalizeTags(request.Tags)
 	return request
 }
@@ -373,10 +387,14 @@ func normalizeTags(tags []string) []string {
 }
 
 func managedDashboardAnnotations(request managedDashboardRequest, sourceChecksum string) map[string]string {
+	sourcePath := request.SourcePath
+	if sourcePath == "" {
+		sourcePath = "inline-jsonnet"
+	}
 	annotations := map[string]string{
 		annotationManagedBy:      "plugin",
 		annotationManagerID:      pluginID,
-		annotationSourcePath:     "inline-jsonnet",
+		annotationSourcePath:     sourcePath,
 		annotationSourceChecksum: sourceChecksum,
 		annotationSourceTS:       fmt.Sprintf("%d", time.Now().UnixMilli()),
 		annotationJsonnetSource:  request.DashboardJsonnet,

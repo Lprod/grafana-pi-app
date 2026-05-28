@@ -8,7 +8,7 @@ import type { GrafanaTheme2 } from '@grafana/data';
 import { PLUGIN_ID } from '../../constants';
 import { testIds } from '../../components/testIds';
 import { usePluginMeta } from '../../utils/utils.plugin';
-import { createGrafanaTools } from './grafanaTools';
+import { createGrafanaTools, normalizeJsonnetPath, type VirtualJsonnetFileSnapshot } from './grafanaTools';
 import { formatAssistantError, type AssistantErrorView } from './llmErrors';
 import { createOpenAICompatibleModel, type PiAppJsonData } from './model';
 import { SYSTEM_PROMPT } from './systemPrompt';
@@ -26,6 +26,7 @@ type SessionIndexItem = {
 type StoredSession = SessionIndexItem & {
   messages: AgentMessage[];
   modelId?: string;
+  virtualJsonnetFiles?: Record<string, VirtualJsonnetFileSnapshot>;
 };
 
 type ToolRunState = Record<string, ToolRunView>;
@@ -57,9 +58,32 @@ function ChatApp() {
       }),
     []
   );
-  const tools = useMemo(
-    () => createGrafanaTools({ ...jsonData, runtime: { model: llmModel, streamFn } }),
-    [jsonData, llmModel, streamFn]
+  const sessionIdRef = useRef<string>();
+  const virtualJsonnetFilesRef = useRef<Record<string, VirtualJsonnetFileSnapshot>>({});
+  const virtualJsonnetHydratedRef = useRef<Record<string, number>>({});
+  const setVirtualJsonnetFile = useCallback((file: VirtualJsonnetFileSnapshot, options?: { hydrated?: boolean }) => {
+    const path = normalizeJsonnetPath(file.path);
+    const snapshot = { ...file, path };
+    virtualJsonnetFilesRef.current = {
+      ...virtualJsonnetFilesRef.current,
+      [path]: snapshot,
+    };
+    if (options?.hydrated) {
+      virtualJsonnetHydratedRef.current[path] = file.version;
+    }
+  }, []);
+  const virtualJsonnetRuntime = useMemo(
+    () => ({
+      getSessionId: () => sessionIdRef.current,
+      getFile: (path: string) => virtualJsonnetFilesRef.current[normalizeJsonnetPath(path)],
+      setFile: setVirtualJsonnetFile,
+      isHydrated: (path: string, version: number) =>
+        virtualJsonnetHydratedRef.current[normalizeJsonnetPath(path)] === version,
+      markHydrated: (path: string, version: number) => {
+        virtualJsonnetHydratedRef.current[normalizeJsonnetPath(path)] = version;
+      },
+    }),
+    [setVirtualJsonnetFile]
   );
   const [agent, setAgent] = useState<Agent>();
   const { revision, flushRevision, scheduleRevision } = useFrameRevision();
@@ -70,7 +94,6 @@ function ChatApp() {
   const [error, setError] = useState<string>();
   const [toolRuns, setToolRuns] = useState<ToolRunState>({});
   const unsubscribeRef = useRef<() => void>();
-  const sessionIdRef = useRef<string>();
   const titleRef = useRef('New chat');
   const sessionsRef = useRef<SessionIndexItem[]>([]);
   const storageRef = useRef(storage);
@@ -106,6 +129,7 @@ function ChatApp() {
       const stored: StoredSession = {
         ...indexItem,
         messages,
+        virtualJsonnetFiles: virtualJsonnetFilesRef.current,
       };
       const next = [indexItem, ...sessionsRef.current.filter((session) => session.id !== id)].slice(0, 50);
 
@@ -118,6 +142,11 @@ function ChatApp() {
   const buildAgent = useCallback(
     (messages: AgentMessage[] = []) => {
       unsubscribeRef.current?.();
+      const tools = createGrafanaTools({
+        ...jsonData,
+        runtime: { model: llmModel, streamFn },
+        virtualJsonnetFiles: virtualJsonnetRuntime,
+      });
       const nextAgent = new Agent({
         initialState: {
           systemPrompt: SYSTEM_PROMPT,
@@ -148,13 +177,15 @@ function ChatApp() {
       flushRevision();
       return nextAgent;
     },
-    [flushRevision, llmModel, saveSession, scheduleRevision, streamFn, tools]
+    [flushRevision, jsonData, llmModel, saveSession, scheduleRevision, streamFn, virtualJsonnetRuntime]
   );
 
   const startNewSession = useCallback(() => {
     const id = createSessionId();
     sessionIdRef.current = id;
     titleRef.current = 'New chat';
+    virtualJsonnetFilesRef.current = {};
+    virtualJsonnetHydratedRef.current = {};
     stickToBottomRef.current = true;
     setCurrentSessionId(id);
     setCurrentTitle('New chat');
@@ -256,6 +287,8 @@ function ChatApp() {
     const stored = JSON.parse(raw) as StoredSession;
     sessionIdRef.current = id;
     titleRef.current = stored.title;
+    virtualJsonnetFilesRef.current = stored.virtualJsonnetFiles ?? {};
+    virtualJsonnetHydratedRef.current = {};
     stickToBottomRef.current = true;
     setCurrentSessionId(id);
     setCurrentTitle(stored.title);

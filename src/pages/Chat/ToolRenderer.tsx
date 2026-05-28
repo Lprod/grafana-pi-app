@@ -312,6 +312,11 @@ function renderStructuredToolResult(
     return <ManagedDashboardSourceView result={managedSource} />;
   }
 
+  const jsonnetFile = asJsonnetFileResult(toolName, details, content);
+  if (jsonnetFile) {
+    return <JsonnetFileResultView result={jsonnetFile} />;
+  }
+
   const dashboardSummary = asDashboardSummary(toolName, details, content);
   if (dashboardSummary) {
     return <DashboardSummaryView result={dashboardSummary} />;
@@ -837,6 +842,49 @@ function JsonnetReadResultView({ result }: { result: JsonnetReadResult }) {
   );
 }
 
+type JsonnetFileResult = {
+  action?: string;
+  path: string;
+  version?: number;
+  checksum?: string;
+  lineCount?: number;
+  dashboardJsonnetSize?: number;
+  changedRanges: Array<{ startLine: number; endLine: number; newLines: number }>;
+  diff?: string;
+  firstChangedLine?: number;
+  totalLines?: number;
+  lines: CodeLine[];
+};
+
+function JsonnetFileResultView({ result }: { result: JsonnetFileResult }) {
+  const styles = useStyles2(getToolStyles);
+  const range =
+    result.lines.length > 0
+      ? `${result.lines[0].line}-${result.lines[result.lines.length - 1].line} of ${result.totalLines ?? result.lineCount ?? result.lines.length}`
+      : undefined;
+
+  return (
+    <div className={styles.structuredResult}>
+      <ResultMetaGrid
+        items={[
+          { label: 'Action', value: result.action },
+          { label: 'Path', value: <code>{result.path}</code> },
+          { label: 'Version', value: result.version === undefined ? undefined : String(result.version) },
+          {
+            label: 'Lines',
+            value: range ?? (result.lineCount === undefined ? undefined : formatCount(result.lineCount)),
+          },
+          { label: 'Source', value: formatBytes(result.dashboardJsonnetSize) },
+          { label: 'Changed', value: formatChangedRanges(result.changedRanges) },
+          { label: 'Checksum', value: result.checksum ? <code>{shortChecksum(result.checksum)}</code> : undefined },
+        ]}
+      />
+      {result.lines.length > 0 && <CodeViewer lines={result.lines} />}
+      {result.diff && <DiffViewer diff={result.diff} />}
+    </div>
+  );
+}
+
 type ManagedDashboardSourceResult = {
   uid: string;
   title: string;
@@ -1045,6 +1093,27 @@ function CodeViewer({ lines }: { lines: CodeLine[] }) {
         <div className={styles.codeLine} key={line.line}>
           <span className={styles.lineNumber}>{line.line}</span>
           <span className={styles.codeText}>{line.text || ' '}</span>
+        </div>
+      ))}
+    </pre>
+  );
+}
+
+function DiffViewer({ diff }: { diff: string }) {
+  const styles = useStyles2(getToolStyles);
+  return (
+    <pre className={styles.diffViewer}>
+      {diff.split('\n').map((line, index) => (
+        <div
+          className={cx(
+            styles.diffLine,
+            line.startsWith('+') && styles.diffAdd,
+            line.startsWith('-') && styles.diffDelete,
+            line.startsWith('@@') && styles.diffMeta
+          )}
+          key={`${index}:${line}`}
+        >
+          {line || ' '}
         </div>
       ))}
     </pre>
@@ -1416,6 +1485,51 @@ function asManagedDashboardSource(
   };
 }
 
+function asJsonnetFileResult(
+  toolName: string | undefined,
+  details: unknown,
+  content: unknown
+): JsonnetFileResult | undefined {
+  if (
+    toolName !== 'grafana_write_jsonnet_file' &&
+    toolName !== 'grafana_edit_jsonnet_file' &&
+    toolName !== 'grafana_read_jsonnet_file'
+  ) {
+    return undefined;
+  }
+
+  const record = isRecord(details) ? details : parseJsonRecord(content);
+  if (!record) {
+    return undefined;
+  }
+  const path = stringField(record, 'path');
+  if (!path) {
+    return undefined;
+  }
+
+  return {
+    action: stringField(record, 'action'),
+    path,
+    version: numberField(record, 'version'),
+    checksum: stringField(record, 'checksum'),
+    lineCount: numberField(record, 'lineCount'),
+    dashboardJsonnetSize: numberField(record, 'dashboardJsonnetSize'),
+    changedRanges: recordsField(record, 'changedRanges')
+      .map((range) => ({
+        startLine: numberField(range, 'startLine') ?? 0,
+        endLine: numberField(range, 'endLine') ?? 0,
+        newLines: numberField(range, 'newLines') ?? 0,
+      }))
+      .filter((range) => range.startLine > 0),
+    diff: stringField(record, 'diff'),
+    firstChangedLine: numberField(record, 'firstChangedLine'),
+    totalLines: numberField(record, 'totalLines'),
+    lines: recordsField(record, 'lines')
+      .map(asCodeLine)
+      .filter((line): line is CodeLine => Boolean(line)),
+  };
+}
+
 function asDashboardSummary(
   toolName: string | undefined,
   details: unknown,
@@ -1669,6 +1783,20 @@ function formatBytes(value: number | undefined) {
     return `${(value / 1024).toFixed(1)} KiB`;
   }
   return `${(value / (1024 * 1024)).toFixed(1)} MiB`;
+}
+
+function formatChangedRanges(ranges: JsonnetFileResult['changedRanges']) {
+  if (ranges.length === 0) {
+    return undefined;
+  }
+  return ranges
+    .slice(0, 3)
+    .map((range) =>
+      range.endLine < range.startLine
+        ? `${range.startLine} insert`
+        : `${range.startLine}-${range.endLine || range.startLine}`
+    )
+    .join(', ');
 }
 
 function shortChecksum(value: string) {
@@ -1991,6 +2119,30 @@ const getToolStyles = (theme: GrafanaTheme2) => ({
   codeText: css({
     padding: theme.spacing(0, 1),
     whiteSpace: 'pre',
+  }),
+  diffViewer: css({
+    margin: 0,
+    maxHeight: 420,
+    overflow: 'auto',
+    border: `1px solid ${theme.colors.border.weak}`,
+    borderRadius: theme.shape.radius.default,
+    background: theme.colors.background.primary,
+    fontFamily: theme.typography.fontFamilyMonospace,
+    fontSize: theme.typography.bodySmall.fontSize,
+  }),
+  diffLine: css({
+    padding: theme.spacing(0, 1),
+    whiteSpace: 'pre',
+  }),
+  diffAdd: css({
+    background: theme.colors.success.transparent,
+  }),
+  diffDelete: css({
+    background: theme.colors.error.transparent,
+  }),
+  diffMeta: css({
+    color: theme.colors.text.secondary,
+    background: theme.colors.background.secondary,
   }),
   monospace: css({
     fontFamily: theme.typography.fontFamilyMonospace,

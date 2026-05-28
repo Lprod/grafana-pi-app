@@ -40,6 +40,7 @@ import {
   createGrafanaTools,
   filterAllowedPrometheusDatasourceSettings,
   getDisallowedDashboardDatasourceUids,
+  type VirtualJsonnetFileSnapshot,
 } from './grafanaTools';
 
 const datasourceSettings = [
@@ -124,7 +125,11 @@ describe('grafana datasource tool policy', () => {
     mockDataSourceSrv.get.mockResolvedValue(dataSource);
     const tool = getTool(createGrafanaTools({ allowedDatasourceUids: ['prom-b'] }), 'query_prometheus');
 
-    const result = await tool.execute('call-1', { query: 'up', type: 'range', start: 'now-6h', end: 'now', step: '30m' }, undefined);
+    const result = await tool.execute(
+      'call-1',
+      { query: 'up', type: 'range', start: 'now-6h', end: 'now', step: '30m' },
+      undefined
+    );
     const request = dataSource.query.mock.calls[0][0];
 
     expect(request.interval).toBe('30s');
@@ -148,7 +153,11 @@ describe('grafana datasource tool policy', () => {
     mockDataSourceSrv.get.mockResolvedValue(dataSource);
     const tool = getTool(createGrafanaTools({ allowedDatasourceUids: ['prom-b'] }), 'query_prometheus');
 
-    const result = await tool.execute('call-1', { query: 'http_requests_total', type: 'range', start: 'now-6h', end: 'now' }, undefined);
+    const result = await tool.execute(
+      'call-1',
+      { query: 'http_requests_total', type: 'range', start: 'now-6h', end: 'now' },
+      undefined
+    );
     const body = JSON.parse(result.content[0].text);
 
     expect(result.details).toMatchObject({ summarized: true, frames: 1, series: 1 });
@@ -207,12 +216,18 @@ describe('grafana datasource tool policy', () => {
         },
       ],
     };
-    const uploadTool = getTool(createGrafanaTools({ allowedDatasourceUids: ['prom-a'], includeAdHocDashboardTools: true }), 'grafana_upload_dashboard');
-
-    expect(getDisallowedDashboardDatasourceUids(dashboard, { allowedDatasourceUids: ['prom-a'] })).toEqual(['$datasource', 'prom-b']);
-    await expect(uploadTool.execute('call-1', { dashboard_json: JSON.stringify(dashboard) }, undefined)).rejects.toThrow(
-      'Dashboard references datasource UIDs not available to the assistant: $datasource, prom-b'
+    const uploadTool = getTool(
+      createGrafanaTools({ allowedDatasourceUids: ['prom-a'], includeAdHocDashboardTools: true }),
+      'grafana_upload_dashboard'
     );
+
+    expect(getDisallowedDashboardDatasourceUids(dashboard, { allowedDatasourceUids: ['prom-a'] })).toEqual([
+      '$datasource',
+      'prom-b',
+    ]);
+    await expect(
+      uploadTool.execute('call-1', { dashboard_json: JSON.stringify(dashboard) }, undefined)
+    ).rejects.toThrow('Dashboard references datasource UIDs not available to the assistant: $datasource, prom-b');
   });
 
   it('sends Jsonnet source to the managed dashboard sync endpoint', async () => {
@@ -241,6 +256,157 @@ describe('grafana datasource tool policy', () => {
       })
     );
     expect(result.content[0].text).toContain('Managed dashboard created');
+  });
+
+  it('writes and edits a session virtual Jsonnet file without returning full source to the model', async () => {
+    const runtime = createVirtualJsonnetRuntime('session-tools');
+    const source = "{ title: 'Virtual Jsonnet', uid: 'virtual-jsonnet', panels: [] }";
+    const edited = "{ title: 'Edited Virtual Jsonnet', uid: 'virtual-jsonnet', panels: [] }";
+    const fetch = jest
+      .fn()
+      .mockReturnValueOnce(
+        of({
+          data: {
+            path: 'dashboard.jsonnet',
+            version: 1,
+            checksum: 'sha256:one',
+            lineCount: 1,
+            dashboardJsonnetSize: source.length,
+            dashboard_jsonnet: source,
+            updatedAt: '2026-01-01T00:00:00Z',
+          },
+        })
+      )
+      .mockReturnValueOnce(
+        of({
+          data: {
+            path: 'dashboard.jsonnet',
+            version: 2,
+            checksum: 'sha256:two',
+            lineCount: 1,
+            dashboardJsonnetSize: edited.length,
+            dashboard_jsonnet: edited,
+            changedRanges: [{ startLine: 1, endLine: 1, newLines: 1 }],
+            diff: "@@ lines 1-1 @@\n-{ title: 'Virtual Jsonnet', uid: 'virtual-jsonnet', panels: [] }\n+{ title: 'Edited Virtual Jsonnet', uid: 'virtual-jsonnet', panels: [] }",
+            firstChangedLine: 1,
+            updatedAt: '2026-01-01T00:01:00Z',
+          },
+        })
+      );
+    (getBackendSrv as jest.Mock).mockReturnValue({ fetch });
+    const tools = createGrafanaTools({ virtualJsonnetFiles: runtime });
+
+    const writeResult = await getTool(tools, 'grafana_write_jsonnet_file').execute(
+      'call-1',
+      { content: source },
+      undefined
+    );
+    const editResult = await getTool(tools, 'grafana_edit_jsonnet_file').execute(
+      'call-2',
+      {
+        baseVersion: 1,
+        edits: [{ startLine: 1, endLine: 1, replacement: edited }],
+      },
+      undefined
+    );
+
+    expect(fetch).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        url: '/api/plugins/elohmeier-grafanapiapp-app/resources/managed-dashboards/jsonnet-files/write',
+        data: { sessionId: 'session-tools', path: 'dashboard.jsonnet', content: source },
+      })
+    );
+    expect(fetch).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        url: '/api/plugins/elohmeier-grafanapiapp-app/resources/managed-dashboards/jsonnet-files/edit',
+        data: {
+          sessionId: 'session-tools',
+          path: 'dashboard.jsonnet',
+          baseVersion: 1,
+          edits: [{ startLine: 1, endLine: 1, replacement: edited }],
+        },
+      })
+    );
+    expect(runtime.getFile('dashboard.jsonnet')?.content).toBe(edited);
+    expect(writeResult.content[0].text).not.toContain('dashboard_jsonnet');
+    expect(editResult.content[0].text).not.toContain('dashboard_jsonnet');
+  });
+
+  it('rejects rewriting an existing virtual Jsonnet file through the write tool', async () => {
+    const source = "{ title: 'Saved Jsonnet', uid: 'saved-jsonnet', panels: [] }";
+    const runtime = createVirtualJsonnetRuntime('session-tools', {
+      path: 'dashboard.jsonnet',
+      content: source,
+      version: 3,
+      checksum: 'sha256:saved',
+      lineCount: 1,
+      dashboardJsonnetSize: source.length,
+    });
+    const fetch = jest.fn();
+    (getBackendSrv as jest.Mock).mockReturnValue({ fetch });
+    const tool = getTool(createGrafanaTools({ virtualJsonnetFiles: runtime }), 'grafana_write_jsonnet_file');
+
+    await expect(tool.execute('call-1', { content: "{ title: 'Replacement' }" }, undefined)).rejects.toThrow(
+      'dashboard.jsonnet already exists at version 3; use grafana_edit_jsonnet_file for follow-up changes.'
+    );
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it('hydrates a saved virtual Jsonnet file before rendering from a file reference', async () => {
+    const source = "{ title: 'Hydrated Jsonnet', uid: 'hydrated-jsonnet', panels: [] }";
+    const runtime = createVirtualJsonnetRuntime('session-render', {
+      path: 'dashboard.jsonnet',
+      content: source,
+      version: 4,
+      checksum: 'sha256:saved',
+      lineCount: 1,
+      dashboardJsonnetSize: source.length,
+    });
+    const fetch = jest
+      .fn()
+      .mockReturnValueOnce(
+        of({
+          data: {
+            path: 'dashboard.jsonnet',
+            version: 4,
+            checksum: 'sha256:saved',
+            lineCount: 1,
+            dashboardJsonnetSize: source.length,
+            dashboard_jsonnet: source,
+          },
+        })
+      )
+      .mockReturnValueOnce(
+        of({
+          data: {
+            dashboard: { title: 'Hydrated Jsonnet', uid: 'hydrated-jsonnet', tags: [], panels: [] },
+            resource: { metadata: { name: 'hydrated-jsonnet' } },
+            sourceChecksum: 'sha256:saved',
+          },
+        })
+      );
+    (getBackendSrv as jest.Mock).mockReturnValue({ fetch });
+    const tool = getTool(createGrafanaTools({ virtualJsonnetFiles: runtime }), 'grafana_render_managed_dashboard');
+
+    const result = await tool.execute('call-1', {}, undefined);
+
+    expect(fetch).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        url: '/api/plugins/elohmeier-grafanapiapp-app/resources/managed-dashboards/jsonnet-files/write',
+        data: { sessionId: 'session-render', path: 'dashboard.jsonnet', content: source, version: 4 },
+      })
+    );
+    expect(fetch).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        url: '/api/plugins/elohmeier-grafanapiapp-app/resources/managed-dashboards/render',
+        data: { path: 'dashboard.jsonnet', sessionId: 'session-render' },
+      })
+    );
+    expect(result.details).toMatchObject({ path: 'dashboard.jsonnet', sourceBytes: source.length });
   });
 
   it('surfaces managed dashboard sync backend errors as readable messages', async () => {
@@ -276,7 +442,10 @@ describe('grafana datasource tool policy', () => {
     });
 
     expect(registry.subagents.map((tool) => tool.name)).toEqual(['grafana_explore_metrics', 'grafana_explore_jsonnet']);
-    expect(registry.all.slice(0, 2).map((tool) => tool.name)).toEqual(['grafana_explore_metrics', 'grafana_explore_jsonnet']);
+    expect(registry.all.slice(0, 2).map((tool) => tool.name)).toEqual([
+      'grafana_explore_metrics',
+      'grafana_explore_jsonnet',
+    ]);
   });
 
   it('keeps raw dashboard writes and direct Jsonnet library browsing out of the default chat toolset', () => {
@@ -289,6 +458,9 @@ describe('grafana datasource tool policy', () => {
 
     const names = registry.all.map((tool) => tool.name);
     expect(names).toContain('query_prometheus');
+    expect(names).toContain('grafana_write_jsonnet_file');
+    expect(names).toContain('grafana_edit_jsonnet_file');
+    expect(names).toContain('grafana_read_jsonnet_file');
     expect(names).toContain('grafana_sync_managed_dashboard');
     expect(names).toContain('grafana_get_managed_dashboard_source');
     expect(names).toContain('grafana_screenshot');
@@ -325,6 +497,26 @@ function getTool(tools: AgentTool[], name: string) {
 
   return tool as Omit<AgentTool, 'execute'> & {
     execute: (toolCallId: string, params: unknown, signal?: AbortSignal) => Promise<ToolResult>;
+  };
+}
+
+function createVirtualJsonnetRuntime(sessionId: string, initialFile?: VirtualJsonnetFileSnapshot) {
+  const files: Record<string, VirtualJsonnetFileSnapshot> = initialFile ? { [initialFile.path]: initialFile } : {};
+  const hydrated: Record<string, number> = {};
+
+  return {
+    getSessionId: () => sessionId,
+    getFile: (path: string) => files[path],
+    setFile: (file: VirtualJsonnetFileSnapshot, options?: { hydrated?: boolean }) => {
+      files[file.path] = file;
+      if (options?.hydrated) {
+        hydrated[file.path] = file.version;
+      }
+    },
+    isHydrated: (path: string, version: number) => hydrated[path] === version,
+    markHydrated: (path: string, version: number) => {
+      hydrated[path] = version;
+    },
   };
 }
 

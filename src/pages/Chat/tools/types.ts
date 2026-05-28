@@ -10,8 +10,27 @@ export type GrafanaToolRuntime = {
   streamFn: StreamFn;
 };
 
+export type VirtualJsonnetFileSnapshot = {
+  path: string;
+  content: string;
+  version: number;
+  checksum: string;
+  lineCount: number;
+  dashboardJsonnetSize: number;
+  updatedAt?: string;
+};
+
+export type VirtualJsonnetFileRuntime = {
+  getSessionId: () => string | undefined;
+  getFile: (path: string) => VirtualJsonnetFileSnapshot | undefined;
+  setFile: (file: VirtualJsonnetFileSnapshot, options?: { hydrated?: boolean }) => void;
+  isHydrated?: (path: string, version: number) => boolean;
+  markHydrated?: (path: string, version: number) => void;
+};
+
 export type CreateGrafanaToolsOptions = GrafanaToolConfig & {
   runtime?: GrafanaToolRuntime;
+  virtualJsonnetFiles?: VirtualJsonnetFileRuntime;
   includeAdHocDashboardTools?: boolean;
   includeJsonnetLibraryTools?: boolean;
   includeRawPrometheusQueryTool?: boolean;
@@ -67,7 +86,9 @@ export type UploadDashboardParams = {
 };
 
 export type ManagedDashboardParams = {
-  dashboard_jsonnet: string;
+  dashboard_jsonnet?: string;
+  path?: string;
+  sessionId?: string;
   uid?: string;
   folderUid?: string;
   tags?: string[];
@@ -111,12 +132,43 @@ export type JsonnetLibListParams = {
   path?: string;
 };
 
+export type JsonnetFileWriteParams = {
+  path?: string;
+  content: string;
+};
+
+export type JsonnetFileEditParams = {
+  path?: string;
+  baseVersion?: number;
+  edits: JsonnetLineEdit[];
+};
+
+export type JsonnetLineEdit = {
+  startLine: number;
+  endLine: number;
+  replacement: string;
+  expectedText?: string;
+};
+
+export type JsonnetFileReadParams = {
+  path?: string;
+  offset?: number;
+  limit?: number;
+};
+
 export type ManagedDashboardToolSet = {
   all: AgentTool[];
   listManaged: AgentTool;
   getSource: AgentTool;
   render: AgentTool;
   sync: AgentTool;
+};
+
+export type JsonnetFileToolSet = {
+  all: AgentTool[];
+  write: AgentTool;
+  edit: AgentTool;
+  read: AgentTool;
 };
 
 export type JsonnetLibToolSet = {
@@ -130,6 +182,7 @@ export type GrafanaToolRegistry = {
   metrics: AgentTool[];
   dashboards: AgentTool[];
   managedDashboards: ManagedDashboardToolSet;
+  jsonnetFiles: JsonnetFileToolSet;
   jsonnet: JsonnetLibToolSet;
   subagents: AgentTool[];
   all: AgentTool[];

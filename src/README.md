@@ -23,4 +23,4 @@ Broad exploration can be delegated to restricted subagents for metrics and Jsonn
 
 The assistant page does not expose model or datasource policy controls; all requests use the model and datasource allow-list configured in the plugin settings.
 
-Managed dashboards are compiled from model-authored Jsonnet/Grafonnet source in the backend. The source is stored on the plugin-managed dashboard resource and should be changed by fetching, editing, and re-syncing through the app.
+Managed dashboards are compiled from model-authored Jsonnet/Grafonnet source in the backend. During chat, the assistant keeps that source in a session-scoped virtual Jsonnet file so it can render, edit, and sync dashboards without resending unchanged source. The source is stored on the plugin-managed dashboard resource and should be changed by fetching, editing, and re-syncing through the app.
