@@ -58,7 +58,7 @@ export function filterAllowedPrometheusDatasourceSettings(
 
 function makeGrafanaGetDatasourcesTool(toolConfig: GrafanaToolConfig): AgentTool {
   return {
-    name: 'grafana_get_datasources',
+    name: 'list_datasources',
     label: 'Get Grafana datasources',
     description: 'List Prometheus-compatible datasources available to the assistant and current Grafana user.',
     parameters: Type.Object({}),

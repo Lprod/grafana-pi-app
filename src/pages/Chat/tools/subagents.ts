@@ -26,7 +26,7 @@ export function createSubagentTools(options: SubagentToolOptions): AgentTool[] {
 
 function makeMetricsExplorerTool(runtime: GrafanaToolRuntime, tools: AgentTool[]): AgentTool {
   return {
-    name: 'grafana_explore_metrics',
+    name: 'explore_metrics',
     label: 'Explore metrics',
     description: 'Delegate metric and PromQL reconnaissance to an isolated Grafana metrics subagent. It can only discover datasources, list metadata, and validate PromQL.',
     executionMode: 'sequential',
@@ -60,7 +60,7 @@ function makeMetricsExplorerTool(runtime: GrafanaToolRuntime, tools: AgentTool[]
 
 function makeJsonnetExplorerTool(runtime: GrafanaToolRuntime, tools: AgentTool[]): AgentTool {
   return {
-    name: 'grafana_explore_jsonnet',
+    name: 'explore_jsonnet',
     label: 'Explore Jsonnet',
     description: 'Delegate vendored Jsonnet/Grafonnet and managed-dashboard source reconnaissance to an isolated subagent. It cannot write dashboards.',
     executionMode: 'sequential',
@@ -92,7 +92,7 @@ Scope:
 - Inspect metric series before naming label selectors; do not infer names like status/status_code/path/route from convention.
 - Validate PromQL with query_prometheus before recommending it.
 - Do not create, update, delete, upload, or sync dashboards.
-- Do not use datasource variables. Only use datasource UIDs returned by grafana_get_datasources.
+- Do not use datasource variables. Only use datasource UIDs returned by list_datasources.
 
 Output:
 - Datasource UID used.

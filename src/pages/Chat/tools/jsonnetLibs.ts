@@ -19,7 +19,7 @@ export function createJsonnetLibTools(): JsonnetLibToolSet {
 
 function makeSearchJsonnetLibsTool(): AgentTool {
   return {
-    name: 'search_jsonnet_libs',
+    name: 'search_grafonnet',
     label: 'Search Jsonnet libraries',
     description: 'Search vendored Grafonnet/Jsonnet library and documentation files for API names and examples.',
     parameters: Type.Object({
@@ -37,7 +37,7 @@ function makeSearchJsonnetLibsTool(): AgentTool {
 
 function makeReadJsonnetLibTool(): AgentTool {
   return {
-    name: 'read_jsonnet_lib',
+    name: 'read_grafonnet',
     label: 'Read Jsonnet library file',
     description: 'Read a range of lines from a vendored Grafonnet/Jsonnet library or documentation file.',
     parameters: Type.Object({
@@ -56,7 +56,7 @@ function makeReadJsonnetLibTool(): AgentTool {
 
 function makeListJsonnetLibsTool(): AgentTool {
   return {
-    name: 'list_jsonnet_libs',
+    name: 'list_grafonnet',
     label: 'List Jsonnet library files',
     description: 'List vendored .libsonnet files under a Grafonnet/Jsonnet library path.',
     parameters: Type.Object({

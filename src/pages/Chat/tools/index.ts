@@ -48,10 +48,10 @@ export function createGrafanaToolRegistry(options: CreateGrafanaToolsOptions = {
     jsonnet,
     subagents,
     all: [
-      ...subagents,
       ...metrics,
       ...jsonnetFiles.all,
       ...parentManagedDashboardTools,
+      ...subagents,
       ...(options.includeJsonnetLibraryTools ? jsonnet.all : []),
       ...dashboards,
     ],

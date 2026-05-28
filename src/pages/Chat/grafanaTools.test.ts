@@ -63,7 +63,7 @@ describe('grafana datasource tool policy', () => {
   });
 
   it('filters datasource discovery to configured UIDs', async () => {
-    const tool = getTool(createGrafanaTools({ allowedDatasourceUids: ['prom-b'] }), 'grafana_get_datasources');
+    const tool = getTool(createGrafanaTools({ allowedDatasourceUids: ['prom-b'] }), 'list_datasources');
 
     const result = await tool.execute('call-1', {}, undefined);
 
@@ -218,7 +218,7 @@ describe('grafana datasource tool policy', () => {
     };
     const uploadTool = getTool(
       createGrafanaTools({ allowedDatasourceUids: ['prom-a'], includeAdHocDashboardTools: true }),
-      'grafana_upload_dashboard'
+      'upload_dashboard'
     );
 
     expect(getDisallowedDashboardDatasourceUids(dashboard, { allowedDatasourceUids: ['prom-a'] })).toEqual([
@@ -242,7 +242,7 @@ describe('grafana datasource tool policy', () => {
       })
     );
     (getBackendSrv as jest.Mock).mockReturnValue({ fetch });
-    const tool = getTool(createGrafanaTools({ allowedDatasourceUids: ['prom-a'] }), 'grafana_sync_managed_dashboard');
+    const tool = getTool(createGrafanaTools({ allowedDatasourceUids: ['prom-a'] }), 'sync_dashboard');
     const source = "{ title: 'Direct Jsonnet', uid: 'direct-jsonnet', panels: [] }";
 
     const result = await tool.execute('call-1', { dashboard_jsonnet: source }, undefined);
@@ -296,12 +296,12 @@ describe('grafana datasource tool policy', () => {
     (getBackendSrv as jest.Mock).mockReturnValue({ fetch });
     const tools = createGrafanaTools({ virtualJsonnetFiles: runtime });
 
-    const writeResult = await getTool(tools, 'grafana_write_jsonnet_file').execute(
+    const writeResult = await getTool(tools, 'write_jsonnet').execute(
       'call-1',
       { content: source },
       undefined
     );
-    const editResult = await getTool(tools, 'grafana_edit_jsonnet_file').execute(
+    const editResult = await getTool(tools, 'edit_jsonnet').execute(
       'call-2',
       {
         baseVersion: 1,
@@ -346,12 +346,67 @@ describe('grafana datasource tool policy', () => {
     });
     const fetch = jest.fn();
     (getBackendSrv as jest.Mock).mockReturnValue({ fetch });
-    const tool = getTool(createGrafanaTools({ virtualJsonnetFiles: runtime }), 'grafana_write_jsonnet_file');
+    const tool = getTool(createGrafanaTools({ virtualJsonnetFiles: runtime }), 'write_jsonnet');
 
     await expect(tool.execute('call-1', { content: "{ title: 'Replacement' }" }, undefined)).rejects.toThrow(
-      'dashboard.jsonnet already exists at version 3; use grafana_edit_jsonnet_file for follow-up changes.'
+      'dashboard.jsonnet already exists at version 3; use edit_jsonnet for follow-up changes.'
     );
     expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it('repairs a session virtual Jsonnet file without returning full source to the model', async () => {
+    const runtime = createVirtualJsonnetRuntime('session-fix');
+    const source = "g.dashboard.new(title='Bad', uid='bad', panels=[])";
+    const fixed = "{ title: 'Bad', uid: 'bad', panels: [] }";
+    const fetch = jest
+      .fn()
+      .mockReturnValueOnce(
+        of({
+          data: {
+            path: 'dashboard.jsonnet',
+            version: 1,
+            checksum: 'sha256:bad',
+            lineCount: 1,
+            dashboardJsonnetSize: source.length,
+            dashboard_jsonnet: source,
+          },
+        })
+      )
+      .mockReturnValueOnce(
+        of({
+          data: {
+            path: 'dashboard.jsonnet',
+            version: 2,
+            checksum: 'sha256:fixed',
+            lineCount: 1,
+            dashboardJsonnetSize: fixed.length,
+            dashboard_jsonnet: fixed,
+            changedRanges: [{ startLine: 1, endLine: 1, newLines: 1 }],
+            diff: '@@ structural repair @@',
+            repairs: ['rewrote g.dashboard.new(...) named arguments into a plain dashboard object'],
+          },
+        })
+      );
+    (getBackendSrv as jest.Mock).mockReturnValue({ fetch });
+    const tools = createGrafanaTools({ virtualJsonnetFiles: runtime });
+
+    await getTool(tools, 'write_jsonnet').execute('call-1', { content: source }, undefined);
+    const result = await getTool(tools, 'fix_jsonnet').execute('call-2', { baseVersion: 1 }, undefined);
+
+    expect(fetch).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        url: '/api/plugins/elohmeier-grafanapiapp-app/resources/managed-dashboards/jsonnet-files/repair',
+        data: {
+          sessionId: 'session-fix',
+          path: 'dashboard.jsonnet',
+          baseVersion: 1,
+        },
+      })
+    );
+    expect(runtime.getFile('dashboard.jsonnet')?.content).toBe(fixed);
+    expect(result.content[0].text).not.toContain('dashboard_jsonnet');
+    expect(result.content[0].text).toContain('structural repair');
   });
 
   it('hydrates a saved virtual Jsonnet file before rendering from a file reference', async () => {
@@ -388,7 +443,7 @@ describe('grafana datasource tool policy', () => {
         })
       );
     (getBackendSrv as jest.Mock).mockReturnValue({ fetch });
-    const tool = getTool(createGrafanaTools({ virtualJsonnetFiles: runtime }), 'grafana_render_managed_dashboard');
+    const tool = getTool(createGrafanaTools({ virtualJsonnetFiles: runtime }), 'render_dashboard');
 
     const result = await tool.execute('call-1', {}, undefined);
 
@@ -424,7 +479,7 @@ describe('grafana datasource tool policy', () => {
       }))
     );
     (getBackendSrv as jest.Mock).mockReturnValue({ fetch });
-    const tool = getTool(createGrafanaTools({ allowedDatasourceUids: ['prom-a'] }), 'grafana_sync_managed_dashboard');
+    const tool = getTool(createGrafanaTools({ allowedDatasourceUids: ['prom-a'] }), 'sync_dashboard');
 
     await expect(tool.execute('call-1', { dashboard_jsonnet: 'let textPanel() = {}' }, undefined)).rejects.toThrow(
       'Grafana request failed (400 Bad Request) while calling POST /api/plugins/elohmeier-grafanapiapp-app/resources/managed-dashboards/sync: jsonnet compilation failed: dashboard.jsonnet:3:5-14 Did not expect: (IDENTIFIER, "textPanel")'
@@ -441,11 +496,10 @@ describe('grafana datasource tool policy', () => {
       },
     });
 
-    expect(registry.subagents.map((tool) => tool.name)).toEqual(['grafana_explore_metrics', 'grafana_explore_jsonnet']);
-    expect(registry.all.slice(0, 2).map((tool) => tool.name)).toEqual([
-      'grafana_explore_metrics',
-      'grafana_explore_jsonnet',
-    ]);
+    expect(registry.subagents.map((tool) => tool.name)).toEqual(['explore_metrics', 'explore_jsonnet']);
+    expect(registry.all.map((tool) => tool.name)).toEqual(
+      expect.arrayContaining(['explore_metrics', 'explore_jsonnet'])
+    );
   });
 
   it('keeps raw dashboard writes and direct Jsonnet library browsing out of the default chat toolset', () => {
@@ -458,20 +512,21 @@ describe('grafana datasource tool policy', () => {
 
     const names = registry.all.map((tool) => tool.name);
     expect(names).toContain('query_prometheus');
-    expect(names).toContain('grafana_write_jsonnet_file');
-    expect(names).toContain('grafana_edit_jsonnet_file');
-    expect(names).toContain('grafana_read_jsonnet_file');
-    expect(names).toContain('grafana_sync_managed_dashboard');
-    expect(names).toContain('grafana_get_managed_dashboard_source');
-    expect(names).toContain('grafana_screenshot');
+    expect(names).toContain('write_jsonnet');
+    expect(names).toContain('edit_jsonnet');
+    expect(names).toContain('fix_jsonnet');
+    expect(names).toContain('read_jsonnet');
+    expect(names).toContain('sync_dashboard');
+    expect(names).toContain('get_dashboard_source');
+    expect(names).toContain('screenshot_dashboard');
     expect(names).not.toContain('query_prometheus_raw');
-    expect(names).not.toContain('grafana_upload_dashboard');
-    expect(names).not.toContain('grafana_delete_dashboard');
+    expect(names).not.toContain('upload_dashboard');
+    expect(names).not.toContain('delete_dashboard');
     expect(names).not.toContain('grafana_list_managed_dashboard_templates');
     expect(names).not.toContain('read_managed_dashboard_template');
-    expect(names).not.toContain('search_jsonnet_libs');
-    expect(names).not.toContain('read_jsonnet_lib');
-    expect(names).not.toContain('list_jsonnet_libs');
+    expect(names).not.toContain('search_grafonnet');
+    expect(names).not.toContain('read_grafonnet');
+    expect(names).not.toContain('list_grafonnet');
   });
 
   it('can explicitly expose advanced dashboard and Jsonnet tools for tests or developer workflows', () => {
@@ -482,10 +537,10 @@ describe('grafana datasource tool policy', () => {
     }).map((tool) => tool.name);
 
     expect(names).toContain('query_prometheus_raw');
-    expect(names).toContain('grafana_upload_dashboard');
-    expect(names).toContain('grafana_delete_dashboard');
-    expect(names).toContain('grafana_get_managed_dashboard_source');
-    expect(names).toContain('search_jsonnet_libs');
+    expect(names).toContain('upload_dashboard');
+    expect(names).toContain('delete_dashboard');
+    expect(names).toContain('get_dashboard_source');
+    expect(names).toContain('search_grafonnet');
   });
 });
 

@@ -854,6 +854,7 @@ type JsonnetFileResult = {
   firstChangedLine?: number;
   totalLines?: number;
   lines: CodeLine[];
+  repairs?: string[];
 };
 
 function JsonnetFileResultView({ result }: { result: JsonnetFileResult }) {
@@ -876,6 +877,7 @@ function JsonnetFileResultView({ result }: { result: JsonnetFileResult }) {
           },
           { label: 'Source', value: formatBytes(result.dashboardJsonnetSize) },
           { label: 'Changed', value: formatChangedRanges(result.changedRanges) },
+          { label: 'Repairs', value: result.repairs?.slice(0, 2).join(', ') },
           { label: 'Checksum', value: result.checksum ? <code>{shortChecksum(result.checksum)}</code> : undefined },
         ]}
       />
@@ -1133,7 +1135,7 @@ function asDatasourceResult(
   details: unknown,
   content: unknown
 ): DatasourceResult[] | undefined {
-  if (toolName !== 'grafana_get_datasources') {
+  if (toolName !== 'list_datasources' && toolName !== 'grafana_get_datasources') {
     return undefined;
   }
 
@@ -1323,7 +1325,10 @@ function asRawPrometheusQuery(toolName: string | undefined, details: unknown): R
 }
 
 function asScreenshotResult(toolName: string | undefined, details: unknown): ScreenshotResult | undefined {
-  if (toolName !== 'grafana_screenshot' || !isRecord(details)) {
+  if (toolName !== 'screenshot_dashboard' && toolName !== 'grafana_screenshot') {
+    return undefined;
+  }
+  if (!isRecord(details)) {
     return undefined;
   }
 
@@ -1336,7 +1341,7 @@ function asScreenshotResult(toolName: string | undefined, details: unknown): Scr
 }
 
 function asDashboardList(toolName: string | undefined, content: unknown): DashboardListResult | undefined {
-  if (toolName !== 'grafana_list_dashboards') {
+  if (toolName !== 'list_dashboards' && toolName !== 'grafana_list_dashboards') {
     return undefined;
   }
 
@@ -1368,7 +1373,7 @@ function asManagedDashboardList(
   toolName: string | undefined,
   content: unknown
 ): ManagedDashboardListResult | undefined {
-  if (toolName !== 'grafana_list_managed_dashboards') {
+  if (toolName !== 'list_managed_dashboards' && toolName !== 'grafana_list_managed_dashboards') {
     return undefined;
   }
 
@@ -1392,7 +1397,7 @@ function asManagedDashboardListItem(record: unknown): ManagedDashboardListItem |
 }
 
 function asJsonnetSearchResult(toolName: string | undefined, content: unknown): JsonnetSearchResult | undefined {
-  if (toolName !== 'search_jsonnet_libs') {
+  if (toolName !== 'search_grafonnet' && toolName !== 'search_jsonnet_libs') {
     return undefined;
   }
 
@@ -1419,7 +1424,7 @@ function asJsonnetSearchMatch(record: Record<string, unknown>): JsonnetSearchMat
 }
 
 function asJsonnetListResult(toolName: string | undefined, content: unknown): JsonnetListResult | undefined {
-  if (toolName !== 'list_jsonnet_libs') {
+  if (toolName !== 'list_grafonnet' && toolName !== 'list_jsonnet_libs') {
     return undefined;
   }
 
@@ -1430,7 +1435,7 @@ function asJsonnetListResult(toolName: string | undefined, content: unknown): Js
 }
 
 function asJsonnetReadResult(toolName: string | undefined, content: unknown): JsonnetReadResult | undefined {
-  if (toolName !== 'read_jsonnet_lib') {
+  if (toolName !== 'read_grafonnet' && toolName !== 'read_jsonnet_lib') {
     return undefined;
   }
 
@@ -1458,7 +1463,7 @@ function asManagedDashboardSource(
   toolName: string | undefined,
   content: unknown
 ): ManagedDashboardSourceResult | undefined {
-  if (toolName !== 'grafana_get_managed_dashboard_source') {
+  if (toolName !== 'get_dashboard_source' && toolName !== 'grafana_get_managed_dashboard_source') {
     return undefined;
   }
 
@@ -1493,7 +1498,11 @@ function asJsonnetFileResult(
   if (
     toolName !== 'grafana_write_jsonnet_file' &&
     toolName !== 'grafana_edit_jsonnet_file' &&
-    toolName !== 'grafana_read_jsonnet_file'
+    toolName !== 'grafana_read_jsonnet_file' &&
+    toolName !== 'write_jsonnet' &&
+    toolName !== 'edit_jsonnet' &&
+    toolName !== 'fix_jsonnet' &&
+    toolName !== 'read_jsonnet'
   ) {
     return undefined;
   }
@@ -1524,6 +1533,7 @@ function asJsonnetFileResult(
     diff: stringField(record, 'diff'),
     firstChangedLine: numberField(record, 'firstChangedLine'),
     totalLines: numberField(record, 'totalLines'),
+    repairs: stringArrayField(record, 'repairs'),
     lines: recordsField(record, 'lines')
       .map(asCodeLine)
       .filter((line): line is CodeLine => Boolean(line)),
@@ -1535,7 +1545,12 @@ function asDashboardSummary(
   details: unknown,
   content: unknown
 ): DashboardSummaryResult | undefined {
-  if (toolName !== 'grafana_render_managed_dashboard' && toolName !== 'grafana_get_dashboard') {
+  if (
+    toolName !== 'render_dashboard' &&
+    toolName !== 'get_dashboard' &&
+    toolName !== 'grafana_render_managed_dashboard' &&
+    toolName !== 'grafana_get_dashboard'
+  ) {
     return undefined;
   }
 
@@ -1571,7 +1586,7 @@ function asDashboardAction(toolName: string | undefined, details: unknown): Dash
     return undefined;
   }
 
-  if (toolName === 'grafana_upload_dashboard') {
+  if (toolName === 'upload_dashboard' || toolName === 'grafana_upload_dashboard') {
     return {
       title: 'Dashboard uploaded',
       status: stringField(details, 'status'),
@@ -1580,7 +1595,7 @@ function asDashboardAction(toolName: string | undefined, details: unknown): Dash
     };
   }
 
-  if (toolName === 'grafana_sync_managed_dashboard') {
+  if (toolName === 'sync_dashboard' || toolName === 'grafana_sync_managed_dashboard') {
     const status = stringField(details, 'status');
     return {
       title: `Managed dashboard ${status ?? 'synced'}`,
@@ -1591,7 +1606,7 @@ function asDashboardAction(toolName: string | undefined, details: unknown): Dash
     };
   }
 
-  if (toolName === 'grafana_delete_dashboard') {
+  if (toolName === 'delete_dashboard' || toolName === 'grafana_delete_dashboard') {
     return {
       title: 'Dashboard deleted',
       status: 'deleted',

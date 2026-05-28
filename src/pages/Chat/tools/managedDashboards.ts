@@ -27,7 +27,7 @@ export function createManagedDashboardTools(toolConfig: CreateGrafanaToolsOption
 
 function makeGrafanaListManagedDashboardsTool(): AgentTool {
   return {
-    name: 'grafana_list_managed_dashboards',
+    name: 'list_managed_dashboards',
     label: 'List managed dashboards',
     description: 'List dashboards currently managed by this app plugin, including Jsonnet source metadata.',
     parameters: Type.Object({}),
@@ -41,10 +41,10 @@ function makeGrafanaListManagedDashboardsTool(): AgentTool {
 
 function makeGrafanaGetManagedDashboardSourceTool(): AgentTool {
   return {
-    name: 'grafana_get_managed_dashboard_source',
+    name: 'get_dashboard_source',
     label: 'Get managed dashboard source',
     description:
-      'Fetch the stored Jsonnet/Grafonnet source for an app-managed dashboard so it can be edited and re-synced.',
+      'Fetch the stored Jsonnet source for an app-managed dashboard so it can be edited and re-synced.',
     parameters: Type.Object({
       uid: Type.String({ description: 'Managed dashboard UID.' }),
     }),
@@ -59,7 +59,7 @@ function makeGrafanaGetManagedDashboardSourceTool(): AgentTool {
 
 function makeGrafanaRenderManagedDashboardTool(toolConfig: CreateGrafanaToolsOptions): AgentTool {
   return {
-    name: 'grafana_render_managed_dashboard',
+    name: 'render_dashboard',
     label: 'Render managed dashboard',
     description:
       'Compile the current virtual Jsonnet file into an app-managed Grafana dashboard resource without saving it. Defaults to dashboard.jsonnet unless dashboard_jsonnet is supplied explicitly.',
@@ -79,7 +79,7 @@ function makeGrafanaRenderManagedDashboardTool(toolConfig: CreateGrafanaToolsOpt
 
 function makeGrafanaSyncManagedDashboardTool(toolConfig: CreateGrafanaToolsOptions): AgentTool {
   return {
-    name: 'grafana_sync_managed_dashboard',
+    name: 'sync_dashboard',
     label: 'Sync managed dashboard',
     description:
       'Create or update an app-managed dashboard from the current virtual Jsonnet file. The resolved source is stored with the dashboard so future edits can fetch, modify, and re-sync it.',
@@ -115,7 +115,7 @@ function managedDashboardParameters() {
     dashboard_jsonnet: Type.Optional(
       Type.String({
         description:
-          'Optional self-contained Grafonnet/Jsonnet source. Prefer writing dashboard.jsonnet with grafana_write_jsonnet_file and omit this field for render/sync.',
+          'Optional self-contained Jsonnet source. Prefer writing dashboard.jsonnet with write_jsonnet and omit this field for render/sync.',
       })
     ),
     path: Type.Optional(

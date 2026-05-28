@@ -18,7 +18,7 @@ export function createDashboardTools(toolConfig: GrafanaToolConfig, includeAdHoc
 
 function makeGrafanaUploadDashboardTool(toolConfig: GrafanaToolConfig): AgentTool {
   return {
-    name: 'grafana_upload_dashboard',
+    name: 'upload_dashboard',
     label: 'Upload dashboard',
     description: 'Create or update a Grafana dashboard JSON model as the current user.',
     parameters: Type.Object({
@@ -62,7 +62,7 @@ function makeGrafanaUploadDashboardTool(toolConfig: GrafanaToolConfig): AgentToo
 }
 
 const grafanaGetDashboardTool: AgentTool = {
-  name: 'grafana_get_dashboard',
+  name: 'get_dashboard',
   label: 'Get dashboard',
   description: 'Fetch a dashboard by UID as the current user.',
   parameters: Type.Object({
@@ -77,7 +77,7 @@ const grafanaGetDashboardTool: AgentTool = {
 };
 
 const grafanaListDashboardsTool: AgentTool = {
-  name: 'grafana_list_dashboards',
+  name: 'list_dashboards',
   label: 'List dashboards',
   description: 'Search dashboards visible to the current user.',
   parameters: Type.Object({
@@ -106,7 +106,7 @@ const grafanaListDashboardsTool: AgentTool = {
 };
 
 const grafanaDeleteDashboardTool: AgentTool = {
-  name: 'grafana_delete_dashboard',
+  name: 'delete_dashboard',
   label: 'Delete dashboard',
   description: 'Delete a dashboard by UID as the current user.',
   parameters: Type.Object({
@@ -123,7 +123,7 @@ const grafanaDeleteDashboardTool: AgentTool = {
 };
 
 const grafanaScreenshotTool: AgentTool = {
-  name: 'grafana_screenshot',
+  name: 'screenshot_dashboard',
   label: 'Render dashboard screenshot',
   description: 'Render a dashboard or panel image using Grafana image rendering, if configured.',
   parameters: Type.Object({

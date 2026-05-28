@@ -564,6 +564,7 @@ func (a *App) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/managed-dashboards/sync", a.handleManagedDashboardSync)
 	mux.HandleFunc("/managed-dashboards/jsonnet-files/write", a.handleJsonnetFileWrite)
 	mux.HandleFunc("/managed-dashboards/jsonnet-files/edit", a.handleJsonnetFileEdit)
+	mux.HandleFunc("/managed-dashboards/jsonnet-files/repair", a.handleJsonnetFileRepair)
 	mux.HandleFunc("/managed-dashboards/jsonnet-files/read", a.handleJsonnetFileRead)
 	mux.HandleFunc("/jsonnet-libs/search", a.handleJsonnetLibSearch)
 	mux.HandleFunc("/jsonnet-libs/read", a.handleJsonnetLibRead)

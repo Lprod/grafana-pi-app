@@ -468,6 +468,211 @@ func TestVirtualJsonnetFileWriteEditRead(t *testing.T) {
 	}
 }
 
+func TestVirtualJsonnetFileRepairGenericGrafonnetDashboard(t *testing.T) {
+	jsonData, _ := json.Marshal(appSettings{AllowedDatasourceUIDs: []string{"prometheus"}})
+	inst, err := NewApp(context.Background(), backend.AppInstanceSettings{JSONData: jsonData})
+	if err != nil {
+		t.Fatalf("new app: %s", err)
+	}
+	app := inst.(*App)
+	source := `local g = import 'github.com/grafana/grafonnet/gen/grafonnet-latest/main.libsonnet';
+
+g.dashboard.new(
+  title='HTTP Request Rate and Errors',
+  uid='http-request-rate-errors',
+  tags=['http', 'errors'],
+  timezone='browser',
+  refresh='5s',
+  panels=[
+    g.panel.new(
+      title='Total request rate',
+      id=1,
+      gridPos=g.gridPos.to_val(x=0, y=0, w=24, h=8),
+      targets=[
+        g.target.new(
+          datasource='prometheus',
+          expr='sum(rate(http_requests_total[5m])) by (job)',
+          refId='A',
+          legendFormat='{{job}}',
+        ),
+      ],
+      type='timeseries',
+      fieldConfigDefaults=g.panel.defaultFieldConfig.setUnit('reqps'),
+    ),
+    g.panel.new(
+      title='Overall error rate %',
+      id=2,
+      gridPos=g.gridPos.to_val(x=0, y=8, w=12, h=8),
+      targets=[
+        g.target.new(
+          datasource='prometheus',
+          expr='sum(rate(http_requests_total{status=~"4..|5.."}[5m])) / sum(rate(http_requests_total[5m])) * 100',
+          refId='A',
+        ),
+      ],
+      type='stat',
+      fieldConfigDefaults=g.panel.defaultFieldConfig.setUnit('percent'),
+    ),
+  ],
+)`
+	writeBody, _ := json.Marshal(jsonnetFileWriteRequest{
+		SessionID: "session-repair",
+		Content:   source,
+	})
+	var writeSender mockCallResourceResponseSender
+	err = app.CallResource(context.Background(), &backend.CallResourceRequest{
+		Method: http.MethodPost,
+		Path:   "managed-dashboards/jsonnet-files/write",
+		Body:   writeBody,
+	}, &writeSender)
+	if err != nil {
+		t.Fatalf("CallResource error: %s", err)
+	}
+
+	repairBody, _ := json.Marshal(jsonnetFileRepairRequest{
+		SessionID: "session-repair",
+		Path:      "dashboard.jsonnet",
+	})
+	var repairSender mockCallResourceResponseSender
+	err = app.CallResource(context.Background(), &backend.CallResourceRequest{
+		Method: http.MethodPost,
+		Path:   "managed-dashboards/jsonnet-files/repair",
+		Body:   repairBody,
+	}, &repairSender)
+	if err != nil {
+		t.Fatalf("CallResource error: %s", err)
+	}
+	if repairSender.responses[0].Status != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", repairSender.responses[0].Status, string(repairSender.responses[0].Body))
+	}
+	var repairResponse jsonnetFileResponse
+	if err := json.Unmarshal(repairSender.responses[0].Body, &repairResponse); err != nil {
+		t.Fatalf("decode repair response: %s", err)
+	}
+	if repairResponse.Version != 2 || len(repairResponse.Repairs) == 0 {
+		t.Fatalf("unexpected repair response: %#v", repairResponse)
+	}
+	if strings.Contains(repairResponse.DashboardJsonnet, "g.panel.new") || !strings.Contains(repairResponse.DashboardJsonnet, "fieldConfig") {
+		t.Fatalf("repair did not rewrite panel constructors: %s", repairResponse.DashboardJsonnet)
+	}
+
+	renderBody, _ := json.Marshal(managedDashboardRequest{
+		SessionID: "session-repair",
+		Path:      "dashboard.jsonnet",
+	})
+	var renderSender mockCallResourceResponseSender
+	err = app.CallResource(context.Background(), &backend.CallResourceRequest{
+		Method: http.MethodPost,
+		Path:   "managed-dashboards/render",
+		Body:   renderBody,
+	}, &renderSender)
+	if err != nil {
+		t.Fatalf("CallResource error: %s", err)
+	}
+	if renderSender.responses[0].Status != http.StatusOK {
+		t.Fatalf("expected render 200, got %d: %s", renderSender.responses[0].Status, string(renderSender.responses[0].Body))
+	}
+	var renderResponse managedDashboardRenderResponse
+	if err := json.Unmarshal(renderSender.responses[0].Body, &renderResponse); err != nil {
+		t.Fatalf("decode render response: %s", err)
+	}
+	if renderResponse.Resource.Metadata.Name != "http-request-rate-errors" || len(renderResponse.Dashboard["panels"].([]any)) != 2 {
+		t.Fatalf("unexpected rendered dashboard: %#v", renderResponse.Dashboard)
+	}
+}
+
+func TestVirtualJsonnetFileRepairDashboardWithPanelsMixinAndLocalPanels(t *testing.T) {
+	jsonData, _ := json.Marshal(appSettings{AllowedDatasourceUIDs: []string{"prometheus"}})
+	inst, err := NewApp(context.Background(), backend.AppInstanceSettings{JSONData: jsonData})
+	if err != nil {
+		t.Fatalf("new app: %s", err)
+	}
+	app := inst.(*App)
+	source := `local g = import 'github.com/grafana/grafonnet/gen/grafonnet-latest/main.libsonnet';
+local reqByRoute = g.timeseries.new(
+  title='Requests by route',
+  id=1,
+  span=24,
+  datasource=g.target.defaultDatasource('prometheus'),
+  targets=[
+    g.target.new(
+      expr='sum(rate(http_requests_total[5m])) by (route)',
+      refId='A',
+      legend='{{route}}',
+    ),
+  ],
+  fieldConfig=g.panel.fieldConfig.defaults(unit='reqps'),
+);
+
+g.dashboard.new(
+  title='HTTP Request Rate and Errors',
+  uid='http-request-rate-errors',
+  tags=['http', 'errors'],
+) + g.dashboard.with_panels([reqByRoute])`
+	writeBody, _ := json.Marshal(jsonnetFileWriteRequest{
+		SessionID: "session-repair-mixin",
+		Content:   source,
+	})
+	var writeSender mockCallResourceResponseSender
+	err = app.CallResource(context.Background(), &backend.CallResourceRequest{
+		Method: http.MethodPost,
+		Path:   "managed-dashboards/jsonnet-files/write",
+		Body:   writeBody,
+	}, &writeSender)
+	if err != nil {
+		t.Fatalf("CallResource error: %s", err)
+	}
+
+	repairBody, _ := json.Marshal(jsonnetFileRepairRequest{
+		SessionID: "session-repair-mixin",
+		Path:      "dashboard.jsonnet",
+	})
+	var repairSender mockCallResourceResponseSender
+	err = app.CallResource(context.Background(), &backend.CallResourceRequest{
+		Method: http.MethodPost,
+		Path:   "managed-dashboards/jsonnet-files/repair",
+		Body:   repairBody,
+	}, &repairSender)
+	if err != nil {
+		t.Fatalf("CallResource error: %s", err)
+	}
+	if repairSender.responses[0].Status != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", repairSender.responses[0].Status, string(repairSender.responses[0].Body))
+	}
+	var repairResponse jsonnetFileResponse
+	if err := json.Unmarshal(repairSender.responses[0].Body, &repairResponse); err != nil {
+		t.Fatalf("decode repair response: %s", err)
+	}
+	if repairResponse.Version != 2 || !strings.Contains(repairResponse.DashboardJsonnet, "Requests by route") || strings.Contains(repairResponse.DashboardJsonnet, "with_panels") {
+		t.Fatalf("unexpected repair response: %#v", repairResponse)
+	}
+
+	renderBody, _ := json.Marshal(managedDashboardRequest{
+		SessionID: "session-repair-mixin",
+		Path:      "dashboard.jsonnet",
+	})
+	var renderSender mockCallResourceResponseSender
+	err = app.CallResource(context.Background(), &backend.CallResourceRequest{
+		Method: http.MethodPost,
+		Path:   "managed-dashboards/render",
+		Body:   renderBody,
+	}, &renderSender)
+	if err != nil {
+		t.Fatalf("CallResource error: %s", err)
+	}
+	if renderSender.responses[0].Status != http.StatusOK {
+		t.Fatalf("expected render 200, got %d: %s", renderSender.responses[0].Status, string(renderSender.responses[0].Body))
+	}
+	var renderResponse managedDashboardRenderResponse
+	if err := json.Unmarshal(renderSender.responses[0].Body, &renderResponse); err != nil {
+		t.Fatalf("decode render response: %s", err)
+	}
+	panels := renderResponse.Dashboard["panels"].([]any)
+	if renderResponse.Resource.Metadata.Name != "http-request-rate-errors" || len(panels) != 1 || panels[0].(map[string]any)["type"] != "timeseries" {
+		t.Fatalf("unexpected rendered dashboard: %#v", renderResponse.Dashboard)
+	}
+}
+
 func TestManagedDashboardRenderFromVirtualJsonnetFile(t *testing.T) {
 	inst, err := NewApp(context.Background(), backend.AppInstanceSettings{})
 	if err != nil {

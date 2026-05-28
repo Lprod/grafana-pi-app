@@ -6,6 +6,7 @@ import type {
   CreateGrafanaToolsOptions,
   JsonnetFileEditParams,
   JsonnetFileReadParams,
+  JsonnetFileRepairParams,
   JsonnetFileToolSet,
   JsonnetFileWriteParams,
   JsonnetLineEdit,
@@ -22,17 +23,20 @@ type JsonnetFileBackendResponse = VirtualJsonnetFileSnapshot & {
   firstChangedLine?: number;
   totalLines?: number;
   lines?: Array<{ line: number; text: string }>;
+  repairs?: string[];
 };
 
 export function createJsonnetFileTools(options: CreateGrafanaToolsOptions): JsonnetFileToolSet {
   const write = makeWriteJsonnetFileTool(options.virtualJsonnetFiles);
   const edit = makeEditJsonnetFileTool(options.virtualJsonnetFiles);
+  const fix = makeFixJsonnetFileTool(options.virtualJsonnetFiles);
   const read = makeReadJsonnetFileTool(options.virtualJsonnetFiles);
 
   return {
-    all: [write, edit, read],
+    all: [write, edit, fix, read],
     write,
     edit,
+    fix,
     read,
   };
 }
@@ -70,15 +74,15 @@ export function normalizeJsonnetPath(path?: string) {
 
 function makeWriteJsonnetFileTool(runtime: VirtualJsonnetFileRuntime | undefined): AgentTool {
   return {
-    name: 'grafana_write_jsonnet_file',
+    name: 'write_jsonnet',
     label: 'Write Jsonnet file',
     description:
-      'Create the session virtual Jsonnet file used for managed dashboards. Write dashboard.jsonnet once with the full initial source. If the file already exists, use grafana_edit_jsonnet_file for every follow-up change.',
+      'Create the session virtual Jsonnet file used for managed dashboards. Write dashboard.jsonnet once with the full initial source. If the file already exists, use edit_jsonnet for every follow-up change.',
     parameters: Type.Object({
       path: Type.Optional(Type.String({ description: `Virtual file path. Defaults to ${DEFAULT_JSONNET_FILE_PATH}.` })),
       content: Type.String({
         description:
-          "Complete Jsonnet/Grafonnet source. Import grafonnet with: local g = import 'github.com/grafana/grafonnet/gen/grafonnet-latest/main.libsonnet';",
+          'Complete Jsonnet source that evaluates to a Grafana dashboard object. For new dashboards, write a plain object Jsonnet file; do not import Grafonnet unless editing existing Grafonnet source.',
       }),
     }),
     async execute(_toolCallId, params, signal) {
@@ -87,7 +91,7 @@ function makeWriteJsonnetFileTool(runtime: VirtualJsonnetFileRuntime | undefined
       const existing = runtime?.getFile(path);
       if (existing) {
         throw new Error(
-          `${path} already exists at version ${existing.version}; use grafana_edit_jsonnet_file for follow-up changes.`
+          `${path} already exists at version ${existing.version}; use edit_jsonnet for follow-up changes.`
         );
       }
       throwIfAborted(signal);
@@ -111,7 +115,7 @@ function makeWriteJsonnetFileTool(runtime: VirtualJsonnetFileRuntime | undefined
 
 function makeEditJsonnetFileTool(runtime: VirtualJsonnetFileRuntime | undefined): AgentTool {
   return {
-    name: 'grafana_edit_jsonnet_file',
+    name: 'edit_jsonnet',
     label: 'Edit Jsonnet file',
     description:
       'Apply compact line-range edits to the session virtual Jsonnet file. Line numbers are 1-based and inclusive. Use baseVersion from the latest write/edit/read result when available.',
@@ -158,9 +162,47 @@ function makeEditJsonnetFileTool(runtime: VirtualJsonnetFileRuntime | undefined)
   };
 }
 
+function makeFixJsonnetFileTool(runtime: VirtualJsonnetFileRuntime | undefined): AgentTool {
+  return {
+    name: 'fix_jsonnet',
+    label: 'Fix Jsonnet file',
+    description:
+      'Apply a transactional structural repair to the current virtual Jsonnet file after render errors. Use this before explore_jsonnet for common invalid Grafonnet constructor chains such as g.dashboard.new(...) + g.dashboard.with_panels([...]) or g.panel.new(...).',
+    parameters: Type.Object({
+      path: Type.Optional(Type.String({ description: `Virtual file path. Defaults to ${DEFAULT_JSONNET_FILE_PATH}.` })),
+      baseVersion: Type.Optional(Type.Number({ description: 'Expected current file version.' })),
+      error: Type.Optional(Type.String({ description: 'Render or compile error that motivated the repair.' })),
+    }),
+    async execute(_toolCallId, params, signal) {
+      const args = params as JsonnetFileRepairParams;
+      const path = normalizeJsonnetPath(args.path);
+      await ensureVirtualJsonnetFileHydrated(runtime, path, signal);
+      throwIfAborted(signal);
+      const data: Record<string, unknown> = {
+        sessionId: requireSessionId(runtime),
+        path,
+        baseVersion: args.baseVersion,
+      };
+      if (args.error) {
+        data.error = args.error;
+      }
+      const result = await pluginResourceFetch<JsonnetFileBackendResponse>('/managed-dashboards/jsonnet-files/repair', {
+        method: 'POST',
+        data,
+      });
+      const content = result.dashboard_jsonnet ?? runtime?.getFile(path)?.content ?? '';
+      runtime?.setFile(snapshotFromResponse(result, content), { hydrated: true });
+      return textResult(
+        JSON.stringify(publicJsonnetFileResult(result, 'fixed'), null, 2),
+        publicJsonnetFileResult(result, 'fixed')
+      );
+    },
+  };
+}
+
 function makeReadJsonnetFileTool(runtime: VirtualJsonnetFileRuntime | undefined): AgentTool {
   return {
-    name: 'grafana_read_jsonnet_file',
+    name: 'read_jsonnet',
     label: 'Read Jsonnet file',
     description:
       'Read a bounded line window from the session virtual Jsonnet file. Use this after compile or edit errors instead of asking for the whole file.',
@@ -211,7 +253,7 @@ function snapshotFromResponse(response: JsonnetFileBackendResponse, content: str
   };
 }
 
-function publicJsonnetFileResult(response: JsonnetFileBackendResponse, action: 'written' | 'edited' | 'read') {
+function publicJsonnetFileResult(response: JsonnetFileBackendResponse, action: 'written' | 'edited' | 'fixed' | 'read') {
   const { dashboard_jsonnet: _dashboardJsonnet, ...publicResponse } = response;
   return { action, ...publicResponse };
 }

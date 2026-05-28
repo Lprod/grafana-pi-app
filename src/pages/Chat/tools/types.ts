@@ -143,6 +143,12 @@ export type JsonnetFileEditParams = {
   edits: JsonnetLineEdit[];
 };
 
+export type JsonnetFileRepairParams = {
+  path?: string;
+  baseVersion?: number;
+  error?: string;
+};
+
 export type JsonnetLineEdit = {
   startLine: number;
   endLine: number;
@@ -168,6 +174,7 @@ export type JsonnetFileToolSet = {
   all: AgentTool[];
   write: AgentTool;
   edit: AgentTool;
+  fix: AgentTool;
   read: AgentTool;
 };
 

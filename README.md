@@ -7,7 +7,7 @@ Grafana Pi App is a Grafana app plugin that embeds a Pi-powered LLM chat assista
 - Discovers Prometheus datasources visible to the current user.
 - Lists metric names and label values through Grafana datasource resource APIs.
 - Runs PromQL through Grafana datasource query APIs, returning compact min/max/last/sample summaries for range queries by default.
-- Creates app-managed dashboards from model-authored Jsonnet/Grafonnet source. The source is stored with each dashboard so future edits can update the Jsonnet and re-sync through the app.
+- Creates app-managed dashboards from model-authored Jsonnet source. The source is stored with each dashboard so future edits can update the Jsonnet and re-sync through the app.
 - Lists, fetches, and screenshots dashboards through Grafana APIs.
 - Delegates broad metric and Jsonnet reconnaissance to restricted subagents with isolated chat context.
 - Stores chat sessions per Grafana user with plugin user storage.
@@ -31,18 +31,19 @@ Managed dashboard writes use the plugin service account declared in `plugin.json
 
 ## Managed dashboards
 
-The backend vendors Jsonnet libraries under `pkg/plugin/jsonnet/vendor` using the same `jsonnet-bundler` layout as `agentic-observability`. The assistant writes self-contained Jsonnet/Grafonnet source to a session-scoped virtual `dashboard.jsonnet` file, applies compact line edits to that file, and the backend compiles it with the embedded vendored libraries before saving the dashboard.
+The backend vendors Jsonnet libraries under `pkg/plugin/jsonnet/vendor` using the same `jsonnet-bundler` layout as `agentic-observability`. For new dashboards the assistant writes self-contained plain Jsonnet source to a session-scoped virtual `dashboard.jsonnet` file, applies compact edits to that file, and the backend compiles it with the embedded vendored libraries before saving the dashboard. If a model invents unsupported Grafonnet constructors, `fix_jsonnet` can structurally rewrite common bad `g.dashboard.new(...)`, `g.dashboard.with_panels(...)`, panel constructor, and target constructor shapes into plain dashboard Jsonnet before the slower Jsonnet exploration subagent is needed.
 
 The assistant can render, sync, and later retrieve Jsonnet-backed dashboards with:
 
-- `grafana_explore_jsonnet`
-- `grafana_list_managed_dashboards`
-- `grafana_get_managed_dashboard_source`
-- `grafana_write_jsonnet_file`
-- `grafana_edit_jsonnet_file`
-- `grafana_read_jsonnet_file`
-- `grafana_render_managed_dashboard`
-- `grafana_sync_managed_dashboard`
+- `explore_jsonnet`
+- `list_managed_dashboards`
+- `get_dashboard_source`
+- `write_jsonnet`
+- `edit_jsonnet`
+- `fix_jsonnet`
+- `read_jsonnet`
+- `render_dashboard`
+- `sync_dashboard`
 
 Synced dashboards are saved through the `dashboard.grafana.app` resource API with `grafana.app/managedBy=plugin`, `grafana.app/managerId=elohmeier-grafanapiapp-app`, the source checksum, and the exact Jsonnet source. The app intentionally does not set `grafana.app/managerAllowsEdits`, so normal Grafana UI edits are treated as read-only/export flows while stored Jsonnet remains the source of truth.
 
@@ -50,7 +51,7 @@ The default chat toolset does not expose raw dashboard JSON upload/delete tools,
 
 ## Subagents
 
-The chat registers `grafana_explore_metrics` and `grafana_explore_jsonnet` as high-level tools. Each starts a nested Pi agent with a narrow tool allow-list: the metrics subagent can only discover datasources, inspect Prometheus metadata, and validate PromQL; the Jsonnet subagent can only fetch stored managed-dashboard source, search/read vendored Jsonnet libraries, and render managed dashboards without saving them. Dashboard write tools stay available only to the parent assistant.
+The chat registers `explore_metrics` and `explore_jsonnet` as high-level fallback tools after the direct tools. Each starts a nested Pi agent with a narrow tool allow-list: the metrics subagent can only discover datasources, inspect Prometheus metadata, and validate PromQL; the Jsonnet subagent can only fetch stored managed-dashboard source, search/read vendored Jsonnet libraries, and render managed dashboards without saving them. Dashboard write tools stay available only to the parent assistant.
 
 ## Development
 

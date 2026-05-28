@@ -58,6 +58,13 @@ type jsonnetFileEditRequest struct {
 	Edits       []jsonnetLineEdit `json:"edits"`
 }
 
+type jsonnetFileRepairRequest struct {
+	SessionID   string `json:"sessionId"`
+	Path        string `json:"path,omitempty"`
+	BaseVersion *int   `json:"baseVersion,omitempty"`
+	Error       string `json:"error,omitempty"`
+}
+
 type jsonnetLineEdit struct {
 	StartLine    int     `json:"startLine"`
 	EndLine      int     `json:"endLine"`
@@ -78,6 +85,7 @@ type jsonnetFileResponse struct {
 	FirstChangedLine     int                   `json:"firstChangedLine,omitempty"`
 	TotalLines           int                   `json:"totalLines,omitempty"`
 	Lines                []jsonnetFileLine     `json:"lines,omitempty"`
+	Repairs              []string              `json:"repairs,omitempty"`
 }
 
 type jsonnetChangedRange struct {
@@ -138,6 +146,30 @@ func (a *App) handleJsonnetFileEdit(w http.ResponseWriter, req *http.Request) {
 	}
 
 	response, err := a.jsonnetFiles.edit(body)
+	if err != nil {
+		status := http.StatusBadRequest
+		if errors.Is(err, errVirtualJsonnetConflict) || errors.Is(err, errVirtualJsonnetNotFound) {
+			status = http.StatusConflict
+		}
+		writeJSONError(w, status, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, response)
+}
+
+func (a *App) handleJsonnetFileRepair(w http.ResponseWriter, req *http.Request) {
+	if req.Method != http.MethodPost {
+		writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+
+	var body jsonnetFileRepairRequest
+	if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
+		writeJSONError(w, http.StatusBadRequest, fmt.Sprintf("invalid request body: %s", err))
+		return
+	}
+
+	response, err := a.jsonnetFiles.repair(body)
 	if err != nil {
 		status := http.StatusBadRequest
 		if errors.Is(err, errVirtualJsonnetConflict) || errors.Is(err, errVirtualJsonnetNotFound) {
@@ -302,6 +334,57 @@ func (s *virtualJsonnetFileStore) edit(request jsonnetFileEditRequest) (jsonnetF
 	s.files[key] = file
 
 	return jsonnetFileMutationResponse(file, changedRanges, jsonnetEditDiff(oldLines, edits)), nil
+}
+
+func (s *virtualJsonnetFileStore) repair(request jsonnetFileRepairRequest) (jsonnetFileResponse, error) {
+	sessionID, filePath, err := normalizeJsonnetFileRef(jsonnetFileReference{SessionID: request.SessionID, Path: request.Path})
+	if err != nil {
+		return jsonnetFileResponse{}, err
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	key := virtualJsonnetFileKey(sessionID, filePath)
+	file, ok := s.files[key]
+	if !ok {
+		return jsonnetFileResponse{}, fmt.Errorf("%w: %s", errVirtualJsonnetNotFound, filePath)
+	}
+	if request.BaseVersion != nil && *request.BaseVersion != file.Version {
+		return jsonnetFileResponse{}, fmt.Errorf("%w: %s is version %d, request used baseVersion %d", errVirtualJsonnetConflict, filePath, file.Version, *request.BaseVersion)
+	}
+
+	oldLines, _ := splitJsonnetLines(file.Content)
+	newContent, repairs, err := repairJsonnetDashboardSource(file.Content)
+	if err != nil {
+		return jsonnetFileResponse{}, err
+	}
+	if newContent == file.Content {
+		return jsonnetFileResponse{}, errors.New("no supported Jsonnet repair was found")
+	}
+	if len([]byte(newContent)) > maxManagedDashboardJsonnetSourceBytes {
+		return jsonnetFileResponse{}, fmt.Errorf("repaired content is too large: %d bytes exceeds %d bytes", len([]byte(newContent)), maxManagedDashboardJsonnetSourceBytes)
+	}
+	if _, err := renderJsonnetSource(newContent); err != nil {
+		if sourceWindow := sourceWindowForJsonnetError(newContent, err); sourceWindow != "" {
+			return jsonnetFileResponse{}, fmt.Errorf("repaired Jsonnet did not compile: %w\n%s", err, sourceWindow)
+		}
+		return jsonnetFileResponse{}, fmt.Errorf("repaired Jsonnet did not compile: %w", err)
+	}
+
+	newLines, _ := splitJsonnetLines(newContent)
+	file.Content = newContent
+	file.Version++
+	file.UpdatedAt = time.Now().UTC()
+	s.files[key] = file
+
+	response := jsonnetFileMutationResponse(file, []jsonnetChangedRange{{
+		StartLine: 1,
+		EndLine:   len(oldLines),
+		NewLines:  len(newLines),
+	}}, jsonnetRepairDiffSummary(repairs))
+	response.Repairs = repairs
+	return response, nil
 }
 
 func (s *virtualJsonnetFileStore) get(reference jsonnetFileReference) (virtualJsonnetFile, error) {
@@ -484,6 +567,13 @@ func jsonnetEditDiffHeader(oldLineCount int, edit normalizedJsonnetLineEdit) str
 		return fmt.Sprintf("@@ insert before line %d @@\n", startLine)
 	}
 	return fmt.Sprintf("@@ lines %d-%d @@\n", startLine, edit.end)
+}
+
+func jsonnetRepairDiffSummary(repairs []string) string {
+	if len(repairs) == 0 {
+		return "@@ structural repair @@"
+	}
+	return "@@ structural repair @@\n" + strings.Join(repairs, "\n")
 }
 
 func sourceWindowForJsonnetError(source string, err error) string {
