@@ -2,6 +2,14 @@ import React, { useMemo } from 'react';
 import { css, cx, keyframes } from '@emotion/css';
 import type { AgentToolResult } from '@earendil-works/pi-agent-core';
 import { renderMarkdown, type GrafanaTheme2 } from '@grafana/data';
+import {
+  EmbeddedScene,
+  PanelBuilders,
+  SceneFlexItem,
+  SceneFlexLayout,
+  SceneQueryRunner,
+  SceneTimeRange,
+} from '@grafana/scenes';
 import { Badge, Spinner, useStyles2 } from '@grafana/ui';
 import type { SubagentRunDetails, SubagentToolCall } from './tools';
 import {
@@ -378,7 +386,12 @@ function renderStructuredToolResult(
 
   const prometheusQuery = asPrometheusQuerySummary(toolName, content);
   if (prometheusQuery) {
-    return <PrometheusQueryResultView result={prometheusQuery} />;
+    return (
+      <PrometheusQueryResultView
+        result={prometheusQuery}
+        visualization={asPrometheusTimeseriesVisualization(toolName, details)}
+      />
+    );
   }
 
   const rawPrometheusQuery = asRawPrometheusQuery(toolName, details);
@@ -615,7 +628,29 @@ type SummaryPointView = {
   value: number | null;
 };
 
-function PrometheusQueryResultView({ result }: { result: PrometheusQuerySummaryView }) {
+type PrometheusTimeseriesVisualization = {
+  kind: 'prometheus-timeseries';
+  datasourceUid: string;
+  query: string;
+  interval: string;
+  maxDataPoints?: number;
+  range: {
+    from: string;
+    to: string;
+    raw?: {
+      from?: string;
+      to?: string;
+    };
+  };
+};
+
+function PrometheusQueryResultView({
+  result,
+  visualization,
+}: {
+  result: PrometheusQuerySummaryView;
+  visualization?: PrometheusTimeseriesVisualization;
+}) {
   const styles = useStyles2(getToolStyles);
   return (
     <div className={styles.structuredResult}>
@@ -634,6 +669,7 @@ function PrometheusQueryResultView({ result }: { result: PrometheusQuerySummaryV
         ]}
       />
       <pre className={styles.queryBlock}>{result.query}</pre>
+      {visualization && <PrometheusTimeseriesPanelView visualization={visualization} />}
       {result.notices.length > 0 && (
         <div className={styles.noticeList}>
           {result.notices.map((notice, index) => (
@@ -688,6 +724,83 @@ function PrometheusQueryResultView({ result }: { result: PrometheusQuerySummaryV
       </div>
     </div>
   );
+}
+
+function PrometheusTimeseriesPanelView({ visualization }: { visualization: PrometheusTimeseriesVisualization }) {
+  const styles = useStyles2(getToolStyles);
+  const { datasourceUid, query, interval, maxDataPoints, range } = visualization;
+  const scene = useMemo(
+    () =>
+      createPrometheusTimeseriesScene({
+        kind: 'prometheus-timeseries',
+        datasourceUid,
+        query,
+        interval,
+        maxDataPoints,
+        range: {
+          from: range.from,
+          to: range.to,
+        },
+      }),
+    [datasourceUid, interval, maxDataPoints, query, range.from, range.to]
+  );
+  const SceneComponent = scene.Component;
+
+  return (
+    <div className={styles.timeseriesPanel} data-testid="prometheus-timeseries-panel">
+      <SceneComponent model={scene} />
+    </div>
+  );
+}
+
+function createPrometheusTimeseriesScene(visualization: PrometheusTimeseriesVisualization) {
+  const timeRange = new SceneTimeRange({
+    from: visualization.range.from,
+    to: visualization.range.to,
+    timeZone: 'browser',
+  });
+  const datasource = {
+    type: 'prometheus',
+    uid: visualization.datasourceUid,
+  };
+  const queryRunner = new SceneQueryRunner({
+    datasource,
+    minInterval: visualization.interval,
+    maxDataPoints: visualization.maxDataPoints ?? 1200,
+    requestIdPrefix: 'pi-query-render-',
+    queries: [
+      {
+        refId: 'A',
+        datasource,
+        expr: visualization.query,
+        range: true,
+        instant: false,
+        interval: visualization.interval,
+        editorMode: 'code',
+      },
+    ],
+  });
+  const panel = PanelBuilders.timeseries()
+    .setTitle('Query result')
+    .setDescription(visualization.query)
+    .setColor({ mode: 'palette-classic' })
+    .setNoValue('-')
+    .setData(queryRunner)
+    .build();
+
+  return new EmbeddedScene({
+    $timeRange: timeRange,
+    body: new SceneFlexLayout({
+      direction: 'column',
+      children: [
+        new SceneFlexItem({
+          body: panel,
+          minHeight: 300,
+          ySizing: 'fill',
+        }),
+      ],
+    }),
+  });
 }
 
 type RawPrometheusQueryResult = {
@@ -1447,6 +1560,51 @@ function asPrometheusQuerySummary(
   };
 }
 
+function asPrometheusTimeseriesVisualization(
+  toolName: string | undefined,
+  details: unknown
+): PrometheusTimeseriesVisualization | undefined {
+  if (toolName !== 'query_prometheus' || !isRecord(details)) {
+    return undefined;
+  }
+
+  const visualization = recordField(details, 'visualization');
+  if (stringField(visualization, 'kind') !== 'prometheus-timeseries') {
+    return undefined;
+  }
+
+  const datasourceUid = stringField(visualization, 'datasourceUid');
+  const query = stringField(visualization, 'query');
+  const interval = stringField(visualization, 'interval');
+  const queryType = stringField(visualization, 'queryType');
+  const range = recordField(visualization, 'range');
+  const rawRange = recordField(range, 'raw');
+  const from = stringField(range, 'from');
+  const to = stringField(range, 'to');
+
+  if (!datasourceUid || !query || !interval || queryType !== 'range' || !from || !to) {
+    return undefined;
+  }
+
+  return {
+    kind: 'prometheus-timeseries',
+    datasourceUid,
+    query,
+    interval,
+    maxDataPoints: numberField(visualization, 'maxDataPoints'),
+    range: {
+      from,
+      to,
+      raw: rawRange
+        ? {
+            from: stringField(rawRange, 'from'),
+            to: stringField(rawRange, 'to'),
+          }
+        : undefined,
+    },
+  };
+}
+
 function asSeriesSummary(record: Record<string, unknown>): SeriesSummaryView | undefined {
   const name = stringField(record, 'name');
   if (!name) {
@@ -2189,6 +2347,15 @@ const getToolStyles = (theme: GrafanaTheme2) => ({
     background: theme.colors.background.primary,
     fontFamily: theme.typography.fontFamilyMonospace,
     fontSize: theme.typography.bodySmall.fontSize,
+  }),
+  timeseriesPanel: css({
+    minHeight: 320,
+    height: 360,
+    maxWidth: '100%',
+    overflow: 'hidden',
+    border: `1px solid ${theme.colors.border.weak}`,
+    borderRadius: theme.shape.radius.default,
+    background: theme.colors.background.primary,
   }),
   chipList: css({
     display: 'flex',

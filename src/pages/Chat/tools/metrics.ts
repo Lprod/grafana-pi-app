@@ -265,6 +265,7 @@ function makeQueryPrometheusTool(toolConfig: GrafanaToolConfig): AgentTool {
           totalSeries: summary.totalSeries,
           truncatedSeries: summary.truncatedSeries,
           summarized: true,
+          ...prometheusVisualizationDetails(summary),
         });
       }
 
@@ -431,7 +432,7 @@ async function runPrometheusQuery(
     requestId: `pi-query-${Date.now()}`,
     interval,
     intervalMs,
-    maxDataPoints: 1200,
+    maxDataPoints: PROMETHEUS_QUERY_MAX_DATA_POINTS,
     range: timeRange,
     rangeRaw: timeRange.raw,
     scopedVars: {},
@@ -527,6 +528,7 @@ type SummaryPoint = {
 
 const MAX_SERIES_SUMMARIES = 8;
 const MAX_BATCH_SERIES_SUMMARIES = 3;
+const PROMETHEUS_QUERY_MAX_DATA_POINTS = 1200;
 
 function summarizePrometheusQuery(options: {
   datasourceUid: string;
@@ -563,6 +565,31 @@ function summarizePrometheusQuery(options: {
     notices: collectNotices(options.frames),
     executedQueryStrings: collectExecutedQueryStrings(options.frames),
     series: allSeries.slice(0, MAX_SERIES_SUMMARIES),
+  };
+}
+
+function prometheusVisualizationDetails(summary: PrometheusQuerySummary) {
+  if (summary.queryType !== 'range') {
+    return {};
+  }
+
+  return {
+    visualization: {
+      kind: 'prometheus-timeseries',
+      datasourceUid: summary.datasourceUid,
+      query: summary.query,
+      queryType: summary.queryType,
+      interval: summary.interval,
+      maxDataPoints: PROMETHEUS_QUERY_MAX_DATA_POINTS,
+      range: {
+        from: summary.range.from,
+        to: summary.range.to,
+        raw: {
+          from: String(summary.range.raw.from),
+          to: String(summary.range.raw.to),
+        },
+      },
+    },
   };
 }
 
