@@ -4,6 +4,14 @@ import type { AgentToolResult } from '@earendil-works/pi-agent-core';
 import { renderMarkdown, type GrafanaTheme2 } from '@grafana/data';
 import { Badge, Spinner, useStyles2 } from '@grafana/ui';
 import type { SubagentRunDetails, SubagentToolCall } from './tools';
+import {
+  highlightJsonnetLines,
+  partialJsonStringField,
+  shouldHighlightJsonnet,
+  utf8ByteLength,
+  type CodeToken,
+  type CodeTokenKind,
+} from './jsonnetRendering';
 
 export type ToolRunView = {
   id: string;
@@ -135,7 +143,9 @@ export function ToolActivityPanel({ runs }: { runs: ToolRunView[] }) {
               <SubagentDetailsView details={run.partialResult?.details as SubagentRunDetails} compact />
             ) : (
               <>
-                <pre>{formatJson(run.args)}</pre>
+                {renderStructuredToolCall(run.name, run.args, undefined, run.status === 'running') ?? (
+                  <pre className={styles.toolCallJson}>{formatJson(run.args)}</pre>
+                )}
                 {run.partialResult && <ContentBlocks content={run.partialResult.content} isStreaming />}
               </>
             )}
@@ -170,15 +180,114 @@ function ToolCallBlock({
   isStreaming?: boolean;
 }) {
   const styles = useStyles2(getToolStyles);
+  const structuredToolCall = renderStructuredToolCall(name, args, partialJson, Boolean(isStreaming));
   return (
     <div className={styles.toolCall}>
       <div className={styles.toolCallHeader}>
         <Badge text={isStreaming ? 'preparing' : 'tool call'} color="blue" />
         <strong>{name}</strong>
       </div>
-      <pre>{partialJson && isStreaming ? partialJson : formatJson(args)}</pre>
+      {structuredToolCall ?? (
+        <pre className={styles.toolCallJson}>{partialJson && isStreaming ? partialJson : formatJson(args)}</pre>
+      )}
     </div>
   );
+}
+
+function renderStructuredToolCall(
+  name: string,
+  args: unknown,
+  partialJson: string | undefined,
+  isStreaming: boolean
+): React.ReactNode | undefined {
+  const jsonnetWrite = asJsonnetWriteToolCall(name, args, partialJson, isStreaming);
+  if (jsonnetWrite) {
+    return <JsonnetWriteToolCallView call={jsonnetWrite} />;
+  }
+
+  return undefined;
+}
+
+type JsonnetWriteToolCall = {
+  path: string;
+  content: string;
+  partial: boolean;
+};
+
+const DEFAULT_TOOL_CALL_JSONNET_PATH = 'dashboard.jsonnet';
+
+function JsonnetWriteToolCallView({ call }: { call: JsonnetWriteToolCall }) {
+  const styles = useStyles2(getToolStyles);
+  const lines = call.content ? textToCodeLines(call.content) : [];
+  return (
+    <div className={styles.structuredResult}>
+      <div className={styles.resultSummary}>
+        {call.partial ? 'Writing' : 'Created'} <code>{call.path}</code>
+      </div>
+      <ResultMetaGrid
+        items={[
+          { label: 'Path', value: <code>{call.path}</code> },
+          { label: 'Lines', value: lines.length > 0 ? formatCount(lines.length) : undefined },
+          { label: 'Source', value: formatBytes(utf8ByteLength(call.content)) },
+          { label: 'Status', value: call.partial ? 'streaming' : 'ready' },
+        ]}
+      />
+      {lines.length > 0 ? <CodeViewer lines={lines} /> : <div className={styles.emptyState}>Waiting for source.</div>}
+    </div>
+  );
+}
+
+function asJsonnetWriteToolCall(
+  name: string,
+  args: unknown,
+  partialJson: string | undefined,
+  isStreaming: boolean
+): JsonnetWriteToolCall | undefined {
+  if (name !== 'write_jsonnet' && name !== 'grafana_write_jsonnet_file') {
+    return undefined;
+  }
+
+  const partial = partialJson ? jsonnetWriteToolCallFromPartialJson(partialJson) : undefined;
+  const complete = jsonnetWriteToolCallFromArgs(args);
+  if (partial && (isStreaming || !complete)) {
+    return partial;
+  }
+  return complete;
+}
+
+function jsonnetWriteToolCallFromArgs(args: unknown): JsonnetWriteToolCall | undefined {
+  if (!isRecord(args)) {
+    return undefined;
+  }
+
+  const content = stringField(args, 'content') ?? stringField(args, 'dashboard_jsonnet');
+  if (content === undefined) {
+    return undefined;
+  }
+
+  return {
+    path: stringField(args, 'path') ?? DEFAULT_TOOL_CALL_JSONNET_PATH,
+    content,
+    partial: false,
+  };
+}
+
+function jsonnetWriteToolCallFromPartialJson(partialJson: string): JsonnetWriteToolCall | undefined {
+  try {
+    return jsonnetWriteToolCallFromArgs(JSON.parse(partialJson));
+  } catch {
+    const content =
+      partialJsonStringField(partialJson, 'content') ?? partialJsonStringField(partialJson, 'dashboard_jsonnet');
+    if (content === undefined) {
+      return undefined;
+    }
+
+    return {
+      path: partialJsonStringField(partialJson, 'path') ?? DEFAULT_TOOL_CALL_JSONNET_PATH,
+      content,
+      partial: true,
+    };
+  }
 }
 
 function ToolHeader({
@@ -1087,18 +1196,66 @@ function ExternalLink({ href, children }: { href: string; children: React.ReactN
   );
 }
 
-function CodeViewer({ lines }: { lines: CodeLine[] }) {
+function CodeViewer({ lines, language = 'jsonnet' }: { lines: CodeLine[]; language?: 'jsonnet' | 'plain' }) {
   const styles = useStyles2(getToolStyles);
+  const highlighted = useMemo(
+    () => (language === 'jsonnet' && shouldHighlightJsonnet(lines) ? highlightJsonnetLines(lines) : undefined),
+    [language, lines]
+  );
   return (
     <pre className={styles.codeViewer}>
-      {lines.map((line) => (
+      {lines.map((line, index) => (
         <div className={styles.codeLine} key={line.line}>
           <span className={styles.lineNumber}>{line.line}</span>
-          <span className={styles.codeText}>{line.text || ' '}</span>
+          <span className={styles.codeText}>
+            <CodeLineText text={line.text} tokens={highlighted?.[index]} />
+          </span>
         </div>
       ))}
     </pre>
   );
+}
+
+function CodeLineText({ text, tokens }: { text: string; tokens?: CodeToken[] }) {
+  const styles = useStyles2(getToolStyles);
+  if (!tokens) {
+    return <>{text || ' '}</>;
+  }
+
+  return (
+    <>
+      {tokens.length > 0
+        ? tokens.map((token, index) => (
+            <span className={codeTokenClass(styles, token.kind)} key={`${index}:${token.text}`}>
+              {token.text}
+            </span>
+          ))
+        : ' '}
+    </>
+  );
+}
+
+function codeTokenClass(styles: ReturnType<typeof getToolStyles>, kind: CodeTokenKind | undefined) {
+  switch (kind) {
+    case 'comment':
+      return styles.syntaxComment;
+    case 'keyword':
+      return styles.syntaxKeyword;
+    case 'string':
+      return styles.syntaxString;
+    case 'number':
+      return styles.syntaxNumber;
+    case 'builtin':
+      return styles.syntaxBuiltin;
+    case 'key':
+      return styles.syntaxKey;
+    case 'operator':
+      return styles.syntaxOperator;
+    case 'punctuation':
+      return styles.syntaxPunctuation;
+    default:
+      return undefined;
+  }
 }
 
 function DiffViewer({ diff }: { diff: string }) {
@@ -1945,6 +2102,11 @@ const getToolStyles = (theme: GrafanaTheme2) => ({
     alignItems: 'center',
     gap: theme.spacing(1),
   }),
+  toolCallJson: css({
+    margin: 0,
+    overflow: 'auto',
+    whiteSpace: 'pre',
+  }),
   structuredResult: css({
     display: 'grid',
     gap: theme.spacing(1),
@@ -2134,6 +2296,32 @@ const getToolStyles = (theme: GrafanaTheme2) => ({
   codeText: css({
     padding: theme.spacing(0, 1),
     whiteSpace: 'pre',
+  }),
+  syntaxComment: css({
+    color: theme.colors.text.secondary,
+    fontStyle: 'italic',
+  }),
+  syntaxKeyword: css({
+    color: theme.colors.primary.text,
+    fontWeight: theme.typography.fontWeightMedium,
+  }),
+  syntaxString: css({
+    color: theme.colors.success.text,
+  }),
+  syntaxNumber: css({
+    color: theme.colors.warning.text,
+  }),
+  syntaxBuiltin: css({
+    color: theme.colors.text.link,
+  }),
+  syntaxKey: css({
+    color: theme.colors.text.link,
+  }),
+  syntaxOperator: css({
+    color: theme.colors.text.secondary,
+  }),
+  syntaxPunctuation: css({
+    color: theme.colors.text.secondary,
   }),
   diffViewer: css({
     margin: 0,
