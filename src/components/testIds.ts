@@ -9,7 +9,10 @@ export const testIds = {
   },
   chat: {
     container: 'data-testid pi-chat-container',
+    messages: 'data-testid pi-chat-messages',
     composer: 'data-testid pi-chat-composer',
+    stop: 'data-testid pi-chat-stop',
+    jumpToLatest: 'data-testid pi-chat-jump-to-latest',
     send: 'data-testid pi-chat-send',
   },
 };

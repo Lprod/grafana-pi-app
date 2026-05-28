@@ -110,8 +110,10 @@ function ChatApp() {
   const sessionsRef = useRef<SessionIndexItem[]>([]);
   const storageRef = useRef(storage);
   const messagesContainerRef = useRef<HTMLElement | null>(null);
-  const messagesEndRef = useRef<HTMLDivElement | null>(null);
-  const stickToBottomRef = useRef(true);
+  const autoScrollRef = useRef(true);
+  const lastScrollTopRef = useRef(0);
+  const touchStartYRef = useRef<number>();
+  const [isAutoScrollPaused, setIsAutoScrollPaused] = useState(false);
 
   const persistIndex = useCallback(
     async (next: SessionIndexItem[]) => {
@@ -199,7 +201,8 @@ function ChatApp() {
     titleRef.current = 'New chat';
     virtualJsonnetFilesRef.current = {};
     virtualJsonnetHydratedRef.current = {};
-    stickToBottomRef.current = true;
+    autoScrollRef.current = true;
+    setIsAutoScrollPaused(false);
     setCurrentSessionId(id);
     setCurrentTitle('New chat');
     setError(undefined);
@@ -245,18 +248,100 @@ function ChatApp() {
     };
   }, []);
 
-  useLayoutEffect(() => {
-    if (stickToBottomRef.current) {
-      messagesEndRef.current?.scrollIntoView({ block: 'end' });
-    }
-  }, [revision]);
+  const setAutoScrollEnabled = useCallback((enabled: boolean) => {
+    autoScrollRef.current = enabled;
+    setIsAutoScrollPaused((paused) => {
+      const nextPaused = !enabled;
+      return paused === nextPaused ? paused : nextPaused;
+    });
+  }, []);
 
-  const updateStickToBottom = useCallback(() => {
+  const pauseAutoScroll = useCallback(() => {
+    setAutoScrollEnabled(false);
+  }, [setAutoScrollEnabled]);
+
+  const scrollMessagesToBottom = useCallback((behavior: ScrollBehavior = 'auto') => {
     const element = messagesContainerRef.current;
-    if (element) {
-      stickToBottomRef.current = isNearBottom(element);
+    if (!element) {
+      return;
+    }
+
+    const top = Math.max(0, element.scrollHeight - element.clientHeight);
+    element.scrollTo({ top, behavior });
+    if (behavior !== 'smooth') {
+      lastScrollTopRef.current = top;
     }
   }, []);
+
+  const jumpToLatest = useCallback(() => {
+    setAutoScrollEnabled(true);
+    scrollMessagesToBottom('smooth');
+  }, [scrollMessagesToBottom, setAutoScrollEnabled]);
+
+  const updateAutoScrollFromPosition = useCallback(() => {
+    const element = messagesContainerRef.current;
+    if (!element) {
+      return;
+    }
+
+    const nextScrollTop = element.scrollTop;
+    if (isNearBottom(element)) {
+      setAutoScrollEnabled(true);
+    } else if (nextScrollTop < lastScrollTopRef.current - 1) {
+      setAutoScrollEnabled(false);
+    }
+    lastScrollTopRef.current = nextScrollTop;
+  }, [setAutoScrollEnabled]);
+
+  const handleMessagesWheel = useCallback(
+    (event: React.WheelEvent<HTMLElement>) => {
+      if (event.deltaY < 0) {
+        pauseAutoScroll();
+      }
+    },
+    [pauseAutoScroll]
+  );
+
+  const handleMessagesTouchStart = useCallback((event: React.TouchEvent<HTMLElement>) => {
+    touchStartYRef.current = event.touches[0]?.clientY;
+  }, []);
+
+  const handleMessagesTouchMove = useCallback(
+    (event: React.TouchEvent<HTMLElement>) => {
+      const touchY = event.touches[0]?.clientY;
+      if (touchY !== undefined && touchStartYRef.current !== undefined && touchY > touchStartYRef.current + 4) {
+        pauseAutoScroll();
+      }
+    },
+    [pauseAutoScroll]
+  );
+
+  const handleMessagesKeyDown = useCallback(
+    (event: React.KeyboardEvent<HTMLElement>) => {
+      if (event.key === 'Home' || event.key === 'PageUp' || event.key === 'ArrowUp') {
+        pauseAutoScroll();
+        return;
+      }
+      if (event.key === 'End') {
+        setAutoScrollEnabled(true);
+      }
+    },
+    [pauseAutoScroll, setAutoScrollEnabled]
+  );
+
+  const abortAgent = useCallback(() => {
+    agent?.abort();
+  }, [agent]);
+
+  const keepAutoScrollEnabled = useCallback(() => {
+    setAutoScrollEnabled(true);
+  }, [setAutoScrollEnabled]);
+
+  useLayoutEffect(() => {
+    if (autoScrollRef.current) {
+      scrollMessagesToBottom();
+    }
+  }, [revision, scrollMessagesToBottom]);
 
   const submitPrompt = async (event: FormEvent) => {
     event.preventDefault();
@@ -280,7 +365,7 @@ function ChatApp() {
 
     setInput('');
     setError(undefined);
-    stickToBottomRef.current = true;
+    keepAutoScrollEnabled();
     try {
       await agent.prompt(prompt);
     } catch (err) {
@@ -302,7 +387,7 @@ function ChatApp() {
     titleRef.current = stored.title;
     virtualJsonnetFilesRef.current = stored.virtualJsonnetFiles ?? {};
     virtualJsonnetHydratedRef.current = {};
-    stickToBottomRef.current = true;
+    keepAutoScrollEnabled();
     setCurrentSessionId(id);
     setCurrentTitle(stored.title);
     setError(undefined);
@@ -328,6 +413,7 @@ function ChatApp() {
     .filter((run) => run.status === 'running')
     .sort((left, right) => left.updatedAt - right.updatedAt);
   const hasLLMConfig = Boolean(jsonData.isOpenAIAPIKeySet);
+  const isStreaming = Boolean(agent?.state.isStreaming);
 
   return (
     <div className={styles.container} data-testid={testIds.chat.container}>
@@ -359,12 +445,21 @@ function ChatApp() {
         <div className={styles.toolbar}>
           <div className={styles.titleGroup}>
             <h2 className={styles.title}>{currentTitle}</h2>
-            <Badge
-              text={agent?.state.isStreaming ? 'Streaming' : 'Ready'}
-              color={agent?.state.isStreaming ? 'blue' : 'green'}
-            />
+            <Badge text={isStreaming ? 'Streaming' : 'Ready'} color={isStreaming ? 'blue' : 'green'} />
           </div>
           <div className={styles.toolbarActions}>
+            {isStreaming && (
+              <Button
+                aria-label="Abort response"
+                data-testid={testIds.chat.stop}
+                icon="pause"
+                type="button"
+                variant="secondary"
+                onClick={abortAgent}
+              >
+                Stop
+              </Button>
+            )}
             {currentSessionId && (
               <Button icon="trash-alt" variant="secondary" fill="text" onClick={() => deleteSession(currentSessionId)}>
                 Delete
@@ -384,30 +479,55 @@ function ChatApp() {
           </Alert>
         )}
 
-        <section className={styles.messages} ref={messagesContainerRef} onScroll={updateStickToBottom}>
-          {visibleMessages.length === 0 ? (
-            <EmptyState
-              variant="call-to-action"
-              message="Ask about metrics, PromQL, or dashboards"
-              button={
-                <Button onClick={() => setInput('Create a dashboard for HTTP request rate and errors')}>
-                  Use example
-                </Button>
-              }
-            />
-          ) : (
-            visibleMessages.map(({ message, isStreaming }, index) => (
-              <MessageView key={messageKey(message, index, isStreaming)} message={message} isStreaming={isStreaming} />
-            ))
+        <div className={styles.messagesFrame}>
+          <section
+            aria-label="Chat messages"
+            className={styles.messages}
+            data-testid={testIds.chat.messages}
+            ref={messagesContainerRef}
+            tabIndex={0}
+            onKeyDown={handleMessagesKeyDown}
+            onScroll={updateAutoScrollFromPosition}
+            onTouchMove={handleMessagesTouchMove}
+            onTouchStart={handleMessagesTouchStart}
+            onWheel={handleMessagesWheel}
+          >
+            {visibleMessages.length === 0 ? (
+              <EmptyState
+                variant="call-to-action"
+                message="Ask about metrics, PromQL, or dashboards"
+                button={
+                  <Button onClick={() => setInput('Create a dashboard for HTTP request rate and errors')}>
+                    Use example
+                  </Button>
+                }
+              />
+            ) : (
+              visibleMessages.map(({ message, isStreaming }, index) => (
+                <MessageView key={messageKey(message, index, isStreaming)} message={message} isStreaming={isStreaming} />
+              ))
+            )}
+            <ToolActivityPanel runs={activeToolRuns} />
+            {isStreaming && (
+              <div className={styles.streaming} role="status" aria-live="polite">
+                <Spinner /> Working
+              </div>
+            )}
+          </section>
+          {isAutoScrollPaused && visibleMessages.length > 0 && (
+            <Button
+              className={styles.jumpToLatest}
+              data-testid={testIds.chat.jumpToLatest}
+              icon="angle-down"
+              size="sm"
+              type="button"
+              variant="secondary"
+              onClick={jumpToLatest}
+            >
+              Jump to latest
+            </Button>
           )}
-          <ToolActivityPanel runs={activeToolRuns} />
-          {agent?.state.isStreaming && (
-            <div className={styles.streaming} role="status" aria-live="polite">
-              <Spinner /> Working
-            </div>
-          )}
-          <div ref={messagesEndRef} />
-        </section>
+        </div>
 
         <form className={styles.composer} onSubmit={submitPrompt}>
           <TextArea
@@ -424,8 +544,8 @@ function ChatApp() {
             }}
           />
           <div className={styles.composerActions}>
-            {agent?.state.isStreaming && (
-              <Button icon="pause" type="button" variant="secondary" onClick={() => agent.abort()}>
+            {isStreaming && (
+              <Button icon="pause" type="button" variant="secondary" onClick={abortAgent}>
                 Stop
               </Button>
             )}
@@ -799,14 +919,20 @@ const getStyles = (theme: GrafanaTheme2) => ({
   container: css({
     display: 'grid',
     gridTemplateColumns: '280px minmax(0, 1fr)',
-    minHeight: 'calc(100vh - 190px)',
+    gridTemplateRows: 'minmax(0, 1fr)',
+    height: 'calc(100vh - 190px)',
+    minHeight: 420,
+    overflow: 'hidden',
     border: `1px solid ${theme.colors.border.weak}`,
     background: theme.colors.background.primary,
     '@media (max-width: 900px)': {
       gridTemplateColumns: '1fr',
+      gridTemplateRows: 'auto minmax(0, 1fr)',
     },
   }),
   sidebar: css({
+    display: 'grid',
+    gridTemplateRows: 'auto minmax(0, 1fr)',
     borderRight: `1px solid ${theme.colors.border.weak}`,
     background: theme.colors.background.secondary,
     minHeight: 0,
@@ -835,6 +961,7 @@ const getStyles = (theme: GrafanaTheme2) => ({
     display: 'flex',
     flexDirection: 'column',
     gap: theme.spacing(1),
+    minHeight: 0,
     overflow: 'auto',
   }),
   sessionButton: css({
@@ -867,10 +994,11 @@ const getStyles = (theme: GrafanaTheme2) => ({
     fontSize: theme.typography.bodySmall.fontSize,
   }),
   main: css({
-    display: 'grid',
-    gridTemplateRows: 'auto auto minmax(320px, 1fr) auto',
+    display: 'flex',
+    flexDirection: 'column',
     minWidth: 0,
     minHeight: 0,
+    overflow: 'hidden',
   }),
   toolbar: css({
     display: 'flex',
@@ -901,13 +1029,25 @@ const getStyles = (theme: GrafanaTheme2) => ({
     gap: theme.spacing(1),
     flexWrap: 'wrap',
   }),
+  messagesFrame: css({
+    position: 'relative',
+    display: 'grid',
+    flex: '1 1 auto',
+    minHeight: 0,
+  }),
   messages: css({
+    height: '100%',
     minHeight: 0,
     overflow: 'auto',
-    padding: theme.spacing(2),
+    overscrollBehavior: 'contain',
+    padding: theme.spacing(2, 2, 7),
     display: 'flex',
     flexDirection: 'column',
     gap: theme.spacing(1.5),
+    outline: 'none',
+    '&:focus-visible': {
+      boxShadow: `inset 0 0 0 2px ${theme.colors.primary.border}`,
+    },
   }),
   message: css({
     maxWidth: 980,
@@ -968,6 +1108,13 @@ const getStyles = (theme: GrafanaTheme2) => ({
     alignItems: 'center',
     gap: theme.spacing(1),
     color: theme.colors.text.secondary,
+  }),
+  jumpToLatest: css({
+    position: 'absolute',
+    right: theme.spacing(2),
+    bottom: theme.spacing(2),
+    zIndex: 1,
+    boxShadow: theme.shadows.z2,
   }),
   composer: css({
     display: 'grid',
