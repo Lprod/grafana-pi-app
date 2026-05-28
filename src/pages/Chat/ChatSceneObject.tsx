@@ -1,16 +1,8 @@
-import React, { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { FormEvent, memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { css, cx } from '@emotion/css';
 import { Agent, type AgentEvent, type AgentMessage, type StreamFn, streamProxy } from '@earendil-works/pi-agent-core';
 import { SceneComponentProps, SceneObjectBase, SceneObjectState } from '@grafana/scenes';
-import {
-  Alert,
-  Badge,
-  Button,
-  EmptyState,
-  Spinner,
-  TextArea,
-  useStyles2,
-} from '@grafana/ui';
+import { Alert, Badge, Button, EmptyState, Spinner, TextArea, useStyles2 } from '@grafana/ui';
 import { usePluginUserStorage } from '@grafana/runtime';
 import type { GrafanaTheme2 } from '@grafana/data';
 import { PLUGIN_ID } from '../../constants';
@@ -65,9 +57,12 @@ function ChatApp() {
       }),
     []
   );
-  const tools = useMemo(() => createGrafanaTools({ ...jsonData, runtime: { model: llmModel, streamFn } }), [jsonData, llmModel, streamFn]);
+  const tools = useMemo(
+    () => createGrafanaTools({ ...jsonData, runtime: { model: llmModel, streamFn } }),
+    [jsonData, llmModel, streamFn]
+  );
   const [agent, setAgent] = useState<Agent>();
-  const [revision, setRevision] = useState(0);
+  const { revision, flushRevision, scheduleRevision } = useFrameRevision();
   const [input, setInput] = useState('');
   const [sessions, setSessions] = useState<SessionIndexItem[]>([]);
   const [currentSessionId, setCurrentSessionId] = useState<string>();
@@ -78,8 +73,10 @@ function ChatApp() {
   const sessionIdRef = useRef<string>();
   const titleRef = useRef('New chat');
   const sessionsRef = useRef<SessionIndexItem[]>([]);
-  const initializedRef = useRef(false);
+  const storageRef = useRef(storage);
+  const messagesContainerRef = useRef<HTMLElement | null>(null);
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
+  const stickToBottomRef = useRef(true);
 
   const persistIndex = useCallback(
     async (next: SessionIndexItem[]) => {
@@ -92,7 +89,10 @@ function ChatApp() {
 
   const saveSession = useCallback(
     async (id: string, title: string, messages: AgentMessage[]) => {
-      if (!messages.some((message) => message.role === 'user') && !messages.some((message) => message.role === 'assistant')) {
+      if (
+        !messages.some((message) => message.role === 'user') &&
+        !messages.some((message) => message.role === 'assistant')
+      ) {
         return;
       }
 
@@ -130,7 +130,11 @@ function ChatApp() {
       });
 
       unsubscribeRef.current = nextAgent.subscribe((event) => {
-        setRevision((value) => value + 1);
+        if (shouldBatchRevision(event)) {
+          scheduleRevision();
+        } else {
+          flushRevision();
+        }
         setToolRuns((value) => reduceToolRuns(value, event));
         if (event.type === 'agent_end') {
           const sessionId = sessionIdRef.current;
@@ -141,16 +145,17 @@ function ChatApp() {
       });
 
       setAgent(nextAgent);
-      setRevision((value) => value + 1);
+      flushRevision();
       return nextAgent;
     },
-    [llmModel, saveSession, streamFn, tools]
+    [flushRevision, llmModel, saveSession, scheduleRevision, streamFn, tools]
   );
 
   const startNewSession = useCallback(() => {
     const id = createSessionId();
     sessionIdRef.current = id;
     titleRef.current = 'New chat';
+    stickToBottomRef.current = true;
     setCurrentSessionId(id);
     setCurrentTitle('New chat');
     setError(undefined);
@@ -158,38 +163,56 @@ function ChatApp() {
     buildAgent([]);
   }, [buildAgent]);
 
+  const startNewSessionRef = useRef(startNewSession);
+
   useEffect(() => {
-    if (initializedRef.current) {
-      return undefined;
-    }
-    initializedRef.current = true;
+    storageRef.current = storage;
+  }, [storage]);
+
+  useEffect(() => {
+    startNewSessionRef.current = startNewSession;
+  }, [startNewSession]);
+
+  useEffect(() => {
     let mounted = true;
 
     async function loadIndex() {
-      const raw = await storage.getItem(SESSION_INDEX_KEY);
+      const raw = await storageRef.current.getItem(SESSION_INDEX_KEY);
       const parsed = raw ? (JSON.parse(raw) as SessionIndexItem[]) : [];
       if (!mounted) {
         return;
       }
       sessionsRef.current = parsed;
       setSessions(parsed);
-      startNewSession();
+      startNewSessionRef.current();
     }
 
     loadIndex().catch((err) => {
+      if (!mounted) {
+        return;
+      }
       setError(err instanceof Error ? err.message : String(err));
-      startNewSession();
+      startNewSessionRef.current();
     });
 
     return () => {
       mounted = false;
       unsubscribeRef.current?.();
     };
-  }, [startNewSession, storage]);
+  }, []);
 
-  useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ block: 'end' });
+  useLayoutEffect(() => {
+    if (stickToBottomRef.current) {
+      messagesEndRef.current?.scrollIntoView({ block: 'end' });
+    }
   }, [revision]);
+
+  const updateStickToBottom = useCallback(() => {
+    const element = messagesContainerRef.current;
+    if (element) {
+      stickToBottomRef.current = isNearBottom(element);
+    }
+  }, []);
 
   const submitPrompt = async (event: FormEvent) => {
     event.preventDefault();
@@ -213,12 +236,13 @@ function ChatApp() {
 
     setInput('');
     setError(undefined);
+    stickToBottomRef.current = true;
     try {
       await agent.prompt(prompt);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
-      setRevision((value) => value + 1);
+      flushRevision();
     }
   };
 
@@ -232,6 +256,7 @@ function ChatApp() {
     const stored = JSON.parse(raw) as StoredSession;
     sessionIdRef.current = id;
     titleRef.current = stored.title;
+    stickToBottomRef.current = true;
     setCurrentSessionId(id);
     setCurrentTitle(stored.title);
     setError(undefined);
@@ -248,7 +273,10 @@ function ChatApp() {
   };
 
   const visibleMessages = agent
-    ? [...agent.state.messages, ...(agent.state.streamingMessage ? [agent.state.streamingMessage] : [])]
+    ? [
+        ...agent.state.messages.map((message) => ({ message, isStreaming: false })),
+        ...(agent.state.streamingMessage ? [{ message: agent.state.streamingMessage, isStreaming: true }] : []),
+      ]
     : [];
   const activeToolRuns = Object.values(toolRuns)
     .filter((run) => run.status === 'running')
@@ -285,7 +313,10 @@ function ChatApp() {
         <div className={styles.toolbar}>
           <div className={styles.titleGroup}>
             <h2 className={styles.title}>{currentTitle}</h2>
-            <Badge text={agent?.state.isStreaming ? 'Streaming' : 'Ready'} color={agent?.state.isStreaming ? 'blue' : 'green'} />
+            <Badge
+              text={agent?.state.isStreaming ? 'Streaming' : 'Ready'}
+              color={agent?.state.isStreaming ? 'blue' : 'green'}
+            />
           </div>
           <div className={styles.toolbarActions}>
             {currentSessionId && (
@@ -307,19 +338,25 @@ function ChatApp() {
           </Alert>
         )}
 
-        <section className={styles.messages} aria-live="polite">
+        <section className={styles.messages} ref={messagesContainerRef} onScroll={updateStickToBottom}>
           {visibleMessages.length === 0 ? (
             <EmptyState
               variant="call-to-action"
               message="Ask about metrics, PromQL, or dashboards"
-              button={<Button onClick={() => setInput('Create a dashboard for HTTP request rate and errors')}>Use example</Button>}
+              button={
+                <Button onClick={() => setInput('Create a dashboard for HTTP request rate and errors')}>
+                  Use example
+                </Button>
+              }
             />
           ) : (
-            visibleMessages.map((message, index) => <MessageView key={`${message.role}-${index}`} message={message} />)
+            visibleMessages.map(({ message, isStreaming }, index) => (
+              <MessageView key={messageKey(message, index, isStreaming)} message={message} isStreaming={isStreaming} />
+            ))
           )}
           <ToolActivityPanel runs={activeToolRuns} />
           {agent?.state.isStreaming && (
-            <div className={styles.streaming}>
+            <div className={styles.streaming} role="status" aria-live="polite">
               <Spinner /> Working
             </div>
           )}
@@ -340,37 +377,57 @@ function ChatApp() {
               }
             }}
           />
-          <Button
-            data-testid={testIds.chat.send}
-            icon={agent?.state.isStreaming ? 'pause' : 'message'}
-            type="submit"
-            disabled={!agent || !input.trim() || agent.state.isStreaming || !hasLLMConfig}
-          >
-            Send
-          </Button>
+          <div className={styles.composerActions}>
+            {agent?.state.isStreaming && (
+              <Button icon="pause" type="button" variant="secondary" onClick={() => agent.abort()}>
+                Stop
+              </Button>
+            )}
+            <Button
+              data-testid={testIds.chat.send}
+              icon="message"
+              type="submit"
+              disabled={!agent || !input.trim() || agent.state.isStreaming || !hasLLMConfig}
+            >
+              Send
+            </Button>
+          </div>
         </form>
       </main>
     </div>
   );
 }
 
-function MessageView({ message }: { message: AgentMessage }) {
+const MessageView = memo(function MessageView({
+  message,
+  isStreaming,
+}: {
+  message: AgentMessage;
+  isStreaming?: boolean;
+}) {
   const styles = useStyles2(getStyles);
   const roleLabel = message.role === 'toolResult' ? `tool: ${message.toolName}` : message.role;
   const isUser = message.role === 'user';
   const isTool = message.role === 'toolResult';
 
   return (
-    <article className={cx(styles.message, isUser && styles.messageUser, isTool && styles.messageTool)}>
+    <article
+      className={cx(
+        styles.message,
+        isUser && styles.messageUser,
+        isTool && styles.messageTool,
+        isStreaming && styles.messageStreaming
+      )}
+    >
       <div className={styles.messageHeader}>{roleLabel}</div>
-      <div className={styles.messageBody}>{renderMessageContent(message)}</div>
+      <div className={styles.messageBody}>{renderMessageContent(message, Boolean(isStreaming))}</div>
     </article>
   );
-}
+});
 
-function renderMessageContent(message: AgentMessage) {
+function renderMessageContent(message: AgentMessage, isStreaming: boolean) {
   if (message.role === 'user') {
-    return <ContentBlocks content={message.content} />;
+    return <ContentBlocks content={message.content} markdown={false} />;
   }
   if (message.role === 'assistant') {
     const errorView = formatAssistantError(message.errorMessage, message.stopReason);
@@ -378,13 +435,28 @@ function renderMessageContent(message: AgentMessage) {
       return <AssistantErrorNotice error={errorView} />;
     }
 
-    return <ContentBlocks content={message.content} />;
+    return <ContentBlocks content={message.content} isStreaming={isStreaming} />;
   }
   if (message.role === 'toolResult') {
-    return <ToolResultMessageBody toolName={message.toolName} content={message.content} details={message.details} isError={message.isError} />;
+    return (
+      <ToolResultMessageBody
+        toolName={message.toolName}
+        content={message.content}
+        details={message.details}
+        isError={message.isError}
+      />
+    );
   }
 
   return <pre>{JSON.stringify(message, null, 2)}</pre>;
+}
+
+function messageKey(message: AgentMessage, index: number, isStreaming: boolean) {
+  const timestamp =
+    typeof (message as { timestamp?: unknown }).timestamp === 'number'
+      ? (message as { timestamp: number }).timestamp
+      : 'untimed';
+  return `${message.role}-${timestamp}-${index}${isStreaming ? '-streaming' : ''}`;
 }
 
 function AssistantErrorNotice({ error }: { error: AssistantErrorView }) {
@@ -472,6 +544,69 @@ function reduceToolRuns(state: ToolRunState, event: AgentEvent): ToolRunState {
   }
 
   return state;
+}
+
+function shouldBatchRevision(event: AgentEvent) {
+  return event.type === 'message_update' || event.type === 'tool_execution_update';
+}
+
+type ScheduledFrame = { kind: 'raf'; id: number } | { kind: 'timeout'; id: ReturnType<typeof setTimeout> };
+
+function useFrameRevision() {
+  const [revision, setRevision] = useState(0);
+  const frameRef = useRef<ScheduledFrame>();
+
+  const bumpRevision = useCallback(() => {
+    setRevision((value) => value + 1);
+  }, []);
+
+  const scheduleRevision = useCallback(() => {
+    if (frameRef.current) {
+      return;
+    }
+    frameRef.current = scheduleFrame(() => {
+      frameRef.current = undefined;
+      bumpRevision();
+    });
+  }, [bumpRevision]);
+
+  const flushRevision = useCallback(() => {
+    if (frameRef.current) {
+      cancelFrame(frameRef.current);
+      frameRef.current = undefined;
+    }
+    bumpRevision();
+  }, [bumpRevision]);
+
+  useEffect(
+    () => () => {
+      if (frameRef.current) {
+        cancelFrame(frameRef.current);
+      }
+    },
+    []
+  );
+
+  return { revision, flushRevision, scheduleRevision };
+}
+
+function scheduleFrame(callback: () => void): ScheduledFrame {
+  if (typeof globalThis.requestAnimationFrame === 'function') {
+    return { kind: 'raf', id: globalThis.requestAnimationFrame(callback) };
+  }
+  return { kind: 'timeout', id: setTimeout(callback, 16) };
+}
+
+function cancelFrame(frame: ScheduledFrame) {
+  if (frame.kind === 'raf') {
+    globalThis.cancelAnimationFrame(frame.id);
+    return;
+  }
+  clearTimeout(frame.id);
+}
+
+function isNearBottom(element: HTMLElement) {
+  return element.scrollHeight - element.scrollTop - element.clientHeight < 80;
 }
 
 function generateTitle(prompt: string): string {
@@ -628,6 +763,10 @@ const getStyles = (theme: GrafanaTheme2) => ({
   messageTool: css({
     borderStyle: 'dashed',
   }),
+  messageStreaming: css({
+    borderColor: theme.colors.primary.border,
+    boxShadow: `inset 3px 0 0 ${theme.colors.primary.main}`,
+  }),
   messageHeader: css({
     color: theme.colors.text.secondary,
     fontSize: theme.typography.bodySmall.fontSize,
@@ -668,5 +807,10 @@ const getStyles = (theme: GrafanaTheme2) => ({
     '@media (max-width: 700px)': {
       gridTemplateColumns: '1fr',
     },
+  }),
+  composerActions: css({
+    display: 'flex',
+    justifyContent: 'flex-end',
+    gap: theme.spacing(1),
   }),
 });

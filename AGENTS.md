@@ -1,3 +1,12 @@
 ## Project knowledge
 
 This repository contains a **Grafana plugin**. You must Read @./.config/AGENTS/instructions.md before doing changes.
+
+## Local development
+
+- Use `mise run dev:reload` (defined in @mise.toml) to rebuild the frontend (`npm run build`) and backend (`mage -v build:linux`) plugin artifacts, then start or reload the local Docker stack (`docker compose up -d --build --remove-orphans` followed by `docker compose restart grafana`).
+- The default local LLM config expects an OpenAI-compatible llama-server running on the host. See the `llama-server` invocation in @README.md for the exact flags (Qwen3.6-35B model, port 8080, speculative draft-mtp decoding).
+
+## Reference sources
+
+- Grafana source code is checked out at `$HOME/repos/github.com/grafana/grafana`. Grep or read it when you need to confirm current Grafana API behavior rather than relying on stale training data.

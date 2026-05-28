@@ -106,6 +106,61 @@ func TestLLMStreamRelaysOpenAICompatibleChunks(t *testing.T) {
 	}
 }
 
+func TestLLMStreamParsesMultilineSSEAndBufferedToolArguments(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("data: {\"choices\":[\n"))
+		_, _ = w.Write([]byte("data: {\"delta\":{\"content\":\"hello\"}}]}\n\n"))
+		_, _ = w.Write([]byte(`data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","function":{"arguments":"{\"query\":"}}]}}]}` + "\n\n"))
+		_, _ = w.Write([]byte(`data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"name":"grafana_query"}}]}}]}` + "\n\n"))
+		_, _ = w.Write([]byte(`data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"\"up\"}"}}]},"finish_reason":"tool_calls"}]}` + "\n\n"))
+		_, _ = w.Write([]byte("data: [DONE]\n\n"))
+	}))
+	defer upstream.Close()
+
+	jsonData, _ := json.Marshal(appSettings{OpenAIBaseURL: upstream.URL, DefaultModel: "gpt-default"})
+	inst, err := NewApp(context.Background(), backend.AppInstanceSettings{
+		JSONData: jsonData,
+		DecryptedSecureJSONData: map[string]string{
+			"openAIAPIKey": "secret",
+		},
+	})
+	if err != nil {
+		t.Fatalf("new app: %s", err)
+	}
+	app := inst.(*App)
+
+	var sender mockCallResourceResponseSender
+	err = app.CallResource(context.Background(), &backend.CallResourceRequest{
+		Method: http.MethodPost,
+		Path:   "llm/stream",
+		Body: []byte(`{
+			"context":{
+				"messages":[{"role":"user","content":"Query up"}],
+				"tools":[{"name":"grafana_query","description":"Query","parameters":{"type":"object"}}]
+			},
+			"options":{}
+		}`),
+	}, &sender)
+	if err != nil {
+		t.Fatalf("CallResource error: %s", err)
+	}
+
+	combined := joinBodies(sender.responses)
+	for _, expected := range []string{`"delta":"hello"`, `"type":"toolcall_start"`, `"toolName":"grafana_query"`, `"type":"toolcall_end"`, `"reason":"toolUse"`} {
+		if !strings.Contains(combined, expected) {
+			t.Fatalf("expected stream to contain %s, got %s", expected, combined)
+		}
+	}
+
+	startIndex := strings.Index(combined, `"type":"toolcall_start"`)
+	bufferedArgIndex := strings.Index(combined, `"delta":"{\"query\":"`)
+	laterArgIndex := strings.Index(combined, `"delta":"\"up\"}"`)
+	if startIndex < 0 || bufferedArgIndex < startIndex || laterArgIndex < bufferedArgIndex {
+		t.Fatalf("expected buffered tool arguments to be replayed after start and before later args, got %s", combined)
+	}
+}
+
 func TestOpenAIRequestKeepsUserAndToolContentNonEmpty(t *testing.T) {
 	app := App{settings: appSettings{DefaultModel: "gpt-default"}}
 

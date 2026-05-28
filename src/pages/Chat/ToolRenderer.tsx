@@ -1,7 +1,7 @@
-import React from 'react';
-import { css, cx } from '@emotion/css';
+import React, { useMemo } from 'react';
+import { css, cx, keyframes } from '@emotion/css';
 import type { AgentToolResult } from '@earendil-works/pi-agent-core';
-import type { GrafanaTheme2 } from '@grafana/data';
+import { renderMarkdown, type GrafanaTheme2 } from '@grafana/data';
 import { Badge, Spinner, useStyles2 } from '@grafana/ui';
 import type { SubagentRunDetails, SubagentToolCall } from './tools';
 
@@ -16,11 +16,19 @@ export type ToolRunView = {
   updatedAt: number;
 };
 
-export function ContentBlocks({ content }: { content: unknown }) {
+export function ContentBlocks({
+  content,
+  isStreaming = false,
+  markdown = true,
+}: {
+  content: unknown;
+  isStreaming?: boolean;
+  markdown?: boolean;
+}) {
   const styles = useStyles2(getToolStyles);
 
   if (typeof content === 'string') {
-    return <div>{content}</div>;
+    return markdown ? <MarkdownText isStreaming={isStreaming} text={content} /> : <div>{content}</div>;
   }
   if (!Array.isArray(content)) {
     return <pre>{JSON.stringify(content, null, 2)}</pre>;
@@ -34,7 +42,11 @@ export function ContentBlocks({ content }: { content: unknown }) {
         }
         const typedBlock = block as Record<string, any>;
         if (typedBlock.type === 'text') {
-          return <div key={index}>{typedBlock.text}</div>;
+          return markdown ? (
+            <MarkdownText isStreaming={isStreaming} key={index} text={typedBlock.text} />
+          ) : (
+            <div key={index}>{typedBlock.text}</div>
+          );
         }
         if (typedBlock.type === 'thinking') {
           return (
@@ -45,7 +57,15 @@ export function ContentBlocks({ content }: { content: unknown }) {
           );
         }
         if (typedBlock.type === 'toolCall') {
-          return <ToolCallBlock key={index} name={typedBlock.name} args={typedBlock.arguments} />;
+          return (
+            <ToolCallBlock
+              key={index}
+              name={typedBlock.name}
+              args={typedBlock.arguments}
+              partialJson={typeof typedBlock.partialJson === 'string' ? typedBlock.partialJson : undefined}
+              isStreaming={isStreaming}
+            />
+          );
         }
         if (typedBlock.type === 'image') {
           return <img key={index} alt="Tool result" src={`data:${typedBlock.mimeType};base64,${typedBlock.data}`} />;
@@ -115,7 +135,7 @@ export function ToolActivityPanel({ runs }: { runs: ToolRunView[] }) {
             ) : (
               <>
                 <pre>{formatJson(run.args)}</pre>
-                {run.partialResult && <ContentBlocks content={run.partialResult.content} />}
+                {run.partialResult && <ContentBlocks content={run.partialResult.content} isStreaming />}
               </>
             )}
           </div>
@@ -125,23 +145,59 @@ export function ToolActivityPanel({ runs }: { runs: ToolRunView[] }) {
   );
 }
 
-function ToolCallBlock({ name, args }: { name: string; args: unknown }) {
+function MarkdownText({ text, isStreaming }: { text: string; isStreaming?: boolean }) {
   const styles = useStyles2(getToolStyles);
+  const html = useMemo(() => renderMarkdown(completeOpenMarkdownFences(text), { breaks: true }).trim(), [text]);
+
   return (
-    <div className={styles.toolCall}>
-      <div className={styles.toolCallHeader}>
-        <Badge text="tool call" color="blue" />
-        <strong>{name}</strong>
-      </div>
-      <pre>{formatJson(args)}</pre>
+    <div className={styles.markdown}>
+      {html ? <div dangerouslySetInnerHTML={{ __html: html }} /> : isStreaming ? null : <span />}
+      {isStreaming && <span className={styles.streamingCursor} aria-hidden="true" />}
     </div>
   );
 }
 
-function ToolHeader({ name, status, compact }: { name: string; status: 'running' | 'completed' | 'failed'; compact?: boolean }) {
+function ToolCallBlock({
+  name,
+  args,
+  partialJson,
+  isStreaming,
+}: {
+  name: string;
+  args: unknown;
+  partialJson?: string;
+  isStreaming?: boolean;
+}) {
+  const styles = useStyles2(getToolStyles);
+  return (
+    <div className={styles.toolCall}>
+      <div className={styles.toolCallHeader}>
+        <Badge text={isStreaming ? 'preparing' : 'tool call'} color="blue" />
+        <strong>{name}</strong>
+      </div>
+      <pre>{partialJson && isStreaming ? partialJson : formatJson(args)}</pre>
+    </div>
+  );
+}
+
+function ToolHeader({
+  name,
+  status,
+  compact,
+}: {
+  name: string;
+  status: 'running' | 'completed' | 'failed';
+  compact?: boolean;
+}) {
   const styles = useStyles2(getToolStyles);
   const badge =
-    status === 'running' ? <Badge text="running" color="blue" /> : status === 'failed' ? <Badge text="failed" color="red" /> : <Badge text="done" color="green" />;
+    status === 'running' ? (
+      <Badge text="running" color="blue" />
+    ) : status === 'failed' ? (
+      <Badge text="failed" color="red" />
+    ) : (
+      <Badge text="done" color="green" />
+    );
 
   return (
     <div className={cx(styles.toolHeader, compact && styles.toolHeaderCompact)}>
@@ -231,6 +287,16 @@ function formatJson(value: unknown) {
   }
 }
 
+function completeOpenMarkdownFences(text: string) {
+  const fenceCount = text.split('\n').filter((line) => line.trimStart().startsWith('```')).length;
+  return fenceCount % 2 === 1 ? `${text}\n\`\`\`` : text;
+}
+
+const blink = keyframes({
+  '0%, 45%': { opacity: 1 },
+  '46%, 100%': { opacity: 0 },
+});
+
 const getToolStyles = (theme: GrafanaTheme2) => ({
   toolFrame: css({
     display: 'grid',
@@ -238,6 +304,63 @@ const getToolStyles = (theme: GrafanaTheme2) => ({
   }),
   toolFrameError: css({
     color: theme.colors.error.text,
+  }),
+  markdown: css({
+    whiteSpace: 'normal',
+    overflowWrap: 'anywhere',
+    '& > div > :first-child': {
+      marginTop: 0,
+    },
+    '& > div > :last-child': {
+      marginBottom: 0,
+    },
+    '& p': {
+      margin: `0 0 ${theme.spacing(1)}`,
+    },
+    '& ul, & ol': {
+      margin: `0 0 ${theme.spacing(1)} ${theme.spacing(2)}`,
+      paddingLeft: theme.spacing(2),
+    },
+    '& li': {
+      margin: `${theme.spacing(0.25)} 0`,
+    },
+    '& code': {
+      fontFamily: theme.typography.fontFamilyMonospace,
+      fontSize: theme.typography.bodySmall.fontSize,
+    },
+    '& pre': {
+      whiteSpace: 'pre',
+      overflow: 'auto',
+      padding: theme.spacing(1),
+      border: `1px solid ${theme.colors.border.weak}`,
+      borderRadius: theme.shape.radius.default,
+      background: theme.colors.background.primary,
+    },
+    '& blockquote': {
+      margin: `0 0 ${theme.spacing(1)}`,
+      paddingLeft: theme.spacing(1),
+      borderLeft: `3px solid ${theme.colors.border.medium}`,
+      color: theme.colors.text.secondary,
+    },
+    '& table': {
+      display: 'block',
+      maxWidth: '100%',
+      overflowX: 'auto',
+      borderCollapse: 'collapse',
+    },
+    '& th, & td': {
+      padding: theme.spacing(0.5, 1),
+      border: `1px solid ${theme.colors.border.weak}`,
+    },
+  }),
+  streamingCursor: css({
+    display: 'inline-block',
+    width: 8,
+    height: '1em',
+    marginLeft: 2,
+    verticalAlign: '-0.15em',
+    background: theme.colors.primary.text,
+    animation: `${blink} 1s steps(1, end) infinite`,
   }),
   toolHeader: css({
     display: 'flex',

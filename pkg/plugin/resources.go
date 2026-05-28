@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"sort"
 	"strings"
 )
 
@@ -128,6 +129,8 @@ type streamedToolCall struct {
 	arguments    strings.Builder
 }
 
+var errOpenAIStreamDone = errors.New("openai stream done")
+
 func (a *App) handleLLMStream(w http.ResponseWriter, req *http.Request) {
 	if req.Method != http.MethodPost {
 		writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
@@ -159,22 +162,10 @@ func (a *App) handleLLMStream(w http.ResponseWriter, req *http.Request) {
 	upstreamReq.Header.Set("Content-Type", "application/json")
 	upstreamReq.Header.Set("Accept", "text/event-stream")
 
-	upstreamRes, err := a.httpClient.Do(upstreamReq)
-	if err != nil {
-		writeJSONError(w, http.StatusBadGateway, err.Error())
-		return
-	}
-	defer upstreamRes.Body.Close()
-
-	if upstreamRes.StatusCode < 200 || upstreamRes.StatusCode >= 300 {
-		message, _ := io.ReadAll(io.LimitReader(upstreamRes.Body, 32_768))
-		writeJSONError(w, upstreamRes.StatusCode, string(message))
-		return
-	}
-
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("X-Accel-Buffering", "no")
 	w.WriteHeader(http.StatusOK)
 	flusher, _ := w.(http.Flusher)
 
@@ -182,6 +173,20 @@ func (a *App) handleLLMStream(w http.ResponseWriter, req *http.Request) {
 	if err := stream.write(map[string]interface{}{"type": "start"}); err != nil {
 		return
 	}
+
+	upstreamRes, err := a.httpClient.Do(upstreamReq)
+	if err != nil {
+		_ = stream.write(errorEvent(err.Error()))
+		return
+	}
+	defer upstreamRes.Body.Close()
+
+	if upstreamRes.StatusCode < 200 || upstreamRes.StatusCode >= 300 {
+		message, _ := io.ReadAll(io.LimitReader(upstreamRes.Body, 32_768))
+		_ = stream.write(errorEvent(string(message)))
+		return
+	}
+
 	if err := a.relayOpenAIStream(upstreamRes.Body, stream); err != nil {
 		_ = stream.write(errorEvent(err.Error()))
 	}
@@ -238,18 +243,15 @@ func (a *App) relayOpenAIStream(body io.Reader, stream proxyEventWriter) error {
 	toolCalls := map[int]*streamedToolCall{}
 	usage := zeroUsage()
 	doneReason := "stop"
+	dataLines := make([]string, 0, 4)
 
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if !strings.HasPrefix(line, "data:") {
-			continue
-		}
-		data := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+	processData := func(data string) error {
+		data = strings.TrimSpace(data)
 		if data == "" {
-			continue
+			return nil
 		}
 		if data == "[DONE]" {
-			break
+			return errOpenAIStreamDone
 		}
 
 		var chunk openAIStreamChunk
@@ -308,6 +310,15 @@ func (a *App) relayOpenAIStream(body io.Reader, stream proxyEventWriter) error {
 					}); err != nil {
 						return err
 					}
+					if state.arguments.Len() > 0 {
+						if err := stream.write(map[string]interface{}{
+							"type":         "toolcall_delta",
+							"contentIndex": state.contentIndex,
+							"delta":        state.arguments.String(),
+						}); err != nil {
+							return err
+						}
+					}
 					doneReason = "toolUse"
 				}
 				if delta.Function.Arguments != "" {
@@ -324,9 +335,41 @@ func (a *App) relayOpenAIStream(body io.Reader, stream proxyEventWriter) error {
 				}
 			}
 		}
+		return nil
+	}
+
+	flushData := func() error {
+		if len(dataLines) == 0 {
+			return nil
+		}
+		data := strings.Join(dataLines, "\n")
+		dataLines = dataLines[:0]
+		return processData(data)
+	}
+
+	for scanner.Scan() {
+		line := strings.TrimRight(scanner.Text(), "\r")
+		if line == "" {
+			if err := flushData(); err != nil {
+				if errors.Is(err, errOpenAIStreamDone) {
+					break
+				}
+				return err
+			}
+			continue
+		}
+		if strings.HasPrefix(line, ":") {
+			continue
+		}
+		if data, ok := strings.CutPrefix(line, "data:"); ok {
+			dataLines = append(dataLines, strings.TrimPrefix(data, " "))
+		}
 	}
 
 	if err := scanner.Err(); err != nil {
+		return err
+	}
+	if err := flushData(); err != nil && !errors.Is(err, errOpenAIStreamDone) {
 		return err
 	}
 	if textStarted {
@@ -334,7 +377,13 @@ func (a *App) relayOpenAIStream(body io.Reader, stream proxyEventWriter) error {
 			return err
 		}
 	}
-	for _, state := range toolCalls {
+	toolCallIndexes := make([]int, 0, len(toolCalls))
+	for index := range toolCalls {
+		toolCallIndexes = append(toolCallIndexes, index)
+	}
+	sort.Ints(toolCallIndexes)
+	for _, index := range toolCallIndexes {
+		state := toolCalls[index]
 		if !state.started {
 			return errors.New("upstream returned a tool call without a function name")
 		}

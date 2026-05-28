@@ -54,6 +54,7 @@ export async function runGrafanaSubagent(options: RunSubagentOptions): Promise<T
   const usage = zeroUsage();
   const toolNames = options.tools.map((tool) => tool.name);
   let finalOutput = '';
+  let lastTextUpdateAt = 0;
 
   const details = (status: SubagentRunStatus, error?: string): SubagentRunDetails => ({
     type: 'subagent',
@@ -68,7 +69,17 @@ export async function runGrafanaSubagent(options: RunSubagentOptions): Promise<T
   });
 
   const emitUpdate = (status: SubagentRunStatus = 'running', error?: string) => {
-    options.onUpdate?.(textResult(subagentStatusText(options.kind, status, toolCalls.size, finalOutput, error), details(status, error)));
+    options.onUpdate?.(
+      textResult(subagentStatusText(options.kind, status, toolCalls.size, finalOutput, error), details(status, error))
+    );
+  };
+  const emitTextUpdate = () => {
+    const now = Date.now();
+    if (now - lastTextUpdateAt < 100) {
+      return;
+    }
+    lastTextUpdateAt = now;
+    emitUpdate('running');
   };
 
   const child = new Agent({
@@ -100,10 +111,24 @@ export async function runGrafanaSubagent(options: RunSubagentOptions): Promise<T
 
   const unsubscribe = child.subscribe((event) => {
     handleChildEvent(event, toolCalls, usage);
+    if (event.type === 'message_update' && event.message.role === 'assistant') {
+      const text = getContentText(event.message.content);
+      if (text && text !== finalOutput) {
+        finalOutput = text;
+        emitTextUpdate();
+      }
+    }
     if (event.type === 'message_end') {
       finalOutput = getLastAssistantText(child.state.messages) || finalOutput;
+      if (event.message.role === 'assistant') {
+        emitUpdate('running');
+      }
     }
-    if (event.type === 'tool_execution_start' || event.type === 'tool_execution_update' || event.type === 'tool_execution_end') {
+    if (
+      event.type === 'tool_execution_start' ||
+      event.type === 'tool_execution_update' ||
+      event.type === 'tool_execution_end'
+    ) {
       emitUpdate('running');
     }
   });
@@ -212,13 +237,22 @@ function getContentText(content: unknown) {
     .trim();
 }
 
-function subagentStatusText(kind: SubagentKind, status: SubagentRunStatus, toolCallCount: number, finalOutput: string, error?: string) {
+function subagentStatusText(
+  kind: SubagentKind,
+  status: SubagentRunStatus,
+  toolCallCount: number,
+  finalOutput: string,
+  error?: string
+) {
   const label = kind === 'metrics' ? 'Metrics explorer' : 'Jsonnet explorer';
   if (status === 'failed') {
     return `${label} failed${error ? `: ${error}` : ''}`;
   }
   if (status === 'completed') {
     return truncateText(finalOutput || `${label} completed.`, 4000);
+  }
+  if (finalOutput.trim()) {
+    return `${label} drafting:\n${truncateText(finalOutput, 1200)}`;
   }
   return `${label} running. ${toolCallCount} tool call${toolCallCount === 1 ? '' : 's'} so far.`;
 }
