@@ -85,6 +85,12 @@ Run Grafana with the plugin mounted:
 npm run server
 ```
 
+Or rebuild both plugin artifacts and start/reload the local Docker stack:
+
+```bash
+mise run dev:reload
+```
+
 The local Compose stack also seeds Prometheus with six hours of synthetic RED/USE metrics derived from the `agentic-observability` demo. It includes one hour of current-query overlap by default, so short-window `now` queries remain useful during a manual demo. To refresh the generated history after it ages out, remove the demo volumes before starting Grafana again:
 
 ```bash
