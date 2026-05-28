@@ -52,6 +52,12 @@ The default chat toolset does not expose raw dashboard JSON upload/delete tools,
 
 The default chat toolset includes `explore_metrics` as a high-level fallback for broad metric and PromQL reconnaissance. It starts a nested Pi agent with a narrow tool allow-list: the metrics subagent can only discover datasources, inspect Prometheus metadata, and validate PromQL. Dashboard write tools stay available only to the parent assistant.
 
+## Skills
+
+Dashboard instructions are split into repo-local skills under `.agents/skills/<skill-name>/SKILL.md`, using the same default `SKILL.md` directory shape as local agent skill installs. `npm run generate:skills` validates those files and bundles them into `src/pages/Chat/skills/bundledSkills.generated.ts` for the frontend.
+
+The chat agent always has metric discovery tools and `explore_metrics` available. Dashboard guidance activates when the prompt asks for dashboard, panel, Jsonnet, render, or sync work, which also enables the managed dashboard and Jsonnet tool groups for that turn. New skills can be added by creating another `.agents/skills/<name>/SKILL.md`; add optional text resources under `references/`, `templates/`, or `assets/`.
+
 ## Development
 
 Install frontend dependencies:
@@ -124,5 +130,21 @@ npm run benchmark:agent
 ```
 
 Set `BENCH_RUNS=5` to repeat the agent run without restarting the model server. Successful runs write inspectable reports to `test-results/agent-benchmark/latest-report.txt` and `latest-events.json`.
+
+To benchmark read-only analysis of the demo Prometheus incident, run:
+
+```bash
+npm run benchmark:analysis
+```
+
+This benchmark asks the assistant to investigate the six-hour synthetic data set without creating dashboards. It writes reports to `test-results/analysis-benchmark/latest-report.txt`, `latest-answer.md`, and `latest-events.json`.
+
+To benchmark only the `explore_metrics` discovery path, run:
+
+```bash
+npm run benchmark:explore-metrics
+```
+
+This benchmark requires exactly one top-level `explore_metrics` call, checks the returned metric coverage and nested tool count, and writes reports to `test-results/explore-metrics-benchmark/latest-report.txt`, `latest-answer.md`, and `latest-events.json`.
 
 Open Grafana at http://localhost:3000 and navigate to the Pi Assistant app page.

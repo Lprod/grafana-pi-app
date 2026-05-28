@@ -1,4 +1,4 @@
-import React, { useMemo } from 'react';
+import React, { useMemo, useState } from 'react';
 import { css, cx, keyframes } from '@emotion/css';
 import type { AgentToolResult } from '@earendil-works/pi-agent-core';
 import { renderMarkdown, type GrafanaTheme2 } from '@grafana/data';
@@ -10,7 +10,7 @@ import {
   SceneQueryRunner,
   SceneTimeRange,
 } from '@grafana/scenes';
-import { Badge, Spinner, useStyles2 } from '@grafana/ui';
+import { Badge, LinkButton, Spinner, useStyles2 } from '@grafana/ui';
 import type { SubagentRunDetails, SubagentToolCall } from './tools';
 import {
   highlightJsonnetLines,
@@ -384,6 +384,11 @@ function renderStructuredToolResult(
     return <MetricSeriesInspectionView result={metricSeries} />;
   }
 
+  const prometheusBatchQuery = asPrometheusBatchQuerySummary(toolName, details, content);
+  if (prometheusBatchQuery) {
+    return <PrometheusBatchQueryResultView result={prometheusBatchQuery} />;
+  }
+
   const prometheusQuery = asPrometheusQuerySummary(toolName, content);
   if (prometheusQuery) {
     return (
@@ -595,6 +600,10 @@ type PrometheusQuerySummaryView = {
   range?: {
     from?: string;
     to?: string;
+    raw?: {
+      from?: string;
+      to?: string;
+    };
   };
   frameCount: number;
   totalSeries: number;
@@ -628,6 +637,14 @@ type SummaryPointView = {
   value: number | null;
 };
 
+type PrometheusBatchQuerySummaryView = {
+  datasourceUid: string;
+  queryCount: number;
+  truncatedQueries: boolean;
+  results: PrometheusQuerySummaryView[];
+  contentAvailable: boolean;
+};
+
 type PrometheusTimeseriesVisualization = {
   kind: 'prometheus-timeseries';
   datasourceUid: string;
@@ -643,6 +660,60 @@ type PrometheusTimeseriesVisualization = {
     };
   };
 };
+
+function PrometheusBatchQueryResultView({ result }: { result: PrometheusBatchQuerySummaryView }) {
+  const styles = useStyles2(getToolStyles);
+  return (
+    <div className={styles.structuredResult}>
+      <div className={styles.resultSummary}>
+        {formatCount(result.results.length || result.queryCount)} of {formatCount(result.queryCount)} Prometheus queries
+        summarized
+      </div>
+      <ResultMetaGrid
+        items={[
+          { label: 'Datasource', value: result.datasourceUid },
+          { label: 'Queries', value: formatCount(result.queryCount) },
+          {
+            label: 'Shown',
+            value: result.truncatedQueries
+              ? `${formatCount(result.results.length)} of ${formatCount(result.queryCount)}`
+              : formatCount(result.results.length || result.queryCount),
+          },
+        ]}
+      />
+      {!result.contentAvailable && (
+        <div className={styles.emptyState}>The query batch completed, but the detailed result text was unavailable.</div>
+      )}
+      {result.results.length > 0 && (
+        <div className={styles.queryResultList}>
+          {result.results.map((queryResult, index) => (
+            <PrometheusBatchQueryResultItem index={index} key={`${queryResult.query}:${index}`} result={queryResult} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function PrometheusBatchQueryResultItem({ index, result }: { index: number; result: PrometheusQuerySummaryView }) {
+  const styles = useStyles2(getToolStyles);
+  const [isOpen, setIsOpen] = useState(index === 0);
+  const visualization = isOpen ? prometheusTimeseriesVisualizationFromSummary(result) : undefined;
+
+  return (
+    <details
+      className={styles.queryResultItem}
+      open={isOpen}
+      onToggle={(event) => setIsOpen(event.currentTarget.open)}
+    >
+      <summary>
+        <span>Query {index + 1}</span>
+        <code>{result.query}</code>
+      </summary>
+      <PrometheusQueryResultView result={result} visualization={visualization} />
+    </details>
+  );
+}
 
 function PrometheusQueryResultView({
   result,
@@ -740,9 +811,16 @@ function PrometheusTimeseriesPanelView({ visualization }: { visualization: Prome
         range: {
           from: range.from,
           to: range.to,
+          raw:
+            range.raw?.from || range.raw?.to
+              ? {
+                  from: range.raw?.from,
+                  to: range.raw?.to,
+                }
+              : undefined,
         },
       }),
-    [datasourceUid, interval, maxDataPoints, query, range.from, range.to]
+    [datasourceUid, interval, maxDataPoints, query, range.from, range.raw?.from, range.raw?.to, range.to]
   );
   const SceneComponent = scene.Component;
 
@@ -780,11 +858,24 @@ function createPrometheusTimeseriesScene(visualization: PrometheusTimeseriesVisu
       },
     ],
   });
+  const exploreHref = buildPrometheusExploreHref(visualization);
   const panel = PanelBuilders.timeseries()
     .setTitle('Query result')
     .setDescription(visualization.query)
     .setColor({ mode: 'palette-classic' })
     .setNoValue('-')
+    .setHeaderActions(
+      <LinkButton
+        href={exploreHref}
+        icon="compass"
+        rel="noreferrer"
+        size="sm"
+        target="_blank"
+        variant="secondary"
+      >
+        Explore
+      </LinkButton>
+    )
     .setData(queryRunner)
     .build();
 
@@ -801,6 +892,33 @@ function createPrometheusTimeseriesScene(visualization: PrometheusTimeseriesVisu
       ],
     }),
   });
+}
+
+function buildPrometheusExploreHref(visualization: PrometheusTimeseriesVisualization) {
+  const datasource = {
+    type: 'prometheus',
+    uid: visualization.datasourceUid,
+  };
+  const left = {
+    datasource: visualization.datasourceUid,
+    queries: [
+      {
+        refId: 'A',
+        datasource,
+        expr: visualization.query,
+        range: true,
+        instant: false,
+        interval: visualization.interval,
+        editorMode: 'code',
+      },
+    ],
+    range: {
+      from: visualization.range.raw?.from ?? visualization.range.from,
+      to: visualization.range.raw?.to ?? visualization.range.to,
+    },
+  };
+
+  return `/explore?left=${encodeURIComponent(JSON.stringify(left))}`;
 }
 
 type RawPrometheusQueryResult = {
@@ -1529,6 +1647,56 @@ function asPrometheusQuerySummary(
     return undefined;
   }
 
+  return prometheusQuerySummaryFromRecord(record);
+}
+
+function asPrometheusBatchQuerySummary(
+  toolName: string | undefined,
+  details: unknown,
+  content: unknown
+): PrometheusBatchQuerySummaryView | undefined {
+  if (toolName !== 'query_prometheus') {
+    return undefined;
+  }
+
+  const record = parseJsonRecord(content);
+  if (record) {
+    const datasourceUid = stringField(record, 'datasourceUid');
+    const queryCount = numberField(record, 'queryCount');
+    const resultRecords = recordsField(record, 'results');
+    if (datasourceUid && queryCount !== undefined && resultRecords.length > 0) {
+      return {
+        datasourceUid,
+        queryCount,
+        truncatedQueries: booleanField(record, 'truncatedQueries') ?? false,
+        results: resultRecords
+          .map(prometheusQuerySummaryFromRecord)
+          .filter((result): result is PrometheusQuerySummaryView => Boolean(result)),
+        contentAvailable: true,
+      };
+    }
+  }
+
+  if (!isRecord(details) || booleanField(details, 'batch') !== true) {
+    return undefined;
+  }
+
+  const datasourceUid = stringField(details, 'datasourceUid');
+  const queryCount = numberField(details, 'queries');
+  if (!datasourceUid || queryCount === undefined) {
+    return undefined;
+  }
+
+  return {
+    datasourceUid,
+    queryCount,
+    truncatedQueries: false,
+    results: [],
+    contentAvailable: false,
+  };
+}
+
+function prometheusQuerySummaryFromRecord(record: Record<string, unknown>): PrometheusQuerySummaryView | undefined {
   const datasourceUid = stringField(record, 'datasourceUid');
   const query = stringField(record, 'query');
   const seriesRecords = recordsField(record, 'series');
@@ -1537,6 +1705,7 @@ function asPrometheusQuerySummary(
   }
 
   const range = recordField(record, 'range');
+  const rawRange = recordField(range, 'raw');
   return {
     datasourceUid,
     query,
@@ -1546,6 +1715,12 @@ function asPrometheusQuerySummary(
       ? {
           from: stringField(range, 'from'),
           to: stringField(range, 'to'),
+          raw: rawRange
+            ? {
+                from: stringField(rawRange, 'from'),
+                to: stringField(rawRange, 'to'),
+              }
+            : undefined,
         }
       : undefined,
     frameCount: numberField(record, 'frameCount') ?? 0,
@@ -1557,6 +1732,26 @@ function asPrometheusQuerySummary(
     })),
     executedQueryStrings: stringArrayField(record, 'executedQueryStrings') ?? [],
     series: seriesRecords.map(asSeriesSummary).filter((series): series is SeriesSummaryView => Boolean(series)),
+  };
+}
+
+function prometheusTimeseriesVisualizationFromSummary(
+  result: PrometheusQuerySummaryView
+): PrometheusTimeseriesVisualization | undefined {
+  if (result.queryType !== 'range' || !result.range?.from || !result.range.to || result.interval === '-') {
+    return undefined;
+  }
+
+  return {
+    kind: 'prometheus-timeseries',
+    datasourceUid: result.datasourceUid,
+    query: result.query,
+    interval: result.interval,
+    range: {
+      from: result.range.from,
+      to: result.range.to,
+      raw: result.range.raw,
+    },
   };
 }
 
@@ -2356,6 +2551,39 @@ const getToolStyles = (theme: GrafanaTheme2) => ({
     border: `1px solid ${theme.colors.border.weak}`,
     borderRadius: theme.shape.radius.default,
     background: theme.colors.background.primary,
+  }),
+  queryResultList: css({
+    display: 'grid',
+    gap: theme.spacing(1),
+  }),
+  queryResultItem: css({
+    display: 'grid',
+    gap: theme.spacing(1),
+    minWidth: 0,
+    padding: theme.spacing(1),
+    border: `1px solid ${theme.colors.border.weak}`,
+    borderRadius: theme.shape.radius.default,
+    background: theme.colors.background.primary,
+    '& > summary': {
+      display: 'flex',
+      alignItems: 'center',
+      gap: theme.spacing(1),
+      minWidth: 0,
+      cursor: 'pointer',
+      color: theme.colors.text.secondary,
+      fontSize: theme.typography.bodySmall.fontSize,
+    },
+    '& > summary > code': {
+      minWidth: 0,
+      overflow: 'hidden',
+      textOverflow: 'ellipsis',
+      whiteSpace: 'nowrap',
+      color: theme.colors.text.primary,
+      fontFamily: theme.typography.fontFamilyMonospace,
+    },
+    '&[open] > summary': {
+      marginBottom: theme.spacing(1),
+    },
   }),
   chipList: css({
     display: 'flex',

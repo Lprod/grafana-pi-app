@@ -38,10 +38,13 @@ import { of, throwError } from 'rxjs';
 import {
   createGrafanaToolRegistry,
   createGrafanaTools,
+  createGrafanaToolsForSkillGroups,
+  createSkillTools,
   filterAllowedPrometheusDatasourceSettings,
   getDisallowedDashboardDatasourceUids,
   type VirtualJsonnetFileSnapshot,
 } from './grafanaTools';
+import { GRAFANA_SKILLS } from './skills';
 
 const datasourceSettings = [
   { name: 'Prometheus A', uid: 'prom-a', type: 'prometheus', isDefault: true },
@@ -627,7 +630,7 @@ describe('grafana datasource tool policy', () => {
     expect(defaultRegistry.all.map((tool) => tool.name)).not.toContain('explore_jsonnet');
   });
 
-  it('keeps raw dashboard writes and direct Jsonnet library browsing out of the default chat toolset', () => {
+  it('keeps raw dashboard upload/delete and direct Jsonnet library browsing out of the compatibility toolset', () => {
     const registry = createGrafanaToolRegistry({
       runtime: {
         model: {} as any,
@@ -674,6 +677,69 @@ describe('grafana datasource tool policy', () => {
     expect(names).toContain('search_grafonnet');
     expect(names).toContain('explore_metrics');
     expect(names).not.toContain('explore_jsonnet');
+  });
+
+  it('exposes a narrower metrics-only toolset for skill-selected turns', () => {
+    const names = createGrafanaToolsForSkillGroups(
+      {
+        runtime: {
+          model: {} as any,
+          streamFn: jest.fn() as any,
+        },
+      },
+      ['metrics', 'subagents']
+    ).map((tool) => tool.name);
+
+    expect(names).toContain('list_datasources');
+    expect(names).toContain('query_prometheus');
+    expect(names).toContain('explore_metrics');
+    expect(names).not.toContain('write_jsonnet');
+    expect(names).not.toContain('render_dashboard');
+    expect(names).not.toContain('sync_dashboard');
+    expect(names).not.toContain('get_dashboard');
+    expect(names).not.toContain('screenshot_dashboard');
+  });
+
+  it('adds managed dashboard tools when the dashboard skill group is selected', () => {
+    const names = createGrafanaToolsForSkillGroups(
+      {
+        runtime: {
+          model: {} as any,
+          streamFn: jest.fn() as any,
+        },
+      },
+      ['metrics', 'dashboardRead', 'jsonnetFiles', 'managedDashboards', 'subagents']
+    ).map((tool) => tool.name);
+
+    expect(names).toContain('query_prometheus');
+    expect(names).toContain('write_jsonnet');
+    expect(names).toContain('render_dashboard');
+    expect(names).toContain('sync_dashboard');
+    expect(names).toContain('get_dashboard_source');
+    expect(names).toContain('get_dashboard');
+    expect(names).toContain('screenshot_dashboard');
+    expect(names).not.toContain('upload_dashboard');
+    expect(names).not.toContain('delete_dashboard');
+  });
+
+  it('reads bundled skill resources through an explicit tool', async () => {
+    const tool = getTool(createSkillTools(GRAFANA_SKILLS), 'read_skill_resource');
+
+    const result = await tool.execute(
+      'call-1',
+      { skill: 'grafana-dashboard', path: 'references/dashboard-jsonnet-workflow.md' },
+      undefined
+    );
+
+    expect(result.content[0].text).toContain('# Dashboard Jsonnet Workflow');
+    expect(result.details).toMatchObject({
+      skill: 'grafana-dashboard',
+      path: 'references/dashboard-jsonnet-workflow.md',
+      truncated: false,
+    });
+    await expect(
+      tool.execute('call-2', { skill: 'grafana-dashboard', path: 'missing.md' }, undefined)
+    ).rejects.toThrow('Unknown resource for grafana-dashboard: missing.md');
   });
 });
 

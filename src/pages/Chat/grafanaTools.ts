@@ -1,6 +1,8 @@
 export {
   createGrafanaToolRegistry,
   createGrafanaTools,
+  createGrafanaToolsForSkillGroups,
+  createSkillTools,
   DEFAULT_JSONNET_FILE_PATH,
   filterAllowedPrometheusDatasourceSettings,
   getDisallowedDashboardDatasourceUids,
@@ -11,6 +13,7 @@ export type {
   GrafanaToolConfig,
   GrafanaToolRegistry,
   GrafanaToolRuntime,
+  SkillToolGroup,
   VirtualJsonnetFileRuntime,
   VirtualJsonnetFileSnapshot,
 } from './tools';

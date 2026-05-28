@@ -8,10 +8,15 @@ import type { GrafanaTheme2 } from '@grafana/data';
 import { PLUGIN_ID } from '../../constants';
 import { testIds } from '../../components/testIds';
 import { usePluginMeta } from '../../utils/utils.plugin';
-import { createGrafanaTools, normalizeJsonnetPath, type VirtualJsonnetFileSnapshot } from './grafanaTools';
+import {
+  createGrafanaToolsForSkillGroups,
+  createSkillTools,
+  normalizeJsonnetPath,
+  type VirtualJsonnetFileSnapshot,
+} from './grafanaTools';
 import { formatAssistantError, type AssistantErrorView } from './llmErrors';
 import { createOpenAICompatibleModel, type PiAppJsonData } from './model';
-import { SYSTEM_PROMPT } from './systemPrompt';
+import { GRAFANA_SKILLS, renderGrafanaSystemPrompt, selectGrafanaSkills } from './skills';
 import { ContentBlocks, ToolActivityPanel, ToolResultMessageBody, type ToolRunView } from './ToolRenderer';
 
 type ChatSceneObjectState = SceneObjectState;
@@ -97,7 +102,32 @@ function ChatApp() {
     }),
     [setVirtualJsonnetFile]
   );
+  const buildSkillRuntime = useCallback(
+    (prompt: string) => {
+      const selection = selectGrafanaSkills(prompt, GRAFANA_SKILLS);
+      const skillTools = createSkillTools(selection.activeSkills);
+      const tools = createGrafanaToolsForSkillGroups(
+        {
+          ...jsonData,
+          runtime: { model: llmModel, streamFn },
+          virtualJsonnetFiles: virtualJsonnetRuntime,
+          skillTools,
+        },
+        selection.toolGroups
+      );
+
+      return {
+        systemPrompt: renderGrafanaSystemPrompt({
+          skills: GRAFANA_SKILLS,
+          activeSkillNames: selection.activeSkillNames,
+        }),
+        tools,
+      };
+    },
+    [jsonData, llmModel, streamFn, virtualJsonnetRuntime]
+  );
   const [agent, setAgent] = useState<Agent>();
+  const agentRef = useRef<Agent>();
   const { revision, flushRevision, scheduleRevision } = useFrameRevision();
   const [input, setInput] = useState('');
   const [sessions, setSessions] = useState<SessionIndexItem[]>([]);
@@ -156,18 +186,14 @@ function ChatApp() {
   const buildAgent = useCallback(
     (messages: AgentMessage[] = []) => {
       unsubscribeRef.current?.();
-      const tools = createGrafanaTools({
-        ...jsonData,
-        runtime: { model: llmModel, streamFn },
-        virtualJsonnetFiles: virtualJsonnetRuntime,
-      });
+      const runtime = buildSkillRuntime('');
       const nextAgent = new Agent({
         initialState: {
-          systemPrompt: SYSTEM_PROMPT,
+          systemPrompt: runtime.systemPrompt,
           model: llmModel,
           thinkingLevel: 'off',
           messages,
-          tools,
+          tools: runtime.tools,
         },
         streamFn,
       });
@@ -189,10 +215,11 @@ function ChatApp() {
       });
 
       setAgent(nextAgent);
+      agentRef.current = nextAgent;
       flushRevision();
       return nextAgent;
     },
-    [flushRevision, jsonData, llmModel, saveSession, scheduleRevision, streamFn, virtualJsonnetRuntime]
+    [buildSkillRuntime, flushRevision, llmModel, saveSession, scheduleRevision, streamFn]
   );
 
   const startNewSession = useCallback(() => {
@@ -346,7 +373,8 @@ function ChatApp() {
   const submitPrompt = async (event: FormEvent) => {
     event.preventDefault();
     const prompt = input.trim();
-    if (!agent || !prompt || agent.state.isStreaming) {
+    const currentAgent = agentRef.current;
+    if (!currentAgent || !prompt || currentAgent.state.isStreaming) {
       return;
     }
 
@@ -367,7 +395,10 @@ function ChatApp() {
     setError(undefined);
     keepAutoScrollEnabled();
     try {
-      await agent.prompt(prompt);
+      const runtime = buildSkillRuntime(prompt);
+      currentAgent.state.systemPrompt = runtime.systemPrompt;
+      currentAgent.state.tools = runtime.tools;
+      await currentAgent.prompt(prompt);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {

@@ -18,8 +18,10 @@ jest.mock('@grafana/scenes', () => {
   }
 
   class EmbeddedScene extends MockSceneObject {
-    static Component = ({ model }: { model: any }) =>
-      React.createElement('div', { 'data-testid': 'mock-embedded-scene' }, panelTitle(model));
+    static Component = ({ model }: { model: any }) => {
+      const state = panelState(model);
+      return React.createElement('div', { 'data-testid': 'mock-embedded-scene' }, state?.title ?? 'scene', state?.headerActions);
+    };
   }
 
   class SceneFlexLayout extends MockSceneObject {}
@@ -27,8 +29,8 @@ jest.mock('@grafana/scenes', () => {
   class SceneQueryRunner extends MockSceneObject {}
   class SceneTimeRange extends MockSceneObject {}
 
-  function panelTitle(model: any) {
-    return model.state?.body?.state?.children?.[0]?.state?.body?.state?.title ?? 'scene';
+  function panelState(model: any) {
+    return model.state?.body?.state?.children?.[0]?.state?.body?.state;
   }
 
   function timeseriesBuilder() {
@@ -48,6 +50,10 @@ jest.mock('@grafana/scenes', () => {
       },
       setNoValue(noValue: string) {
         state.noValue = noValue;
+        return builder;
+      },
+      setHeaderActions(headerActions: React.ReactNode) {
+        state.headerActions = headerActions;
         return builder;
       },
       setData(data: unknown) {
@@ -178,6 +184,26 @@ describe('ToolRenderer', () => {
     expect(screen.getByTestId('prometheus-timeseries-panel')).toBeInTheDocument();
     expect(screen.getByTestId('mock-embedded-scene')).toHaveTextContent('Query result');
     expect(screen.getAllByText(query).length).toBeGreaterThan(0);
+
+    const exploreLink = screen.getByRole('link', { name: 'Explore' });
+    expect(exploreLink).toHaveAttribute('target', '_blank');
+    const href = exploreLink.getAttribute('href') ?? '';
+    expect(href.startsWith('/explore?left=')).toBe(true);
+    expect(JSON.parse(decodeURIComponent(href.replace('/explore?left=', '')))).toMatchObject({
+      datasource: 'prometheus',
+      queries: [
+        {
+          refId: 'A',
+          datasource: { uid: 'prometheus', type: 'prometheus' },
+          expr: query,
+          range: true,
+          instant: false,
+          interval: '1m',
+          editorMode: 'code',
+        },
+      ],
+      range: { from: 'now-1h', to: 'now' },
+    });
   });
 
   it('keeps instant query summaries on the aggregate renderer only', () => {
@@ -213,5 +239,98 @@ describe('ToolRenderer', () => {
 
     expect(screen.queryByTestId('prometheus-timeseries-panel')).not.toBeInTheDocument();
     expect(screen.getAllByText(query).length).toBeGreaterThan(0);
+  });
+
+  it('renders batched query_prometheus summaries with the structured renderer', () => {
+    const content = [
+      {
+        type: 'text',
+        text: JSON.stringify({
+          datasourceUid: 'prometheus',
+          queryCount: 2,
+          truncatedQueries: false,
+          results: [
+            {
+              datasourceUid: 'prometheus',
+              query: 'rate(http_requests_total[5m])',
+              queryType: 'range',
+              interval: '30s',
+              range: {
+                from: '2026-05-28T10:00:00.000Z',
+                to: '2026-05-28T11:00:00.000Z',
+                raw: { from: 'now-1h', to: 'now' },
+              },
+              frameCount: 1,
+              totalSeries: 1,
+              truncatedSeries: false,
+              notices: [],
+              executedQueryStrings: [],
+              series: [
+                {
+                  name: 'http_requests_total',
+                  labels: { job: 'api' },
+                  points: 120,
+                  nonNullPoints: 120,
+                  nullPoints: 0,
+                  last: { value: 2 },
+                },
+              ],
+            },
+            {
+              datasourceUid: 'prometheus',
+              query: 'up',
+              queryType: 'instant',
+              interval: '1m',
+              frameCount: 1,
+              totalSeries: 1,
+              truncatedSeries: false,
+              notices: [],
+              executedQueryStrings: [],
+              series: [
+                {
+                  name: 'up{job="api"}',
+                  labels: { job: 'api' },
+                  points: 1,
+                  nonNullPoints: 1,
+                  nullPoints: 0,
+                  last: { value: 1 },
+                },
+              ],
+            },
+          ],
+        }),
+      },
+    ];
+
+    const { container } = render(
+      <ToolResultMessageBody
+        toolName="query_prometheus"
+        content={content}
+        details={{ datasourceUid: 'prometheus', queries: 2, summarized: true, batch: true }}
+      />
+    );
+
+    expect(container.textContent).toContain('2 of 2 Prometheus queries summarized');
+    expect(container.textContent).toContain('Query 1');
+    expect(container.textContent).toContain('Query 2');
+    expect(container.textContent).toContain('rate(http_requests_total[5m])');
+    expect(screen.getByTestId('prometheus-timeseries-panel')).toBeInTheDocument();
+    expect(container.textContent).not.toContain('"queryCount"');
+  });
+
+  it('renders a completed batch shell when query_prometheus batch content is unavailable', () => {
+    const content = [{ type: 'text', text: '{"datasourceUid":"prometheus","queryCount":2,' }];
+
+    const { container } = render(
+      <ToolResultMessageBody
+        toolName="query_prometheus"
+        content={content}
+        details={{ datasourceUid: 'prometheus', queries: 2, summarized: true, batch: true }}
+      />
+    );
+
+    expect(container.textContent).toContain('2 of 2 Prometheus queries summarized');
+    expect(container.textContent).toContain('The query batch completed, but the detailed result text was unavailable.');
+    expect(container.textContent).not.toContain('{"datasourceUid"');
   });
 });

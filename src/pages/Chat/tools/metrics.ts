@@ -231,7 +231,7 @@ function makeQueryPrometheusTool(toolConfig: GrafanaToolConfig): AgentTool {
           }),
           {
             description:
-              'Batch of PromQL expressions to validate in one tool call. Prefer this when checking multiple dashboard queries.',
+              'Batch of PromQL expressions to validate in one tool call. Prefer this when checking multiple related queries.',
           }
         )
       ),

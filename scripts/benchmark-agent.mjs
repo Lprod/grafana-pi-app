@@ -10,6 +10,9 @@ const GRAFANA_START_TIMEOUT_MS = readPositiveInteger(process.env.GRAFANA_START_T
 const LLAMA_START_TIMEOUT_MS = readPositiveInteger(process.env.LLAMA_START_TIMEOUT_MS, 15 * 60_000);
 const BENCH_TIMEOUT_MS = readPositiveInteger(process.env.BENCH_TIMEOUT_MS, 120_000);
 const BENCH_RUNS = readPositiveInteger(process.env.BENCH_RUNS, 1);
+const BENCH_TEST_FILE = process.env.BENCH_TEST_FILE ?? 'tests/agentBenchmark.spec.ts';
+const BENCH_LABEL = process.env.BENCH_LABEL ?? 'agent benchmark';
+const BENCH_LOG_PREFIX = process.env.BENCH_LOG_PREFIX ?? 'agent-benchmark';
 
 const LLAMA_COMMAND = 'llama-server';
 const LLAMA_ARGS = [
@@ -67,10 +70,10 @@ try {
 
   for (let runIndex = 1; runIndex <= BENCH_RUNS; runIndex++) {
     const runLabel = BENCH_RUNS > 1 ? ` run ${runIndex}/${BENCH_RUNS}` : '';
-    log(`Running agent benchmark${runLabel} against ${GRAFANA_URL} with ${BENCH_TIMEOUT_MS}ms agent timeout.`);
+    log(`Running ${BENCH_LABEL}${runLabel} against ${GRAFANA_URL} with ${BENCH_TIMEOUT_MS}ms agent timeout.`);
     await runCommand(
       'npx',
-      ['playwright', 'test', 'tests/agentBenchmark.spec.ts', '--project=chromium', '--workers=1', '--reporter=line'],
+      ['playwright', 'test', BENCH_TEST_FILE, '--project=chromium', '--workers=1', '--reporter=line'],
       {
         env: {
           ...process.env,
@@ -217,5 +220,5 @@ function readPositiveInteger(value, fallback) {
 }
 
 function log(message) {
-  process.stdout.write(`[agent-benchmark] ${message}\n`);
+  process.stdout.write(`[${BENCH_LOG_PREFIX}] ${message}\n`);
 }
