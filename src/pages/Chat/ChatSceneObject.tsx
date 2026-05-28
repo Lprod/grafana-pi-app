@@ -406,9 +406,9 @@ const MessageView = memo(function MessageView({
   isStreaming?: boolean;
 }) {
   const styles = useStyles2(getStyles);
-  const roleLabel = message.role === 'toolResult' ? `tool: ${message.toolName}` : message.role;
   const isUser = message.role === 'user';
   const isTool = message.role === 'toolResult';
+  const roleLabel = isTool ? undefined : message.role;
 
   return (
     <article
@@ -419,7 +419,7 @@ const MessageView = memo(function MessageView({
         isStreaming && styles.messageStreaming
       )}
     >
-      <div className={styles.messageHeader}>{roleLabel}</div>
+      {roleLabel && <div className={styles.messageHeader}>{roleLabel}</div>}
       <div className={styles.messageBody}>{renderMessageContent(message, Boolean(isStreaming))}</div>
     </article>
   );
