@@ -59,12 +59,21 @@ services:
     depends_on:
       prometheus:
         condition: service_started
+      renderer:
+        condition: service_started
     extra_hosts:
       - "host.docker.internal:host-gateway"
     environment:
       GF_FEATURE_TOGGLES_ENABLE: externalServiceAccounts
       GF_AUTH_MANAGED_SERVICE_ACCOUNTS_ENABLED: 'true'
+      GF_RENDERING_SERVER_URL: http://renderer:8081/render
+      GF_RENDERING_CALLBACK_URL: http://grafana:3000/
       OPENAI_API_KEY: ${OPENAI_API_KEY:-local-dev-key}
+
+  renderer:
+    image: grafana/grafana-image-renderer:${GRAFANA_IMAGE_RENDERER_VERSION:-latest}
+    environment:
+      ENABLE_METRICS: 'true'
 
 volumes:
   demo-data:

@@ -147,7 +147,7 @@ function ChatApp() {
   );
 
   const startNewSession = useCallback(() => {
-    const id = crypto.randomUUID();
+    const id = createSessionId();
     sessionIdRef.current = id;
     titleRef.current = 'New chat';
     setCurrentSessionId(id);
@@ -199,7 +199,7 @@ function ChatApp() {
 
     let sessionId = sessionIdRef.current;
     if (!sessionId) {
-      sessionId = crypto.randomUUID();
+      sessionId = createSessionId();
       sessionIdRef.current = sessionId;
       setCurrentSessionId(sessionId);
     }
@@ -379,6 +379,25 @@ function renderMessageContent(message: AgentMessage) {
   }
 
   return <pre>{JSON.stringify(message, null, 2)}</pre>;
+}
+
+function createSessionId() {
+  const cryptoApi = globalThis.crypto;
+  if (typeof cryptoApi?.randomUUID === 'function') {
+    return cryptoApi.randomUUID();
+  }
+
+  if (typeof cryptoApi?.getRandomValues === 'function') {
+    const bytes = cryptoApi.getRandomValues(new Uint8Array(16));
+    bytes[6] = (bytes[6] & 0x0f) | 0x40;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+
+    return Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0'))
+      .join('')
+      .replace(/^(.{8})(.{4})(.{4})(.{4})(.{12})$/, '$1-$2-$3-$4-$5');
+  }
+
+  return `session-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
 function reduceToolRuns(state: ToolRunState, event: AgentEvent): ToolRunState {

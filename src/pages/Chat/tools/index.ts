@@ -13,9 +13,12 @@ export type { SubagentRunDetails, SubagentToolCall, SubagentUsage } from './suba
 
 export function createGrafanaToolRegistry(options: CreateGrafanaToolsOptions = {}): GrafanaToolRegistry {
   const metrics = createMetricTools(options);
-  const dashboards = createDashboardTools(options);
+  const dashboards = createDashboardTools(options, options.includeAdHocDashboardTools);
   const managedDashboards = createManagedDashboardTools(options);
   const jsonnet = createJsonnetLibTools();
+  const parentManagedDashboardTools = options.includeJsonnetLibraryTools
+    ? managedDashboards.all
+    : [managedDashboards.listTemplates, managedDashboards.listManaged, managedDashboards.render, managedDashboards.sync];
   const subagents = options.runtime
     ? createSubagentTools({
         runtime: options.runtime,
@@ -30,7 +33,7 @@ export function createGrafanaToolRegistry(options: CreateGrafanaToolsOptions = {
     managedDashboards,
     jsonnet,
     subagents,
-    all: [...subagents, ...metrics, ...dashboards, ...managedDashboards.all, ...jsonnet.all],
+    all: [...subagents, ...metrics, ...parentManagedDashboardTools, ...(options.includeJsonnetLibraryTools ? jsonnet.all : []), ...dashboards],
   };
 }
 

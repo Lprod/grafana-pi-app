@@ -42,14 +42,34 @@ type managedDashboardTemplate struct {
 }
 
 type managedDashboardRequest struct {
-	TemplateID    string   `json:"templateId"`
-	UID           string   `json:"uid,omitempty"`
-	Title         string   `json:"title,omitempty"`
-	FolderUID     string   `json:"folderUid,omitempty"`
-	DatasourceUID string   `json:"datasourceUid"`
-	Job           string   `json:"job,omitempty"`
-	Tags          []string `json:"tags,omitempty"`
-	Overwrite     *bool    `json:"overwrite,omitempty"`
+	TemplateID    string      `json:"templateId"`
+	UID           string      `json:"uid,omitempty"`
+	Title         string      `json:"title,omitempty"`
+	FolderUID     string      `json:"folderUid,omitempty"`
+	DatasourceUID string      `json:"datasourceUid"`
+	Job           string      `json:"job,omitempty"`
+	From          string      `json:"from,omitempty"`
+	To            string      `json:"to,omitempty"`
+	Panels        []panelSpec `json:"panels,omitempty"`
+	Tags          []string    `json:"tags,omitempty"`
+	Overwrite     *bool       `json:"overwrite,omitempty"`
+}
+
+type panelSpec struct {
+	Type     string `json:"type,omitempty"`
+	Title    string `json:"title,omitempty"`
+	Expr     string `json:"expr,omitempty"`
+	Legend   string `json:"legend,omitempty"`
+	Unit     string `json:"unit,omitempty"`
+	RefID    string `json:"refId,omitempty"`
+	Interval string `json:"interval,omitempty"`
+	Content  string `json:"content,omitempty"`
+	Mode     string `json:"mode,omitempty"`
+	X        *int   `json:"x,omitempty"`
+	Y        *int   `json:"y,omitempty"`
+	W        *int   `json:"w,omitempty"`
+	H        *int   `json:"h,omitempty"`
+	Decimals *int   `json:"decimals,omitempty"`
 }
 
 type managedDashboardTemplateSourceRequest struct {
@@ -129,9 +149,16 @@ var (
 			Description: "Request rate, errors, duration, and saturation for a Prometheus-backed service.",
 			SourcePath:  "service-red.jsonnet",
 		},
+		{
+			ID:          "prometheus-dashboard",
+			Name:        "Prometheus Dashboard",
+			Description: "Configurable Prometheus dashboard rendered from structured panel specs.",
+			SourcePath:  "prometheus-dashboard.jsonnet",
+		},
 	}
 	templateByID = map[string]managedDashboardTemplate{
-		"service-red": managedDashboardTemplates[0],
+		"service-red":          managedDashboardTemplates[0],
+		"prometheus-dashboard": managedDashboardTemplates[1],
 	}
 	dashboardUIDPattern = regexp.MustCompile(`[^a-z0-9-]+`)
 )
@@ -400,9 +427,35 @@ func normalizeManagedDashboardRequest(request managedDashboardRequest) managedDa
 	request.DatasourceUID = strings.TrimSpace(request.DatasourceUID)
 	request.FolderUID = strings.TrimSpace(request.FolderUID)
 	request.Job = strings.TrimSpace(request.Job)
+	request.From = strings.TrimSpace(request.From)
+	request.To = strings.TrimSpace(request.To)
+	request.Panels = normalizePanelSpecs(request.Panels)
 	request.UID = normalizeManagedDashboardUID(request.UID, request.Title)
 	request.Tags = normalizeTags(request.Tags)
 	return request
+}
+
+func normalizePanelSpecs(panels []panelSpec) []panelSpec {
+	result := make([]panelSpec, 0, len(panels))
+	for _, panel := range panels {
+		panel.Type = strings.TrimSpace(panel.Type)
+		panel.Title = strings.TrimSpace(panel.Title)
+		panel.Expr = strings.TrimSpace(panel.Expr)
+		panel.Legend = strings.TrimSpace(panel.Legend)
+		panel.Unit = strings.TrimSpace(panel.Unit)
+		panel.RefID = strings.TrimSpace(panel.RefID)
+		panel.Interval = strings.TrimSpace(panel.Interval)
+		panel.Content = strings.TrimSpace(panel.Content)
+		panel.Mode = strings.TrimSpace(panel.Mode)
+		if panel.Type == "" {
+			panel.Type = "timeseries"
+		}
+		if panel.Type != "text" && panel.Expr == "" {
+			continue
+		}
+		result = append(result, panel)
+	}
+	return result
 }
 
 func templateTitle(templateID string) string {

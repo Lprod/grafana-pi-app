@@ -12,6 +12,9 @@ export type GrafanaToolRuntime = {
 
 export type CreateGrafanaToolsOptions = GrafanaToolConfig & {
   runtime?: GrafanaToolRuntime;
+  includeAdHocDashboardTools?: boolean;
+  includeJsonnetLibraryTools?: boolean;
+  includeRawPrometheusQueryTool?: boolean;
 };
 
 export type ResourceCapableDataSource = DataSourceApi & {
@@ -55,7 +58,6 @@ export type QueryPrometheusParams = DatasourceParams & {
   type?: 'instant' | 'range';
   start?: string;
   end?: string;
-  step?: string;
 };
 
 export type UploadDashboardParams = {
@@ -71,8 +73,28 @@ export type ManagedDashboardParams = {
   datasourceUid: string;
   folderUid?: string;
   job?: string;
+  from?: string;
+  to?: string;
+  panels?: ManagedDashboardPanelSpec[];
   tags?: string[];
   overwrite?: boolean;
+};
+
+export type ManagedDashboardPanelSpec = {
+  type?: 'timeseries' | 'text';
+  title?: string;
+  expr?: string;
+  legend?: string;
+  unit?: string;
+  refId?: string;
+  interval?: string;
+  content?: string;
+  mode?: 'markdown' | 'html' | 'code';
+  x?: number;
+  y?: number;
+  w?: number;
+  h?: number;
+  decimals?: number;
 };
 
 export type ManagedDashboardTemplateSourceParams = {

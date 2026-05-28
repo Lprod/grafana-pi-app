@@ -6,9 +6,9 @@ Grafana Pi App is a Grafana app plugin that embeds a Pi-powered LLM chat assista
 
 - Discovers Prometheus datasources visible to the current user.
 - Lists metric names and label values through Grafana datasource resource APIs.
-- Runs PromQL through Grafana datasource query APIs.
-- Creates, updates, lists, fetches, deletes, and screenshots dashboards through Grafana APIs.
+- Runs PromQL through Grafana datasource query APIs, returning compact min/max/last/sample summaries for range queries by default.
 - Creates app-managed dashboards from vendored Jsonnet/Grafonnet templates. These dashboards are marked as plugin-managed and should be edited through the app, not the standard Grafana dashboard editor.
+- Lists, fetches, and screenshots dashboards through Grafana APIs.
 - Delegates broad metric and Jsonnet reconnaissance to restricted subagents with isolated chat context.
 - Stores chat sessions per Grafana user with plugin user storage.
 
@@ -27,11 +27,13 @@ For local Docker provisioning, `provisioning/plugins/app.yaml` reads `OPENAI_API
 The local demo config points Grafana at `http://host.docker.internal:8080/v1`, sets the model to the Qwen llama-server model, and limits assistant datasource access to the provisioned `prometheus` datasource.
 When `OPENAI_API_KEY` is unset, Compose provides a local dummy key because llama-server only needs a bearer token-shaped value.
 
-Managed dashboard writes use the plugin service account declared in `plugin.json`. In local Docker, `docker-compose.yaml` enables Grafana's external service account support for this.
+Managed dashboard writes use the plugin service account declared in `plugin.json`. In local Docker, `docker-compose.yaml` enables Grafana's external service account support for this and starts Grafana image rendering so screenshot verification can run.
 
 ## Managed dashboards
 
 The backend vendors Jsonnet libraries under `pkg/plugin/jsonnet/vendor` using the same `jsonnet-bundler` layout as `agentic-observability`. Templates live in `pkg/plugin/jsonnet/templates` and are embedded into the backend binary.
+
+Bundled templates currently include `service-red` and `prometheus-dashboard`.
 
 The assistant can render and sync bundled templates with:
 
@@ -40,10 +42,10 @@ The assistant can render and sync bundled templates with:
 - `grafana_list_managed_dashboards`
 - `grafana_render_managed_dashboard`
 - `grafana_sync_managed_dashboard`
-- `read_managed_dashboard_template`
-- `search_jsonnet_libs`, `read_jsonnet_lib`, and `list_jsonnet_libs`
 
 Synced dashboards are saved through the `dashboard.grafana.app` resource API with `grafana.app/managedBy=plugin` and `grafana.app/managerId=elohmeier-grafanapiapp-app`. The app intentionally does not set `grafana.app/managerAllowsEdits`, so normal Grafana UI edits are treated as read-only/export flows while app sync remains the source of truth.
+
+The default chat toolset does not expose raw dashboard JSON upload/delete tools, raw Prometheus data-frame output, or direct vendored Jsonnet file browsing. Jsonnet inspection is delegated to the restricted Jsonnet subagent, and dashboard writes go through managed templates.
 
 ## Subagents
 

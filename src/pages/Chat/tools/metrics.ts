@@ -10,6 +10,7 @@ import {
   type DataQueryResponse,
   type DataSourceInstanceSettings,
   type TimeRange,
+  type Field,
 } from '@grafana/data';
 import { config, getDataSourceSrv } from '@grafana/runtime';
 import { lastValueFrom, type Observable } from 'rxjs';
@@ -26,14 +27,24 @@ import type {
   ResourceCapableDataSource,
 } from './types';
 
-export function createMetricTools(toolConfig: GrafanaToolConfig): AgentTool[] {
-  return [
+type MetricToolConfig = GrafanaToolConfig & {
+  includeRawPrometheusQueryTool?: boolean;
+};
+
+export function createMetricTools(toolConfig: MetricToolConfig): AgentTool[] {
+  const tools = [
     makeGrafanaGetDatasourcesTool(toolConfig),
     makeListMetricsTool(toolConfig),
     makeListLabelValuesTool(toolConfig),
     makeInspectMetricSeriesTool(toolConfig),
     makeQueryPrometheusTool(toolConfig),
   ];
+
+  if (toolConfig.includeRawPrometheusQueryTool) {
+    tools.push(makeQueryPrometheusRawTool(toolConfig));
+  }
+
+  return tools;
 }
 
 export function filterAllowedPrometheusDatasourceSettings(
@@ -163,14 +174,14 @@ function makeQueryPrometheusTool(toolConfig: GrafanaToolConfig): AgentTool {
   return {
     name: 'query_prometheus',
     label: 'Query Prometheus',
-    description: 'Run an instant or range PromQL query through Grafana as the current user.',
+    description:
+      'Run an instant or range PromQL query through Grafana as the current user. Range results are compact summaries with min/max/last and sampled points, not raw data frames.',
     parameters: Type.Object({
       datasourceUid: Type.Optional(Type.String({ description: 'Prometheus datasource UID. Defaults to the first available Prometheus datasource.' })),
       query: Type.String({ description: 'PromQL expression.' }),
       type: Type.Optional(Type.Union([Type.Literal('instant'), Type.Literal('range')], { description: 'Query type. Defaults to instant.' })),
       start: Type.Optional(Type.String({ description: 'Range start such as now-1h, now-6h, or an ISO timestamp.' })),
       end: Type.Optional(Type.String({ description: 'Range end such as now or an ISO timestamp.' })),
-      step: Type.Optional(Type.String({ description: 'Resolution step such as 30s, 1m, or 5m.' })),
     }),
     async execute(_toolCallId, params, signal) {
       const args = params as QueryPrometheusParams;
@@ -178,44 +189,62 @@ function makeQueryPrometheusTool(toolConfig: GrafanaToolConfig): AgentTool {
       const ds = await getPrometheusDatasource(toolConfig, args.datasourceUid);
       const queryType = args.type ?? 'instant';
       const timeRange = queryType === 'range' ? makeTimeRange(args.start ?? 'now-1h', args.end ?? 'now') : getDefaultTimeRange();
-      const interval = args.step ?? '1m';
-      const intervalMs = durationToMs(interval) ?? 60000;
-      const target = {
-        refId: 'A',
-        datasource: { uid: ds.uid, type: ds.type },
-        expr: args.query,
-        range: queryType === 'range',
-        instant: queryType === 'instant',
+      const interval = queryType === 'range' ? chooseRangeInterval(timeRange) : '1m';
+      const response = await runPrometheusQuery(ds, args.query, queryType, timeRange, interval);
+
+      const frames = response.data ?? [];
+      const summary = summarizePrometheusQuery({
+        datasourceUid: ds.uid,
+        query: args.query,
+        queryType,
         interval,
-        editorMode: 'code',
-      } as DataQueryRequest['targets'][number];
+        timeRange,
+        frames,
+      });
+      const result = truncateText(JSON.stringify(summary, null, 2), 40000);
 
-      const request: DataQueryRequest = {
-        app: CoreApp.Unknown,
-        requestId: `pi-query-${Date.now()}`,
+      return textResult(result, {
+        datasourceUid: ds.uid,
+        query: args.query,
         interval,
-        intervalMs,
-        maxDataPoints: 600,
-        range: timeRange,
-        rangeRaw: timeRange.raw,
-        scopedVars: {},
-        targets: [target],
-        timezone: config.bootData.user.timezone || 'browser',
-        startTime: Date.now(),
-      };
+        frames: frames.length,
+        series: summary.series.length,
+        summarized: true,
+      });
+    },
+  };
+}
 
-      const response = await resolveQueryResponse(ds.query(request));
-      if (response.state === LoadingState.Error) {
-        throw new Error(response.errors?.[0]?.message || 'Prometheus query failed');
-      }
-
+function makeQueryPrometheusRawTool(toolConfig: GrafanaToolConfig): AgentTool {
+  return {
+    name: 'query_prometheus_raw',
+    label: 'Query Prometheus raw',
+    description:
+      'Run a PromQL query and return raw Grafana data frames. This is intentionally verbose and should only be enabled for developer/debug workflows.',
+    parameters: Type.Object({
+      datasourceUid: Type.Optional(Type.String({ description: 'Prometheus datasource UID. Defaults to the first available Prometheus datasource.' })),
+      query: Type.String({ description: 'PromQL expression.' }),
+      type: Type.Optional(Type.Union([Type.Literal('instant'), Type.Literal('range')], { description: 'Query type. Defaults to instant.' })),
+      start: Type.Optional(Type.String({ description: 'Range start such as now-1h, now-6h, or an ISO timestamp.' })),
+      end: Type.Optional(Type.String({ description: 'Range end such as now or an ISO timestamp.' })),
+    }),
+    async execute(_toolCallId, params, signal) {
+      const args = params as QueryPrometheusParams;
+      throwIfAborted(signal);
+      const ds = await getPrometheusDatasource(toolConfig, args.datasourceUid);
+      const queryType = args.type ?? 'instant';
+      const timeRange = queryType === 'range' ? makeTimeRange(args.start ?? 'now-1h', args.end ?? 'now') : getDefaultTimeRange();
+      const interval = queryType === 'range' ? chooseRangeInterval(timeRange) : '1m';
+      const response = await runPrometheusQuery(ds, args.query, queryType, timeRange, interval);
       const frames = response.data ?? [];
       const result = truncateText(JSON.stringify(frames.map(frameToJson), null, 2), 120000);
 
       return textResult(result, {
         datasourceUid: ds.uid,
         query: args.query,
+        interval,
         frames: frames.length,
+        raw: true,
       });
     },
   };
@@ -247,6 +276,46 @@ async function getDatasourceResource<T>(ds: ResourceCapableDataSource, path: str
   }
 
   return backendFetch<T>(`/api/datasources/uid/${encodeURIComponent(settings.uid)}/resources/${path}`, { params });
+}
+
+async function runPrometheusQuery(
+  ds: ResourceCapableDataSource,
+  query: string,
+  queryType: 'instant' | 'range',
+  timeRange: TimeRange,
+  interval: string
+): Promise<DataQueryResponse> {
+  const intervalMs = durationToMs(interval) ?? 60000;
+  const target = {
+    refId: 'A',
+    datasource: { uid: ds.uid, type: ds.type },
+    expr: query,
+    range: queryType === 'range',
+    instant: queryType === 'instant',
+    interval,
+    editorMode: 'code',
+  } as DataQueryRequest['targets'][number];
+
+  const request: DataQueryRequest = {
+    app: CoreApp.Unknown,
+    requestId: `pi-query-${Date.now()}`,
+    interval,
+    intervalMs,
+    maxDataPoints: 1200,
+    range: timeRange,
+    rangeRaw: timeRange.raw,
+    scopedVars: {},
+    targets: [target],
+    timezone: config.bootData.user.timezone || 'browser',
+    startTime: Date.now(),
+  };
+
+  const response = await resolveQueryResponse(ds.query(request));
+  if (response.state === LoadingState.Error) {
+    throw new Error(response.errors?.[0]?.message || 'Prometheus query failed');
+  }
+
+  return response;
 }
 
 function makeTimeRange(fromRaw: string, toRaw: string): TimeRange {
@@ -284,6 +353,268 @@ function frameToJson(frame: DataFrame) {
   return dataFrameToJSON(frame);
 }
 
+type PrometheusQuerySummary = {
+  datasourceUid: string;
+  query: string;
+  queryType: 'instant' | 'range';
+  interval: string;
+  range: {
+    from: string;
+    to: string;
+    raw: TimeRange['raw'];
+  };
+  frameCount: number;
+  totalSeries: number;
+  truncatedSeries: boolean;
+  notices: QueryNotice[];
+  executedQueryStrings: string[];
+  series: SeriesSummary[];
+};
+
+type QueryNotice = {
+  severity?: string;
+  text?: string;
+};
+
+type SeriesSummary = {
+  name: string;
+  labels: Record<string, string>;
+  points: number;
+  nonNullPoints: number;
+  nullPoints: number;
+  first?: SummaryPoint;
+  last?: SummaryPoint;
+  min?: SummaryPoint;
+  max?: SummaryPoint;
+  mean?: number;
+  delta?: number;
+  deltaPercent?: number;
+  samples: SummaryPoint[];
+  sampled: boolean;
+};
+
+type SummaryPoint = {
+  time?: string;
+  value: number | null;
+};
+
+const MAX_SERIES_SUMMARIES = 40;
+const MAX_POINT_SAMPLES = 8;
+
+function summarizePrometheusQuery(options: {
+  datasourceUid: string;
+  query: string;
+  queryType: 'instant' | 'range';
+  interval: string;
+  timeRange: TimeRange;
+  frames: DataFrame[];
+}): PrometheusQuerySummary {
+  const allSeries: SeriesSummary[] = [];
+
+  for (const frame of options.frames) {
+    const timeField = frame.fields.find(isTimeField);
+    const numberFields = frame.fields.filter(isNumberField);
+
+    for (const field of numberFields) {
+      allSeries.push(summarizeNumberField(frame, field, timeField));
+    }
+  }
+
+  return {
+    datasourceUid: options.datasourceUid,
+    query: options.query,
+    queryType: options.queryType,
+    interval: options.interval,
+    range: {
+      from: options.timeRange.from.toISOString(),
+      to: options.timeRange.to.toISOString(),
+      raw: options.timeRange.raw,
+    },
+    frameCount: options.frames.length,
+    totalSeries: allSeries.length,
+    truncatedSeries: allSeries.length > MAX_SERIES_SUMMARIES,
+    notices: collectNotices(options.frames),
+    executedQueryStrings: collectExecutedQueryStrings(options.frames),
+    series: allSeries.slice(0, MAX_SERIES_SUMMARIES),
+  };
+}
+
+function summarizeNumberField(frame: DataFrame, field: Field, timeField?: Field): SeriesSummary {
+  const points = getFieldLength(field, frame.length ?? 0);
+  const samples = sampleIndices(points, MAX_POINT_SAMPLES).map((index) => pointAt(field, timeField, index));
+  let first: SummaryPoint | undefined;
+  let last: SummaryPoint | undefined;
+  let min: SummaryPoint | undefined;
+  let max: SummaryPoint | undefined;
+  let sum = 0;
+  let nonNullPoints = 0;
+
+  for (let index = 0; index < points; index++) {
+    const value = finiteNumber(valueAt(field, index));
+    if (value === null) {
+      continue;
+    }
+
+    const point = pointAt(field, timeField, index, value);
+    first ??= point;
+    last = point;
+    if (!min || value < min.value!) {
+      min = point;
+    }
+    if (!max || value > max.value!) {
+      max = point;
+    }
+    sum += value;
+    nonNullPoints++;
+  }
+
+  const summary: SeriesSummary = {
+    name: seriesName(frame, field),
+    labels: stringLabels(field.labels),
+    points,
+    nonNullPoints,
+    nullPoints: Math.max(0, points - nonNullPoints),
+    first,
+    last,
+    min,
+    max,
+    mean: nonNullPoints > 0 ? roundNumber(sum / nonNullPoints) : undefined,
+    samples,
+    sampled: points > samples.length,
+  };
+
+  if (first && last && first.value !== null && last.value !== null) {
+    summary.delta = roundNumber(last.value - first.value);
+    if (first.value !== 0) {
+      summary.deltaPercent = roundNumber(((last.value - first.value) / Math.abs(first.value)) * 100);
+    }
+  }
+
+  return summary;
+}
+
+function isTimeField(field: Field) {
+  return field.type === 'time';
+}
+
+function isNumberField(field: Field) {
+  return field.type === 'number';
+}
+
+function seriesName(frame: DataFrame, field: Field) {
+  const displayName = field.config?.displayNameFromDS || field.config?.displayName || field.name || frame.name;
+  return displayName || 'series';
+}
+
+function stringLabels(labels: Field['labels']): Record<string, string> {
+  const result: Record<string, string> = {};
+  for (const [key, value] of Object.entries(labels ?? {})) {
+    result[key] = String(value);
+  }
+  return result;
+}
+
+function pointAt(field: Field, timeField: Field | undefined, index: number, knownValue?: number | null): SummaryPoint {
+  const value = knownValue ?? finiteNumber(valueAt(field, index));
+  const rawTime = timeField ? valueAt(timeField, index) : undefined;
+  const time = formatTime(rawTime);
+  return time ? { time, value } : { value };
+}
+
+function formatTime(raw: unknown): string | undefined {
+  if (typeof raw === 'number' && Number.isFinite(raw)) {
+    return new Date(raw).toISOString();
+  }
+  if (raw instanceof Date) {
+    return raw.toISOString();
+  }
+  if (typeof raw === 'string' && raw.trim()) {
+    const date = new Date(raw);
+    return Number.isNaN(date.valueOf()) ? raw : date.toISOString();
+  }
+  return undefined;
+}
+
+function finiteNumber(raw: unknown): number | null {
+  const value = typeof raw === 'number' ? raw : typeof raw === 'string' ? Number(raw) : NaN;
+  return Number.isFinite(value) ? roundNumber(value) : null;
+}
+
+function roundNumber(value: number): number {
+  if (value === 0) {
+    return 0;
+  }
+  if (Math.abs(value) >= 1_000_000 || Math.abs(value) < 0.000001) {
+    return Number(value.toExponential(6));
+  }
+  return Number(value.toPrecision(7));
+}
+
+function getFieldLength(field: Field, fallback: number): number {
+  const values = (field as any).values;
+  return Number.isFinite(values?.length) ? values.length : fallback;
+}
+
+function valueAt(field: Field, index: number): unknown {
+  const values = (field as any).values;
+  if (!values) {
+    return undefined;
+  }
+  if (typeof values.get === 'function') {
+    return values.get(index);
+  }
+  return values[index];
+}
+
+function sampleIndices(length: number, maxSamples: number): number[] {
+  if (length <= 0) {
+    return [];
+  }
+  if (length <= maxSamples) {
+    return Array.from({ length }, (_, index) => index);
+  }
+
+  const indices = new Set<number>([0, 1, 2, length - 3, length - 2, length - 1]);
+  const remaining = Math.max(0, maxSamples - indices.size);
+  for (let index = 1; index <= remaining; index++) {
+    indices.add(Math.round((index * (length - 1)) / (remaining + 1)));
+  }
+
+  return Array.from(indices).sort((left, right) => left - right).slice(0, maxSamples);
+}
+
+function collectNotices(frames: DataFrame[]): QueryNotice[] {
+  const seen = new Set<string>();
+  const notices: QueryNotice[] = [];
+
+  for (const frame of frames) {
+    const frameNotices = ((frame.meta as any)?.notices ?? []) as QueryNotice[];
+    for (const notice of frameNotices) {
+      const key = `${notice.severity ?? ''}:${notice.text ?? ''}`;
+      if (!seen.has(key)) {
+        seen.add(key);
+        notices.push({
+          severity: notice.severity,
+          text: notice.text,
+        });
+      }
+    }
+  }
+
+  return notices.slice(0, 10);
+}
+
+function collectExecutedQueryStrings(frames: DataFrame[]): string[] {
+  const queries = new Set<string>();
+  for (const frame of frames) {
+    const executed = (frame.meta as any)?.executedQueryString;
+    if (typeof executed === 'string' && executed.trim()) {
+      queries.add(executed);
+    }
+  }
+  return Array.from(queries).slice(0, 3);
+}
+
 async function resolveQueryResponse(result: Promise<DataQueryResponse> | Observable<DataQueryResponse>): Promise<DataQueryResponse> {
   if (isPromise<DataQueryResponse>(result)) {
     return result;
@@ -304,6 +635,20 @@ function durationToMs(duration: string): number | undefined {
   const unit = match[2];
   const multipliers: Record<string, number> = { ms: 1, s: 1000, m: 60000, h: 3600000, d: 86400000 };
   return value * multipliers[unit];
+}
+
+function chooseRangeInterval(timeRange: TimeRange): string {
+  const durationMs = Math.max(0, timeRange.to.valueOf() - timeRange.from.valueOf());
+  if (durationMs <= 6 * 60 * 60 * 1000) {
+    return '30s';
+  }
+  if (durationMs <= 24 * 60 * 60 * 1000) {
+    return '1m';
+  }
+  if (durationMs <= 7 * 24 * 60 * 60 * 1000) {
+    return '5m';
+  }
+  return '1h';
 }
 
 function clampInt(value: number, min: number, max: number) {

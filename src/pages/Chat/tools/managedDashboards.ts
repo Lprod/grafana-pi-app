@@ -115,6 +115,29 @@ function managedDashboardParameters() {
     datasourceUid: Type.String({ description: 'Prometheus datasource UID. Must be returned by grafana_get_datasources.' }),
     folderUid: Type.Optional(Type.String({ description: 'Optional folder UID.' })),
     job: Type.Optional(Type.String({ description: 'Optional Prometheus job label value used by the service-red template.' })),
+    from: Type.Optional(Type.String({ description: 'Optional dashboard time range start. Defaults to now-6h for prometheus-dashboard.' })),
+    to: Type.Optional(Type.String({ description: 'Optional dashboard time range end. Defaults to now.' })),
+    panels: Type.Optional(
+      Type.Array(
+        Type.Object({
+          type: Type.Optional(Type.Union([Type.Literal('timeseries'), Type.Literal('text')], { description: 'Panel type. Defaults to timeseries.' })),
+          title: Type.Optional(Type.String({ description: 'Panel title.' })),
+          expr: Type.Optional(Type.String({ description: 'PromQL expression for timeseries panels.' })),
+          legend: Type.Optional(Type.String({ description: 'Grafana legend format for timeseries panels.' })),
+          unit: Type.Optional(Type.String({ description: 'Grafana field unit, such as short, s, reqps, percentunit, or none.' })),
+          refId: Type.Optional(Type.String({ description: 'Query refId. Defaults to A.' })),
+          interval: Type.Optional(Type.String({ description: 'Panel query interval. Defaults to 30s.' })),
+          content: Type.Optional(Type.String({ description: 'Markdown/HTML/code content for text panels.' })),
+          mode: Type.Optional(Type.Union([Type.Literal('markdown'), Type.Literal('html'), Type.Literal('code')], { description: 'Text panel mode.' })),
+          x: Type.Optional(Type.Number({ description: 'Grid x position on Grafana 24-column grid.' })),
+          y: Type.Optional(Type.Number({ description: 'Grid y position.' })),
+          w: Type.Optional(Type.Number({ description: 'Grid width.' })),
+          h: Type.Optional(Type.Number({ description: 'Grid height.' })),
+          decimals: Type.Optional(Type.Number({ description: 'Optional field decimals.' })),
+        }),
+        { description: 'Structured panels for the prometheus-dashboard template.' }
+      )
+    ),
     tags: Type.Optional(Type.Array(Type.String(), { description: 'Optional extra dashboard tags.' })),
     overwrite: Type.Optional(Type.Boolean({ description: 'Whether to update an existing dashboard with the same UID. Defaults to true.' })),
   });

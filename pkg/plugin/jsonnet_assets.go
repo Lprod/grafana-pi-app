@@ -21,10 +21,11 @@ const (
 )
 
 type embeddedJsonnetImporter struct {
-	files fs.FS
+	files    fs.FS
+	contents map[string]jsonnet.Contents
 }
 
-func (i embeddedJsonnetImporter) Import(importedFrom, importedPath string) (jsonnet.Contents, string, error) {
+func (i *embeddedJsonnetImporter) Import(importedFrom, importedPath string) (jsonnet.Contents, string, error) {
 	candidates := make([]string, 0, 2)
 	if importedFrom != "" && !path.IsAbs(importedPath) {
 		candidates = append(candidates, path.Clean(path.Join(path.Dir(importedFrom), importedPath)))
@@ -35,9 +36,14 @@ func (i embeddedJsonnetImporter) Import(importedFrom, importedPath string) (json
 		if !isEmbeddedJsonnetPathAllowed(candidate) {
 			continue
 		}
+		if contents, ok := i.contents[candidate]; ok {
+			return contents, candidate, nil
+		}
 		content, err := fs.ReadFile(i.files, candidate)
 		if err == nil {
-			return jsonnet.MakeContentsRaw(content), candidate, nil
+			contents := jsonnet.MakeContentsRaw(content)
+			i.contents[candidate] = contents
+			return contents, candidate, nil
 		}
 	}
 
@@ -56,7 +62,7 @@ func renderJsonnetTemplate(templatePath string, configJSON []byte) ([]byte, erro
 	}
 
 	vm := jsonnet.MakeVM()
-	vm.Importer(embeddedJsonnetImporter{files: jsonnetAssets})
+	vm.Importer(&embeddedJsonnetImporter{files: jsonnetAssets, contents: map[string]jsonnet.Contents{}})
 	vm.ExtCode("config", string(configJSON))
 
 	rendered, err := vm.EvaluateSnippet(fullPath, string(source))

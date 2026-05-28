@@ -210,6 +210,116 @@ func TestManagedDashboardRenderUsesVendoredJsonnetAndManagerMetadata(t *testing.
 	}
 }
 
+func TestManagedDashboardRenderGenericPrometheusTemplate(t *testing.T) {
+	jsonData, _ := json.Marshal(appSettings{AllowedDatasourceUIDs: []string{"prom-main"}})
+	inst, err := NewApp(context.Background(), backend.AppInstanceSettings{JSONData: jsonData})
+	if err != nil {
+		t.Fatalf("new app: %s", err)
+	}
+	app := inst.(*App)
+
+	var sender mockCallResourceResponseSender
+	err = app.CallResource(context.Background(), &backend.CallResourceRequest{
+		Method: http.MethodPost,
+		Path:   "managed-dashboards/render",
+		Body: []byte(`{
+			"templateId": "prometheus-dashboard",
+			"uid": "custom-prometheus-review",
+			"title": "Custom Prometheus Review",
+			"datasourceUid": "prom-main",
+			"from": "now-6h",
+			"to": "now",
+			"panels": [
+				{
+					"type": "text",
+					"title": "Review summary",
+					"content": "CPU saturation on vm-web-01 impacted /render/report.",
+					"x": 0,
+					"y": 0,
+					"w": 24,
+					"h": 5
+				},
+				{
+					"title": "HTTP error ratio",
+					"expr": "sum by (vm, route) (rate(http_requests_total{job=\"web\",status=~\"5..\"}[$__rate_interval])) / clamp_min(sum by (vm, route) (rate(http_requests_total{job=\"web\"}[$__rate_interval])), 1e-9)",
+					"legend": "{{vm}} {{route}}",
+					"unit": "percentunit",
+					"decimals": 3,
+					"x": 0,
+					"y": 5,
+					"w": 12,
+					"h": 8
+				},
+				{
+					"title": "Focused CPU utilization",
+					"expr": "avg(1 - rate(node_cpu_seconds_total{job=\"node\",vm=\"vm-web-01\",mode=\"idle\"}[$__rate_interval]))",
+					"legend": "focused",
+					"unit": "percentunit",
+					"decimals": 3,
+					"x": 12,
+					"y": 5,
+					"w": 12,
+					"h": 8
+				}
+			]
+		}`),
+	}, &sender)
+	if err != nil {
+		t.Fatalf("CallResource error: %s", err)
+	}
+	if len(sender.responses) != 1 {
+		t.Fatalf("expected 1 response, got %d", len(sender.responses))
+	}
+	if sender.responses[0].Status != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", sender.responses[0].Status, string(sender.responses[0].Body))
+	}
+
+	var response managedDashboardRenderResponse
+	if err := json.Unmarshal(sender.responses[0].Body, &response); err != nil {
+		t.Fatalf("decode response: %s", err)
+	}
+	if response.Template.ID != "prometheus-dashboard" {
+		t.Fatalf("unexpected template: %#v", response.Template)
+	}
+	if response.Dashboard["title"] != "Custom Prometheus Review" {
+		t.Fatalf("unexpected title: %v", response.Dashboard["title"])
+	}
+	if response.Dashboard["editable"] != false {
+		t.Fatalf("managed dashboards should render as not editable: %#v", response.Dashboard["editable"])
+	}
+	if !containsTag(response.Dashboard["tags"], "prometheus-dashboard") {
+		t.Fatalf("missing prometheus-dashboard tag: %#v", response.Dashboard["tags"])
+	}
+
+	panels, ok := response.Dashboard["panels"].([]any)
+	if !ok || len(panels) != 3 {
+		t.Fatalf("expected three rendered panels, got %#v", response.Dashboard["panels"])
+	}
+	summaryPanel := panels[0].(map[string]any)
+	options := summaryPanel["options"].(map[string]any)
+	content := options["content"].(string)
+	if !strings.Contains(content, "vm-web-01") || !strings.Contains(content, "/render/report") {
+		t.Fatalf("text panel does not include expected review context: %s", content)
+	}
+	errorPanel := panels[1].(map[string]any)
+	errorTarget := errorPanel["targets"].([]any)[0].(map[string]any)
+	errorExpr := errorTarget["expr"].(string)
+	if !strings.Contains(errorExpr, "clamp_min") || !strings.Contains(errorExpr, "sum by (vm, route)") {
+		t.Fatalf("unexpected error ratio expression: %s", errorExpr)
+	}
+	focusedCPU := panels[2].(map[string]any)
+	focusedTarget := focusedCPU["targets"].([]any)[0].(map[string]any)
+	focusedExpr := focusedTarget["expr"].(string)
+	if !strings.Contains(focusedExpr, "node_cpu_seconds_total") || !strings.Contains(focusedExpr, `vm="vm-web-01"`) {
+		t.Fatalf("unexpected focused CPU expression: %s", focusedExpr)
+	}
+
+	annotations := response.Resource.Metadata.Annotations
+	if annotations[annotationTemplateID] != "prometheus-dashboard" || !strings.Contains(annotations[annotationConfig], `"panels"`) {
+		t.Fatalf("missing generic dashboard annotations: %#v", annotations)
+	}
+}
+
 func TestManagedDashboardRenderRejectsDisallowedDatasource(t *testing.T) {
 	jsonData, _ := json.Marshal(appSettings{AllowedDatasourceUIDs: []string{"prom-main"}})
 	inst, err := NewApp(context.Background(), backend.AppInstanceSettings{JSONData: jsonData})
@@ -382,6 +492,19 @@ func joinTemplateLines(lines []managedDashboardTemplateLine) string {
 		result.WriteByte('\n')
 	}
 	return result.String()
+}
+
+func containsTag(raw any, expected string) bool {
+	tags, ok := raw.([]any)
+	if !ok {
+		return false
+	}
+	for _, tag := range tags {
+		if tag == expected {
+			return true
+		}
+	}
+	return false
 }
 
 func joinBodies(responses []*backend.CallResourceResponse) string {

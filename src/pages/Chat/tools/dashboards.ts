@@ -8,14 +8,12 @@ import type { DashboardSearchResult, DashboardUidParams, GrafanaToolConfig, List
 
 const REQUIRED_DASHBOARD_TAG = 'genai';
 
-export function createDashboardTools(toolConfig: GrafanaToolConfig): AgentTool[] {
-  return [
-    makeGrafanaUploadDashboardTool(toolConfig),
-    grafanaGetDashboardTool,
-    grafanaListDashboardsTool,
-    grafanaDeleteDashboardTool,
-    grafanaScreenshotTool,
-  ];
+export function createDashboardTools(toolConfig: GrafanaToolConfig, includeAdHocWrites = false): AgentTool[] {
+  const readTools = [grafanaGetDashboardTool, grafanaListDashboardsTool, grafanaScreenshotTool];
+  if (!includeAdHocWrites) {
+    return readTools;
+  }
+  return [makeGrafanaUploadDashboardTool(toolConfig), ...readTools, grafanaDeleteDashboardTool];
 }
 
 function makeGrafanaUploadDashboardTool(toolConfig: GrafanaToolConfig): AgentTool {
