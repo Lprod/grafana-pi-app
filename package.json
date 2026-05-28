@@ -10,6 +10,7 @@
     "lint": "eslint --cache .",
     "lint:fix": "npm run lint -- --fix && prettier --write --list-different .",
     "e2e": "playwright test",
+    "benchmark:agent": "node scripts/benchmark-agent.mjs",
     "server": "docker compose up --build",
     "sign": "npx --yes @grafana/sign-plugin@latest"
   },

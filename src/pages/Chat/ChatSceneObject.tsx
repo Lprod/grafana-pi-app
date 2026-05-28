@@ -34,6 +34,18 @@ type ToolRunState = Record<string, ToolRunView>;
 const SESSION_INDEX_KEY = 'sessions:index';
 const sessionKey = (id: string) => `sessions:${id}`;
 
+type BenchmarkAgentEvent = {
+  type: AgentEvent['type'];
+  timestamp: number;
+  [key: string]: unknown;
+};
+
+declare global {
+  interface Window {
+    __PI_AGENT_BENCHMARK_RECORD_EVENT__?: (event: BenchmarkAgentEvent) => void;
+  }
+}
+
 export class ChatSceneObject extends SceneObjectBase<ChatSceneObjectState> {
   static Component = ChatSceneRenderer;
 }
@@ -159,6 +171,7 @@ function ChatApp() {
       });
 
       unsubscribeRef.current = nextAgent.subscribe((event) => {
+        emitBenchmarkEvent(event);
         if (shouldBatchRevision(event)) {
           scheduleRevision();
         } else {
@@ -581,6 +594,132 @@ function reduceToolRuns(state: ToolRunState, event: AgentEvent): ToolRunState {
 
 function shouldBatchRevision(event: AgentEvent) {
   return event.type === 'message_update' || event.type === 'tool_execution_update';
+}
+
+function emitBenchmarkEvent(event: AgentEvent) {
+  if (typeof window === 'undefined' || typeof window.__PI_AGENT_BENCHMARK_RECORD_EVENT__ !== 'function') {
+    return;
+  }
+
+  try {
+    window.__PI_AGENT_BENCHMARK_RECORD_EVENT__(serializeBenchmarkEvent(event));
+  } catch {
+    // Benchmark instrumentation must not affect chat behavior.
+  }
+}
+
+function serializeBenchmarkEvent(event: AgentEvent): BenchmarkAgentEvent {
+  const timestamp = Date.now();
+
+  if (event.type === 'agent_end') {
+    return {
+      type: event.type,
+      timestamp,
+      messageCount: event.messages.length,
+    };
+  }
+
+  if (event.type === 'message_start' || event.type === 'message_update' || event.type === 'message_end') {
+    return {
+      type: event.type,
+      timestamp,
+      message: summarizeBenchmarkMessage(event.message),
+    };
+  }
+
+  if (event.type === 'turn_end') {
+    return {
+      type: event.type,
+      timestamp,
+      message: summarizeBenchmarkMessage(event.message),
+      toolResultCount: event.toolResults.length,
+    };
+  }
+
+  if (event.type === 'tool_execution_start') {
+    return {
+      type: event.type,
+      timestamp,
+      toolCallId: event.toolCallId,
+      toolName: event.toolName,
+      args: event.args,
+    };
+  }
+
+  if (event.type === 'tool_execution_update') {
+    return {
+      type: event.type,
+      timestamp,
+      toolCallId: event.toolCallId,
+      toolName: event.toolName,
+      args: event.args,
+      partialResult: event.partialResult,
+    };
+  }
+
+  if (event.type === 'tool_execution_end') {
+    return {
+      type: event.type,
+      timestamp,
+      toolCallId: event.toolCallId,
+      toolName: event.toolName,
+      result: event.result,
+      isError: event.isError,
+    };
+  }
+
+  return { type: event.type, timestamp };
+}
+
+function summarizeBenchmarkMessage(message: AgentMessage) {
+  if (!message || typeof message !== 'object') {
+    return undefined;
+  }
+
+  const record = message as unknown as Record<string, unknown>;
+  return {
+    role: record.role,
+    stopReason: record.stopReason,
+    errorMessage: record.errorMessage,
+    content: summarizeBenchmarkContent(record.content),
+  };
+}
+
+function summarizeBenchmarkContent(content: unknown) {
+  if (typeof content === 'string') {
+    return truncateBenchmarkText(content);
+  }
+  if (!Array.isArray(content)) {
+    return undefined;
+  }
+
+  return content.map((block) => {
+    if (!block || typeof block !== 'object') {
+      return block;
+    }
+
+    const record = block as Record<string, unknown>;
+    if (record.type === 'text') {
+      return { type: record.type, text: truncateBenchmarkText(record.text) };
+    }
+    if (record.type === 'toolCall') {
+      return {
+        type: record.type,
+        id: record.id,
+        name: record.name,
+        arguments: record.arguments,
+      };
+    }
+
+    return { type: record.type };
+  });
+}
+
+function truncateBenchmarkText(value: unknown) {
+  if (typeof value !== 'string') {
+    return value;
+  }
+  return value.length > 2000 ? `${value.slice(0, 2000)}...` : value;
 }
 
 type ScheduledFrame = { kind: 'raf'; id: number } | { kind: 'timeout'; id: ReturnType<typeof setTimeout> };

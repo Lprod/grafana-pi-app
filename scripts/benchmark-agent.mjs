@@ -1,0 +1,216 @@
+#!/usr/bin/env node
+
+import { spawn } from 'node:child_process';
+import process from 'node:process';
+import { setTimeout as delay } from 'node:timers/promises';
+
+const LLM_BASE_URL = process.env.BENCH_LLM_BASE_URL ?? 'http://127.0.0.1:8080/v1';
+const GRAFANA_URL = process.env.GRAFANA_URL ?? 'http://localhost:3000';
+const GRAFANA_START_TIMEOUT_MS = readPositiveInteger(process.env.GRAFANA_START_TIMEOUT_MS, 120_000);
+const LLAMA_START_TIMEOUT_MS = readPositiveInteger(process.env.LLAMA_START_TIMEOUT_MS, 15 * 60_000);
+const BENCH_TIMEOUT_MS = readPositiveInteger(process.env.BENCH_TIMEOUT_MS, 120_000);
+
+const LLAMA_COMMAND = 'llama-server';
+const LLAMA_ARGS = [
+  '-hf',
+  'unsloth/Qwen3.6-35B-A3B-MTP-GGUF:UD-Q4_K_XL',
+  '--temp',
+  '1.0',
+  '--top-p',
+  '0.95',
+  '--top-k',
+  '20',
+  '--presence-penalty',
+  '1.5',
+  '--min-p',
+  '0.00',
+  '--spec-type',
+  'draft-mtp',
+  '--spec-draft-n-max',
+  '2',
+  '--host',
+  '0.0.0.0',
+  '--port',
+  '8080',
+];
+
+let llamaProcess;
+let llamaProcessError;
+
+installCleanupHandlers();
+
+try {
+  log('Resetting Docker Compose demo volumes.');
+  await runCommand('docker', ['compose', 'down', '-v', '--remove-orphans']);
+
+  log('Rebuilding plugin artifacts and starting the local stack with mise run dev:reload.');
+  await runCommand('mise', ['run', 'dev:reload']);
+  await waitForGrafana();
+
+  if (await isModelServerReady()) {
+    log(`Reusing existing OpenAI-compatible model server at ${LLM_BASE_URL}.`);
+  } else {
+    log(`Starting llama-server at ${LLM_BASE_URL}.`);
+    llamaProcess = spawn(LLAMA_COMMAND, LLAMA_ARGS, {
+      detached: true,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    llamaProcess.once('error', (error) => {
+      llamaProcessError = error;
+    });
+    prefixStream(llamaProcess.stdout, '[llama] ');
+    prefixStream(llamaProcess.stderr, '[llama] ');
+
+    await waitForModelServer();
+  }
+
+  log(`Running agent benchmark against ${GRAFANA_URL} with ${BENCH_TIMEOUT_MS}ms agent timeout.`);
+  await runCommand(
+    'npx',
+    ['playwright', 'test', 'tests/agentBenchmark.spec.ts', '--project=chromium', '--workers=1', '--reporter=line'],
+    {
+      env: {
+        ...process.env,
+        BENCH_TIMEOUT_MS: String(BENCH_TIMEOUT_MS),
+        GRAFANA_URL,
+      },
+    }
+  );
+} finally {
+  cleanupLlamaProcess();
+}
+
+function runCommand(command, args, options = {}) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, args, {
+      stdio: 'inherit',
+      env: process.env,
+      ...options,
+    });
+
+    child.on('error', reject);
+    child.on('exit', (code, signal) => {
+      if (code === 0) {
+        resolve();
+        return;
+      }
+
+      reject(
+        new Error(`${command} ${args.join(' ')} failed with ${signal ? `signal ${signal}` : `exit code ${code}`}.`)
+      );
+    });
+  });
+}
+
+async function isModelServerReady() {
+  try {
+    const response = await fetch(`${LLM_BASE_URL}/models`, {
+      signal: AbortSignal.timeout(2000),
+    });
+    return response.ok;
+  } catch {
+    return false;
+  }
+}
+
+async function waitForModelServer() {
+  const startedAt = Date.now();
+
+  while (Date.now() - startedAt < LLAMA_START_TIMEOUT_MS) {
+    if (llamaProcessError) {
+      throw llamaProcessError;
+    }
+
+    if (llamaProcess && (llamaProcess.exitCode !== null || llamaProcess.signalCode !== null)) {
+      throw new Error(`llama-server exited before becoming ready with code ${llamaProcess.exitCode}.`);
+    }
+
+    if (await isModelServerReady()) {
+      log(`llama-server is ready after ${Date.now() - startedAt}ms.`);
+      return;
+    }
+
+    await delay(2000);
+  }
+
+  throw new Error(`llama-server did not become ready within ${LLAMA_START_TIMEOUT_MS}ms.`);
+}
+
+async function waitForGrafana() {
+  const startedAt = Date.now();
+
+  while (Date.now() - startedAt < GRAFANA_START_TIMEOUT_MS) {
+    try {
+      const response = await fetch(`${GRAFANA_URL}/api/health`, {
+        signal: AbortSignal.timeout(2000),
+      });
+      if (response.ok) {
+        log(`Grafana is ready after ${Date.now() - startedAt}ms.`);
+        return;
+      }
+    } catch {
+      // Retry until Grafana is ready or the startup timeout expires.
+    }
+
+    await delay(1000);
+  }
+
+  throw new Error(`Grafana did not become ready within ${GRAFANA_START_TIMEOUT_MS}ms at ${GRAFANA_URL}.`);
+}
+
+function prefixStream(stream, prefix) {
+  stream.setEncoding('utf8');
+  let pending = '';
+  stream.on('data', (chunk) => {
+    pending += chunk;
+    const lines = pending.split(/\r?\n/);
+    pending = lines.pop() ?? '';
+    for (const line of lines) {
+      if (line.length > 0) {
+        process.stdout.write(`${prefix}${line}\n`);
+      }
+    }
+  });
+  stream.on('end', () => {
+    if (pending.length > 0) {
+      process.stdout.write(`${prefix}${pending}\n`);
+    }
+  });
+}
+
+function cleanupLlamaProcess() {
+  if (!llamaProcess || !llamaProcess.pid || llamaProcess.exitCode !== null || llamaProcess.signalCode !== null) {
+    return;
+  }
+
+  log('Stopping llama-server started by this benchmark.');
+  try {
+    process.kill(-llamaProcess.pid, 'SIGTERM');
+  } catch {
+    try {
+      llamaProcess.kill('SIGTERM');
+    } catch {
+      // Ignore cleanup failures during process exit.
+    }
+  }
+}
+
+function installCleanupHandlers() {
+  for (const signal of ['SIGINT', 'SIGTERM']) {
+    process.once(signal, () => {
+      cleanupLlamaProcess();
+      process.kill(process.pid, signal);
+    });
+  }
+
+  process.once('exit', cleanupLlamaProcess);
+}
+
+function readPositiveInteger(value, fallback) {
+  const parsed = value ? Number(value) : NaN;
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function log(message) {
+  process.stdout.write(`[agent-benchmark] ${message}\n`);
+}
