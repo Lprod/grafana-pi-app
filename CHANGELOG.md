@@ -1,3 +1,10 @@
+## [1.0.1](https://github.com/elohmeier/grafana-pi-app/compare/v1.0.0...v1.0.1) (2026-05-28)
+
+
+### Bug Fixes
+
+* omit LLM metadata from upstream requests ([0c8091b](https://github.com/elohmeier/grafana-pi-app/commit/0c8091b97601f57e35fb702963dc147b032bc06b))
+
 # 1.0.0 (2026-05-28)
 
 
