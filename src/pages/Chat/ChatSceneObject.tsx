@@ -17,6 +17,7 @@ import { PLUGIN_ID } from '../../constants';
 import { testIds } from '../../components/testIds';
 import { usePluginMeta } from '../../utils/utils.plugin';
 import { createGrafanaTools } from './grafanaTools';
+import { formatAssistantError, type AssistantErrorView } from './llmErrors';
 import { createOpenAICompatibleModel, type PiAppJsonData } from './model';
 import { SYSTEM_PROMPT } from './systemPrompt';
 import { ContentBlocks, ToolActivityPanel, ToolResultMessageBody, type ToolRunView } from './ToolRenderer';
@@ -372,6 +373,11 @@ function renderMessageContent(message: AgentMessage) {
     return <ContentBlocks content={message.content} />;
   }
   if (message.role === 'assistant') {
+    const errorView = formatAssistantError(message.errorMessage, message.stopReason);
+    if (errorView) {
+      return <AssistantErrorNotice error={errorView} />;
+    }
+
     return <ContentBlocks content={message.content} />;
   }
   if (message.role === 'toolResult') {
@@ -379,6 +385,24 @@ function renderMessageContent(message: AgentMessage) {
   }
 
   return <pre>{JSON.stringify(message, null, 2)}</pre>;
+}
+
+function AssistantErrorNotice({ error }: { error: AssistantErrorView }) {
+  const styles = useStyles2(getStyles);
+
+  return (
+    <Alert severity={error.severity} title={error.title}>
+      <div className={styles.assistantError}>
+        <div>{error.message}</div>
+        {error.details && (
+          <details>
+            <summary>Technical details</summary>
+            <pre>{error.details}</pre>
+          </details>
+        )}
+      </div>
+    </Alert>
+  );
 }
 
 function createSessionId() {
@@ -612,6 +636,21 @@ const getStyles = (theme: GrafanaTheme2) => ({
   }),
   messageBody: css({
     lineHeight: 1.5,
+  }),
+  assistantError: css({
+    display: 'grid',
+    gap: theme.spacing(1),
+    '& summary': {
+      cursor: 'pointer',
+      fontWeight: theme.typography.fontWeightMedium,
+    },
+    '& pre': {
+      margin: `${theme.spacing(1)} 0 0`,
+      whiteSpace: 'pre-wrap',
+      overflowWrap: 'anywhere',
+      color: theme.colors.text.secondary,
+      fontSize: theme.typography.bodySmall.fontSize,
+    },
   }),
   streaming: css({
     display: 'flex',

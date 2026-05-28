@@ -14,6 +14,7 @@ jest.mock('@grafana/runtime', () => ({
     },
   },
   getBackendSrv: jest.fn(),
+  isFetchError: (error: unknown) => Boolean(error && typeof error === 'object' && 'status' in error && 'data' in error),
   getDataSourceSrv: () => mockDataSourceSrv,
 }));
 
@@ -33,7 +34,7 @@ jest.mock('typebox', () => ({
 import type { AgentTool } from '@earendil-works/pi-agent-core';
 import type { DataFrame, DataSourceInstanceSettings } from '@grafana/data';
 import { getBackendSrv } from '@grafana/runtime';
-import { of } from 'rxjs';
+import { of, throwError } from 'rxjs';
 import {
   createGrafanaToolRegistry,
   createGrafanaTools,
@@ -240,6 +241,28 @@ describe('grafana datasource tool policy', () => {
       })
     );
     expect(result.content[0].text).toContain('Managed dashboard created');
+  });
+
+  it('surfaces managed dashboard sync backend errors as readable messages', async () => {
+    const fetch = jest.fn().mockReturnValue(
+      throwError(() => ({
+        status: 400,
+        statusText: 'Bad Request',
+        data: {
+          error: 'jsonnet compilation failed: dashboard.jsonnet:3:5-14 Did not expect: (IDENTIFIER, "textPanel")',
+        },
+        config: {
+          method: 'POST',
+          url: '/api/plugins/elohmeier-grafanapiapp-app/resources/managed-dashboards/sync',
+        },
+      }))
+    );
+    (getBackendSrv as jest.Mock).mockReturnValue({ fetch });
+    const tool = getTool(createGrafanaTools({ allowedDatasourceUids: ['prom-a'] }), 'grafana_sync_managed_dashboard');
+
+    await expect(tool.execute('call-1', { dashboard_jsonnet: 'let textPanel() = {}' }, undefined)).rejects.toThrow(
+      'Grafana request failed (400 Bad Request) while calling POST /api/plugins/elohmeier-grafanapiapp-app/resources/managed-dashboards/sync: jsonnet compilation failed: dashboard.jsonnet:3:5-14 Did not expect: (IDENTIFIER, "textPanel")'
+    );
   });
 
   it('adds subagent tools only when a chat runtime is supplied', () => {
