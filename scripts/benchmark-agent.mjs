@@ -9,6 +9,7 @@ const GRAFANA_URL = process.env.GRAFANA_URL ?? 'http://localhost:3000';
 const GRAFANA_START_TIMEOUT_MS = readPositiveInteger(process.env.GRAFANA_START_TIMEOUT_MS, 120_000);
 const LLAMA_START_TIMEOUT_MS = readPositiveInteger(process.env.LLAMA_START_TIMEOUT_MS, 15 * 60_000);
 const BENCH_TIMEOUT_MS = readPositiveInteger(process.env.BENCH_TIMEOUT_MS, 120_000);
+const BENCH_RUNS = readPositiveInteger(process.env.BENCH_RUNS, 1);
 
 const LLAMA_COMMAND = 'llama-server';
 const LLAMA_ARGS = [
@@ -64,18 +65,22 @@ try {
     await waitForModelServer();
   }
 
-  log(`Running agent benchmark against ${GRAFANA_URL} with ${BENCH_TIMEOUT_MS}ms agent timeout.`);
-  await runCommand(
-    'npx',
-    ['playwright', 'test', 'tests/agentBenchmark.spec.ts', '--project=chromium', '--workers=1', '--reporter=line'],
-    {
-      env: {
-        ...process.env,
-        BENCH_TIMEOUT_MS: String(BENCH_TIMEOUT_MS),
-        GRAFANA_URL,
-      },
-    }
-  );
+  for (let runIndex = 1; runIndex <= BENCH_RUNS; runIndex++) {
+    const runLabel = BENCH_RUNS > 1 ? ` run ${runIndex}/${BENCH_RUNS}` : '';
+    log(`Running agent benchmark${runLabel} against ${GRAFANA_URL} with ${BENCH_TIMEOUT_MS}ms agent timeout.`);
+    await runCommand(
+      'npx',
+      ['playwright', 'test', 'tests/agentBenchmark.spec.ts', '--project=chromium', '--workers=1', '--reporter=line'],
+      {
+        env: {
+          ...process.env,
+          BENCH_TIMEOUT_MS: String(BENCH_TIMEOUT_MS),
+          BENCH_RUN_INDEX: String(runIndex),
+          GRAFANA_URL,
+        },
+      }
+    );
+  }
 } finally {
   cleanupLlamaProcess();
 }

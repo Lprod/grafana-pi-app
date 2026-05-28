@@ -9,7 +9,7 @@ Grafana Pi App is a Grafana app plugin that embeds a Pi-powered LLM chat assista
 - Runs PromQL through Grafana datasource query APIs, returning compact min/max/last/sample summaries for range queries by default.
 - Creates app-managed dashboards from model-authored Jsonnet source. The source is stored with each dashboard so future edits can update the Jsonnet and re-sync through the app.
 - Lists, fetches, and screenshots dashboards through Grafana APIs.
-- Delegates broad metric and Jsonnet reconnaissance to restricted subagents with isolated chat context.
+- Keeps broad metric reconnaissance available through a restricted metrics subagent.
 - Stores chat sessions per Grafana user with plugin user storage.
 
 ## Configuration
@@ -31,11 +31,10 @@ Managed dashboard writes use the plugin service account declared in `plugin.json
 
 ## Managed dashboards
 
-The backend vendors Jsonnet libraries under `pkg/plugin/jsonnet/vendor` using the same `jsonnet-bundler` layout as `agentic-observability`. For new dashboards the assistant writes self-contained plain Jsonnet source to a session-scoped virtual `dashboard.jsonnet` file, applies compact edits to that file, and the backend compiles it with the embedded vendored libraries before saving the dashboard. If a model invents unsupported Grafonnet constructors, `fix_jsonnet` can structurally rewrite common bad `g.dashboard.new(...)`, `g.dashboard.with_panels(...)`, panel constructor, and target constructor shapes into plain dashboard Jsonnet before the slower Jsonnet exploration subagent is needed.
+The backend vendors Jsonnet libraries under `pkg/plugin/jsonnet/vendor` using the same `jsonnet-bundler` layout as `agentic-observability`. For new dashboards the assistant writes self-contained plain Jsonnet source to a session-scoped virtual `dashboard.jsonnet` file, applies compact edits to that file, and the backend compiles it with the embedded vendored libraries before saving the dashboard. If a model invents unsupported Grafonnet constructors, `render_dashboard` automatically attempts one transactional structural repair for common bad `g.dashboard.new(...)`, `g.dashboard.with_panels(...)`, panel constructor, and target constructor shapes. `fix_jsonnet` remains available for explicit repair after other render errors.
 
 The assistant can render, sync, and later retrieve Jsonnet-backed dashboards with:
 
-- `explore_jsonnet`
 - `list_managed_dashboards`
 - `get_dashboard_source`
 - `write_jsonnet`
@@ -47,11 +46,11 @@ The assistant can render, sync, and later retrieve Jsonnet-backed dashboards wit
 
 Synced dashboards are saved through the `dashboard.grafana.app` resource API with `grafana.app/managedBy=plugin`, `grafana.app/managerId=elohmeier-grafanapiapp-app`, the source checksum, and the exact Jsonnet source. The app intentionally does not set `grafana.app/managerAllowsEdits`, so normal Grafana UI edits are treated as read-only/export flows while stored Jsonnet remains the source of truth.
 
-The default chat toolset does not expose raw dashboard JSON upload/delete tools, raw Prometheus data-frame output, or direct vendored Jsonnet file browsing. Jsonnet inspection is delegated to the restricted Jsonnet subagent, and dashboard writes go through the Jsonnet-backed managed dashboard sync path.
+The default chat toolset does not expose raw dashboard JSON upload/delete tools, raw Prometheus data-frame output, direct vendored Jsonnet file browsing, or a Jsonnet subagent. Dashboard writes go through the Jsonnet-backed managed dashboard sync path.
 
 ## Subagents
 
-The chat registers `explore_metrics` and `explore_jsonnet` as high-level fallback tools after the direct tools. Each starts a nested Pi agent with a narrow tool allow-list: the metrics subagent can only discover datasources, inspect Prometheus metadata, and validate PromQL; the Jsonnet subagent can only fetch stored managed-dashboard source, search/read vendored Jsonnet libraries, and render managed dashboards without saving them. Dashboard write tools stay available only to the parent assistant.
+The default chat toolset includes `explore_metrics` as a high-level fallback for broad metric and PromQL reconnaissance. It starts a nested Pi agent with a narrow tool allow-list: the metrics subagent can only discover datasources, inspect Prometheus metadata, and validate PromQL. Dashboard write tools stay available only to the parent assistant.
 
 ## Development
 
@@ -117,5 +116,13 @@ llama-server -hf unsloth/Qwen3.6-35B-A3B-MTP-GGUF:UD-Q4_K_XL \
 ```
 
 Use a recent llama.cpp build with `draft-mtp` support; older `llama-server` builds reject that `--spec-type` value or fail to load the MTP GGUF.
+
+Run the local agent benchmark against the configured llama-server with:
+
+```bash
+npm run benchmark:agent
+```
+
+Set `BENCH_RUNS=5` to repeat the agent run without restarting the model server. Successful runs write inspectable reports to `test-results/agent-benchmark/latest-report.txt` and `latest-events.json`.
 
 Open Grafana at http://localhost:3000 and navigate to the Pi Assistant app page.

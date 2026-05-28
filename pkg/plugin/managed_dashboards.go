@@ -59,19 +59,27 @@ type managedDashboardSourceResponse struct {
 }
 
 type managedDashboardRenderResponse struct {
-	Dashboard      map[string]any          `json:"dashboard"`
-	Resource       dashboardResource       `json:"resource"`
-	SourceChecksum string                  `json:"sourceChecksum"`
-	Request        managedDashboardRequest `json:"-"`
+	Dashboard        map[string]any          `json:"dashboard"`
+	Resource         dashboardResource       `json:"resource"`
+	SourceChecksum   string                  `json:"sourceChecksum"`
+	AutoRepaired     bool                    `json:"autoRepaired,omitempty"`
+	Repairs          []string                `json:"repairs,omitempty"`
+	JsonnetFile      *managedJsonnetFileInfo `json:"jsonnetFile,omitempty"`
+	DashboardJsonnet string                  `json:"dashboard_jsonnet,omitempty"`
+	Request          managedDashboardRequest `json:"-"`
 }
 
 type managedDashboardSyncResponse struct {
-	UID            string         `json:"uid"`
-	URL            string         `json:"url"`
-	Status         string         `json:"status"`
-	Dashboard      map[string]any `json:"dashboard"`
-	Resource       map[string]any `json:"resource"`
-	SourceChecksum string         `json:"sourceChecksum"`
+	UID              string                  `json:"uid"`
+	URL              string                  `json:"url"`
+	Status           string                  `json:"status"`
+	Dashboard        map[string]any          `json:"dashboard"`
+	Resource         map[string]any          `json:"resource"`
+	SourceChecksum   string                  `json:"sourceChecksum"`
+	AutoRepaired     bool                    `json:"autoRepaired,omitempty"`
+	Repairs          []string                `json:"repairs,omitempty"`
+	JsonnetFile      *managedJsonnetFileInfo `json:"jsonnetFile,omitempty"`
+	DashboardJsonnet string                  `json:"dashboard_jsonnet,omitempty"`
 }
 
 type managedDashboardListResponse struct {
@@ -88,6 +96,14 @@ type managedDashboardListItem struct {
 	HasJsonnetSource     bool              `json:"hasJsonnetSource"`
 	DashboardJsonnetSize int               `json:"dashboardJsonnetSize,omitempty"`
 	Annotations          map[string]string `json:"annotations"`
+}
+
+type managedJsonnetFileInfo struct {
+	Path                 string `json:"path"`
+	Version              int    `json:"version"`
+	Checksum             string `json:"checksum"`
+	LineCount            int    `json:"lineCount"`
+	DashboardJsonnetSize int    `json:"dashboardJsonnetSize"`
 }
 
 type dashboardResourceList struct {
@@ -264,12 +280,16 @@ func (a *App) handleManagedDashboardSync(w http.ResponseWriter, req *http.Reques
 	}
 
 	writeJSON(w, http.StatusOK, managedDashboardSyncResponse{
-		UID:            rendered.Resource.Metadata.Name,
-		URL:            a.dashboardURL(req, rendered.Resource.Metadata.Name),
-		Status:         map[bool]string{true: "updated", false: "created"}[exists],
-		Dashboard:      rendered.Dashboard,
-		Resource:       resource,
-		SourceChecksum: rendered.SourceChecksum,
+		UID:              rendered.Resource.Metadata.Name,
+		URL:              a.dashboardURL(req, rendered.Resource.Metadata.Name),
+		Status:           map[bool]string{true: "updated", false: "created"}[exists],
+		Dashboard:        rendered.Dashboard,
+		Resource:         resource,
+		SourceChecksum:   rendered.SourceChecksum,
+		AutoRepaired:     rendered.AutoRepaired,
+		Repairs:          rendered.Repairs,
+		JsonnetFile:      rendered.JsonnetFile,
+		DashboardJsonnet: rendered.DashboardJsonnet,
 	})
 }
 
@@ -280,6 +300,8 @@ func (a *App) renderManagedDashboardRequest(body io.Reader) (*managedDashboardRe
 	}
 	request = normalizeManagedDashboardRequest(request)
 
+	sourceFromVirtualFile := false
+	var jsonnetFile *managedJsonnetFileInfo
 	if strings.TrimSpace(request.DashboardJsonnet) == "" {
 		file, err := a.jsonnetFiles.get(jsonnetFileReference{SessionID: request.SessionID, Path: request.Path})
 		if err != nil {
@@ -288,6 +310,8 @@ func (a *App) renderManagedDashboardRequest(body io.Reader) (*managedDashboardRe
 		request.DashboardJsonnet = file.Content
 		request.Path = file.Path
 		request.SourcePath = file.Path
+		sourceFromVirtualFile = true
+		jsonnetFile = managedJsonnetFileInfoFromVirtualFile(file)
 	}
 	if len([]byte(request.DashboardJsonnet)) > maxManagedDashboardJsonnetSourceBytes {
 		return nil, fmt.Errorf("dashboard_jsonnet is too large: %d bytes exceeds %d bytes", len([]byte(request.DashboardJsonnet)), maxManagedDashboardJsonnetSourceBytes)
@@ -295,12 +319,32 @@ func (a *App) renderManagedDashboardRequest(body io.Reader) (*managedDashboardRe
 
 	rendered, err := renderJsonnetSource(request.DashboardJsonnet)
 	if err != nil {
-		if sourceWindow := sourceWindowForJsonnetError(request.DashboardJsonnet, err); sourceWindow != "" {
-			return nil, fmt.Errorf("jsonnet compilation failed: %w\n%s", err, sourceWindow)
+		if sourceFromVirtualFile {
+			repairResponse, repairErr := a.jsonnetFiles.repair(jsonnetFileRepairRequest{
+				SessionID: request.SessionID,
+				Path:      request.Path,
+			})
+			if repairErr != nil {
+				return nil, jsonnetCompilationError(request.DashboardJsonnet, err, repairErr)
+			}
+
+			request.DashboardJsonnet = repairResponse.DashboardJsonnet
+			request.Path = repairResponse.Path
+			request.SourcePath = repairResponse.Path
+			jsonnetFile = managedJsonnetFileInfoFromFileResponse(repairResponse)
+			rendered, err = renderJsonnetSource(request.DashboardJsonnet)
+			if err != nil {
+				return nil, jsonnetCompilationError(request.DashboardJsonnet, err, nil)
+			}
+			return a.managedDashboardRenderResponse(request, rendered, true, repairResponse.Repairs, jsonnetFile)
 		}
-		return nil, fmt.Errorf("jsonnet compilation failed: %w", err)
+		return nil, jsonnetCompilationError(request.DashboardJsonnet, err, nil)
 	}
 
+	return a.managedDashboardRenderResponse(request, rendered, false, nil, jsonnetFile)
+}
+
+func (a *App) managedDashboardRenderResponse(request managedDashboardRequest, rendered []byte, autoRepaired bool, repairs []string, jsonnetFile *managedJsonnetFileInfo) (*managedDashboardRenderResponse, error) {
 	var dashboard map[string]any
 	if err := json.Unmarshal(rendered, &dashboard); err != nil {
 		return nil, fmt.Errorf("compiled Jsonnet is not valid dashboard JSON: %w", err)
@@ -337,12 +381,51 @@ func (a *App) renderManagedDashboardRequest(body io.Reader) (*managedDashboardRe
 		Spec: dashboard,
 	}
 
-	return &managedDashboardRenderResponse{
+	response := &managedDashboardRenderResponse{
 		Dashboard:      dashboard,
 		Resource:       resource,
 		SourceChecksum: sourceChecksum,
+		AutoRepaired:   autoRepaired,
+		Repairs:        repairs,
+		JsonnetFile:    jsonnetFile,
 		Request:        request,
-	}, nil
+	}
+	if autoRepaired {
+		response.DashboardJsonnet = request.DashboardJsonnet
+	}
+	return response, nil
+}
+
+func jsonnetCompilationError(source string, compileErr error, repairErr error) error {
+	message := fmt.Sprintf("jsonnet compilation failed: %s", compileErr)
+	if repairErr != nil {
+		message += fmt.Sprintf("\nauto-repair failed: %s", repairErr)
+	}
+	if sourceWindow := sourceWindowForJsonnetError(source, compileErr); sourceWindow != "" {
+		message += "\n" + sourceWindow
+	}
+	return errors.New(message)
+}
+
+func managedJsonnetFileInfoFromVirtualFile(file virtualJsonnetFile) *managedJsonnetFileInfo {
+	lines, _ := splitJsonnetLines(file.Content)
+	return &managedJsonnetFileInfo{
+		Path:                 file.Path,
+		Version:              file.Version,
+		Checksum:             checksumBytes([]byte(file.Content)),
+		LineCount:            len(lines),
+		DashboardJsonnetSize: len([]byte(file.Content)),
+	}
+}
+
+func managedJsonnetFileInfoFromFileResponse(response jsonnetFileResponse) *managedJsonnetFileInfo {
+	return &managedJsonnetFileInfo{
+		Path:                 response.Path,
+		Version:              response.Version,
+		Checksum:             response.Checksum,
+		LineCount:            response.LineCount,
+		DashboardJsonnetSize: response.DashboardJsonnetSize,
+	}
 }
 
 func normalizeManagedDashboardRequest(request managedDashboardRequest) managedDashboardRequest {

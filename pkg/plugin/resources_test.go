@@ -468,6 +468,66 @@ func TestVirtualJsonnetFileWriteEditRead(t *testing.T) {
 	}
 }
 
+func TestVirtualJsonnetFileEditRejectsInvalidJsonnet(t *testing.T) {
+	inst, err := NewApp(context.Background(), backend.AppInstanceSettings{})
+	if err != nil {
+		t.Fatalf("new app: %s", err)
+	}
+	app := inst.(*App)
+	source := "{\n  title: 'Virtual Dashboard',\n  uid: 'virtual-dashboard',\n  panels: [],\n}\n"
+	writeBody, _ := json.Marshal(jsonnetFileWriteRequest{
+		SessionID: "session-invalid-edit",
+		Content:   source,
+	})
+	var writeSender mockCallResourceResponseSender
+	err = app.CallResource(context.Background(), &backend.CallResourceRequest{
+		Method: http.MethodPost,
+		Path:   "managed-dashboards/jsonnet-files/write",
+		Body:   writeBody,
+	}, &writeSender)
+	if err != nil {
+		t.Fatalf("CallResource error: %s", err)
+	}
+
+	editBody, _ := json.Marshal(jsonnetFileEditRequest{
+		SessionID: "session-invalid-edit",
+		Path:      "dashboard.jsonnet",
+		Edits: []jsonnetLineEdit{
+			{StartLine: 2, EndLine: 2, Replacement: "  title: 'Broken Dashboard'"},
+		},
+	})
+	var editSender mockCallResourceResponseSender
+	err = app.CallResource(context.Background(), &backend.CallResourceRequest{
+		Method: http.MethodPost,
+		Path:   "managed-dashboards/jsonnet-files/edit",
+		Body:   editBody,
+	}, &editSender)
+	if err != nil {
+		t.Fatalf("CallResource error: %s", err)
+	}
+	if editSender.responses[0].Status != http.StatusBadRequest || !strings.Contains(string(editSender.responses[0].Body), "edited Jsonnet did not compile") {
+		t.Fatalf("expected invalid edit rejection, got %d: %s", editSender.responses[0].Status, string(editSender.responses[0].Body))
+	}
+
+	readBody, _ := json.Marshal(jsonnetFileReadRequest{SessionID: "session-invalid-edit", Path: "dashboard.jsonnet", Offset: 1, Limit: 5})
+	var readSender mockCallResourceResponseSender
+	err = app.CallResource(context.Background(), &backend.CallResourceRequest{
+		Method: http.MethodPost,
+		Path:   "managed-dashboards/jsonnet-files/read",
+		Body:   readBody,
+	}, &readSender)
+	if err != nil {
+		t.Fatalf("CallResource error: %s", err)
+	}
+	var readResponse jsonnetFileResponse
+	if err := json.Unmarshal(readSender.responses[0].Body, &readResponse); err != nil {
+		t.Fatalf("decode read response: %s", err)
+	}
+	if readResponse.Version != 1 || readResponse.Lines[1].Text != "  title: 'Virtual Dashboard'," {
+		t.Fatalf("invalid edit should not have been committed: %#v", readResponse)
+	}
+}
+
 func TestVirtualJsonnetFileRepairGenericGrafonnetDashboard(t *testing.T) {
 	jsonData, _ := json.Marshal(appSettings{AllowedDatasourceUIDs: []string{"prometheus"}})
 	inst, err := NewApp(context.Background(), backend.AppInstanceSettings{JSONData: jsonData})
@@ -668,6 +728,79 @@ g.dashboard.new(
 		t.Fatalf("decode render response: %s", err)
 	}
 	panels := renderResponse.Dashboard["panels"].([]any)
+	if renderResponse.Resource.Metadata.Name != "http-request-rate-errors" || len(panels) != 1 || panels[0].(map[string]any)["type"] != "timeseries" {
+		t.Fatalf("unexpected rendered dashboard: %#v", renderResponse.Dashboard)
+	}
+}
+
+func TestManagedDashboardRenderAutoRepairsVirtualJsonnetFile(t *testing.T) {
+	jsonData, _ := json.Marshal(appSettings{AllowedDatasourceUIDs: []string{"prometheus"}})
+	inst, err := NewApp(context.Background(), backend.AppInstanceSettings{JSONData: jsonData})
+	if err != nil {
+		t.Fatalf("new app: %s", err)
+	}
+	app := inst.(*App)
+	source := `local g = import 'github.com/grafana/grafonnet/gen/grafonnet-latest/main.libsonnet';
+
+g.dashboard.new(
+  title='HTTP Request Rate and Errors',
+  uid='http-request-rate-errors',
+  panels=[
+    g.panel.new(
+      title='Request rate',
+      targets=[
+        g.target.new(
+          datasource='prometheus',
+          expr='sum(rate(http_requests_total[5m]))',
+          refId='A',
+        ),
+      ],
+      type='timeseries',
+    ),
+  ],
+)`
+	writeBody, _ := json.Marshal(jsonnetFileWriteRequest{
+		SessionID: "session-auto-repair",
+		Content:   source,
+	})
+	var writeSender mockCallResourceResponseSender
+	err = app.CallResource(context.Background(), &backend.CallResourceRequest{
+		Method: http.MethodPost,
+		Path:   "managed-dashboards/jsonnet-files/write",
+		Body:   writeBody,
+	}, &writeSender)
+	if err != nil {
+		t.Fatalf("CallResource error: %s", err)
+	}
+
+	renderBody, _ := json.Marshal(managedDashboardRequest{
+		SessionID: "session-auto-repair",
+		Path:      "dashboard.jsonnet",
+	})
+	var renderSender mockCallResourceResponseSender
+	err = app.CallResource(context.Background(), &backend.CallResourceRequest{
+		Method: http.MethodPost,
+		Path:   "managed-dashboards/render",
+		Body:   renderBody,
+	}, &renderSender)
+	if err != nil {
+		t.Fatalf("CallResource error: %s", err)
+	}
+	if renderSender.responses[0].Status != http.StatusOK {
+		t.Fatalf("expected render 200, got %d: %s", renderSender.responses[0].Status, string(renderSender.responses[0].Body))
+	}
+	var renderResponse managedDashboardRenderResponse
+	if err := json.Unmarshal(renderSender.responses[0].Body, &renderResponse); err != nil {
+		t.Fatalf("decode render response: %s", err)
+	}
+	panels := renderResponse.Dashboard["panels"].([]any)
+	if !renderResponse.AutoRepaired || len(renderResponse.Repairs) == 0 || renderResponse.JsonnetFile == nil || renderResponse.JsonnetFile.Version != 2 {
+		t.Fatalf("expected auto-repaired virtual file metadata, got %#v", renderResponse)
+	}
+	storedSource := renderResponse.Resource.Metadata.Annotations[annotationJsonnetSource]
+	if strings.Contains(storedSource, "g.panel.new") || !strings.Contains(storedSource, "Request rate") {
+		t.Fatalf("render did not store repaired source: %s", storedSource)
+	}
 	if renderResponse.Resource.Metadata.Name != "http-request-rate-errors" || len(panels) != 1 || panels[0].(map[string]any)["type"] != "timeseries" {
 		t.Fatalf("unexpected rendered dashboard: %#v", renderResponse.Dashboard)
 	}

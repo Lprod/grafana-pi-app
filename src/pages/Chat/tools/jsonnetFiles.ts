@@ -118,7 +118,7 @@ function makeEditJsonnetFileTool(runtime: VirtualJsonnetFileRuntime | undefined)
     name: 'edit_jsonnet',
     label: 'Edit Jsonnet file',
     description:
-      'Apply compact line-range edits to the session virtual Jsonnet file. Line numbers are 1-based and inclusive. Use baseVersion from the latest write/edit/read result when available.',
+      'Apply compact transactional line-range edits to the session virtual Jsonnet file. The edited file must compile. Line numbers are 1-based and inclusive. Use baseVersion from the latest write/edit/read result when available.',
     parameters: Type.Object({
       path: Type.Optional(Type.String({ description: `Virtual file path. Defaults to ${DEFAULT_JSONNET_FILE_PATH}.` })),
       baseVersion: Type.Optional(Type.Number({ description: 'Expected current file version.' })),
@@ -167,7 +167,7 @@ function makeFixJsonnetFileTool(runtime: VirtualJsonnetFileRuntime | undefined):
     name: 'fix_jsonnet',
     label: 'Fix Jsonnet file',
     description:
-      'Apply a transactional structural repair to the current virtual Jsonnet file after render errors. Use this before explore_jsonnet for common invalid Grafonnet constructor chains such as g.dashboard.new(...) + g.dashboard.with_panels([...]) or g.panel.new(...).',
+      'Apply a transactional structural repair to the current virtual Jsonnet file after render errors. Use this for common invalid Grafonnet constructor chains such as g.dashboard.new(...) + g.dashboard.with_panels([...]) or g.panel.new(...).',
     parameters: Type.Object({
       path: Type.Optional(Type.String({ description: `Virtual file path. Defaults to ${DEFAULT_JSONNET_FILE_PATH}.` })),
       baseVersion: Type.Optional(Type.Number({ description: 'Expected current file version.' })),
@@ -253,7 +253,10 @@ function snapshotFromResponse(response: JsonnetFileBackendResponse, content: str
   };
 }
 
-function publicJsonnetFileResult(response: JsonnetFileBackendResponse, action: 'written' | 'edited' | 'fixed' | 'read') {
+function publicJsonnetFileResult(
+  response: JsonnetFileBackendResponse,
+  action: 'written' | 'edited' | 'fixed' | 'read'
+) {
   const { dashboard_jsonnet: _dashboardJsonnet, ...publicResponse } = response;
   return { action, ...publicResponse };
 }

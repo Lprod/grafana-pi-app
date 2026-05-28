@@ -317,6 +317,12 @@ func (s *virtualJsonnetFileStore) edit(request jsonnetFileEditRequest) (jsonnetF
 	if len([]byte(newContent)) > maxManagedDashboardJsonnetSourceBytes {
 		return jsonnetFileResponse{}, fmt.Errorf("edited content is too large: %d bytes exceeds %d bytes", len([]byte(newContent)), maxManagedDashboardJsonnetSourceBytes)
 	}
+	if _, err := renderJsonnetSource(newContent); err != nil {
+		if sourceWindow := sourceWindowForJsonnetError(newContent, err); sourceWindow != "" {
+			return jsonnetFileResponse{}, fmt.Errorf("edited Jsonnet did not compile: %w\n%s", err, sourceWindow)
+		}
+		return jsonnetFileResponse{}, fmt.Errorf("edited Jsonnet did not compile: %w", err)
+	}
 
 	changedRanges := make([]jsonnetChangedRange, 0, len(edits))
 	for _, edit := range edits {

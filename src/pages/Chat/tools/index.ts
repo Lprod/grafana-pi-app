@@ -31,12 +31,7 @@ export function createGrafanaToolRegistry(options: CreateGrafanaToolsOptions = {
     ? createSubagentTools({
         runtime: options.runtime,
         metricsTools: metrics,
-        jsonnetTools: [
-          managedDashboards.listManaged,
-          managedDashboards.getSource,
-          managedDashboards.render,
-          ...jsonnet.all,
-        ],
+        includeMetrics: options.includeMetricsSubagentTool !== false,
       })
     : [];
 

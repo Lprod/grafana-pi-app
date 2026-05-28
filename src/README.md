@@ -3,7 +3,7 @@
 Grafana Pi App adds a Pi-powered assistant to Grafana for metric exploration, PromQL validation, and dashboard authoring.
 
 The assistant uses the current Grafana user's datasource and dashboard permissions. LLM requests are proxied through the app plugin backend with an OpenAI-compatible API key stored in secure plugin settings.
-Broad exploration can be delegated to restricted subagents for metrics and Jsonnet. These subagents use isolated context and narrow tool allow-lists, while dashboard writes remain with the parent assistant.
+The default chat toolset keeps `explore_metrics` available for broad metric reconnaissance and does not expose a Jsonnet subagent.
 
 ## Requirements
 
@@ -23,4 +23,4 @@ Broad exploration can be delegated to restricted subagents for metrics and Jsonn
 
 The assistant page does not expose model or datasource policy controls; all requests use the model and datasource allow-list configured in the plugin settings.
 
-Managed dashboards are compiled from model-authored Jsonnet source in the backend. During chat, the assistant keeps that source in a session-scoped virtual Jsonnet file so it can render, edit, structurally repair common invalid Grafonnet-style constructor output, and sync dashboards without resending unchanged source. The source is stored on the plugin-managed dashboard resource and should be changed by fetching, editing, and re-syncing through the app.
+Managed dashboards are compiled from model-authored Jsonnet source in the backend. During chat, the assistant keeps that source in a session-scoped virtual Jsonnet file so it can render, edit, auto-repair common invalid Grafonnet-style constructor output during render, and sync dashboards without resending unchanged source. The source is stored on the plugin-managed dashboard resource and should be changed by fetching, editing, and re-syncing through the app.

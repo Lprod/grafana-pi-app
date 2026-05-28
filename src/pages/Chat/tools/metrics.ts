@@ -23,6 +23,7 @@ import type {
   ListLabelValuesParams,
   ListMetricsParams,
   PrometheusMetadataResponse,
+  PrometheusQuerySpec,
   QueryPrometheusParams,
   ResourceCapableDataSource,
 } from './types';
@@ -81,17 +82,25 @@ function makeListMetricsTool(toolConfig: GrafanaToolConfig): AgentTool {
     label: 'List metrics',
     description: 'List Prometheus metric names, optionally filtered by prefix.',
     parameters: Type.Object({
-      datasourceUid: Type.Optional(Type.String({ description: 'Prometheus datasource UID. Defaults to the first available Prometheus datasource.' })),
+      datasourceUid: Type.Optional(
+        Type.String({
+          description: 'Prometheus datasource UID. Defaults to the first available Prometheus datasource.',
+        })
+      ),
       prefix: Type.Optional(Type.String({ description: 'Optional metric-name prefix filter.' })),
     }),
     async execute(_toolCallId, params, signal) {
       const args = params as ListMetricsParams;
       throwIfAborted(signal);
       const ds = await getPrometheusDatasource(toolConfig, args.datasourceUid);
-      const response = await getDatasourceResource<PrometheusMetadataResponse<string[]>>(ds, 'api/v1/label/__name__/values');
+      const response = await getDatasourceResource<PrometheusMetadataResponse<string[]>>(
+        ds,
+        'api/v1/label/__name__/values'
+      );
       const metrics = (response.data ?? []).filter((name) => !args.prefix || name.startsWith(args.prefix));
       const limited = metrics.slice(0, 1000);
-      const suffix = metrics.length > limited.length ? `\n... ${metrics.length - limited.length} more metrics omitted` : '';
+      const suffix =
+        metrics.length > limited.length ? `\n... ${metrics.length - limited.length} more metrics omitted` : '';
 
       return textResult(`${limited.join('\n')}${suffix}`, {
         datasourceUid: ds.uid,
@@ -108,9 +117,17 @@ function makeListLabelValuesTool(toolConfig: GrafanaToolConfig): AgentTool {
     label: 'List label values',
     description: 'List Prometheus label values, optionally scoped by a metric selector in match[].',
     parameters: Type.Object({
-      datasourceUid: Type.Optional(Type.String({ description: 'Prometheus datasource UID. Defaults to the first available Prometheus datasource.' })),
+      datasourceUid: Type.Optional(
+        Type.String({
+          description: 'Prometheus datasource UID. Defaults to the first available Prometheus datasource.',
+        })
+      ),
       label: Type.String({ description: 'Label name, such as job, instance, namespace, pod, or route.' }),
-      match: Type.Optional(Type.String({ description: 'Optional Prometheus match[] selector, such as up or http_requests_total{job="api"}.' })),
+      match: Type.Optional(
+        Type.String({
+          description: 'Optional Prometheus match[] selector, such as up or http_requests_total{job="api"}.',
+        })
+      ),
     }),
     async execute(_toolCallId, params, signal) {
       const args = params as ListLabelValuesParams;
@@ -123,7 +140,8 @@ function makeListLabelValuesTool(toolConfig: GrafanaToolConfig): AgentTool {
       );
       const values = response.data ?? [];
       const limited = values.slice(0, 1000);
-      const suffix = values.length > limited.length ? `\n... ${values.length - limited.length} more values omitted` : '';
+      const suffix =
+        values.length > limited.length ? `\n... ${values.length - limited.length} more values omitted` : '';
 
       return textResult(`${limited.join('\n')}${suffix}`, {
         datasourceUid: ds.uid,
@@ -141,21 +159,35 @@ function makeInspectMetricSeriesTool(toolConfig: GrafanaToolConfig): AgentTool {
     label: 'Inspect metric series',
     description: 'Inspect Prometheus series label names and example label sets for a metric selector.',
     parameters: Type.Object({
-      datasourceUid: Type.Optional(Type.String({ description: 'Prometheus datasource UID. Defaults to the first available Prometheus datasource.' })),
-      match: Type.String({ description: 'Prometheus match[] selector, such as http_requests_total or http_requests_total{job="web"}.' }),
-      limit: Type.Optional(Type.Number({ description: 'Maximum example series to return. Defaults to 20, maximum 100.' })),
+      datasourceUid: Type.Optional(
+        Type.String({
+          description: 'Prometheus datasource UID. Defaults to the first available Prometheus datasource.',
+        })
+      ),
+      match: Type.String({
+        description: 'Prometheus match[] selector, such as http_requests_total or http_requests_total{job="web"}.',
+      }),
+      limit: Type.Optional(
+        Type.Number({ description: 'Maximum example series to return. Defaults to 20, maximum 100.' })
+      ),
     }),
     async execute(_toolCallId, params, signal) {
       const args = params as InspectMetricSeriesParams;
       throwIfAborted(signal);
       const ds = await getPrometheusDatasource(toolConfig, args.datasourceUid);
-      const response = await getDatasourceResource<PrometheusMetadataResponse<Array<Record<string, string>>>>(ds, 'api/v1/series', {
-        'match[]': args.match,
-      });
+      const response = await getDatasourceResource<PrometheusMetadataResponse<Array<Record<string, string>>>>(
+        ds,
+        'api/v1/series',
+        {
+          'match[]': args.match,
+        }
+      );
       const series = response.data ?? [];
       const limit = clampInt(args.limit ?? 20, 1, 100);
       const examples = series.slice(0, limit);
-      const labelNames = Array.from(new Set(series.flatMap((item) => Object.keys(item)).filter((name) => name !== '__name__'))).sort();
+      const labelNames = Array.from(
+        new Set(series.flatMap((item) => Object.keys(item)).filter((name) => name !== '__name__'))
+      ).sort();
       const result = {
         datasourceUid: ds.uid,
         match: args.match,
@@ -175,11 +207,39 @@ function makeQueryPrometheusTool(toolConfig: GrafanaToolConfig): AgentTool {
     name: 'query_prometheus',
     label: 'Query Prometheus',
     description:
-      'Run an instant or range PromQL query through Grafana as the current user. Range results are compact summaries with min/max/last and sampled points, not raw data frames.',
+      'Run an instant or range PromQL query through Grafana as the current user. Results are compact validation summaries with min/max/last values, not raw data frames.',
     parameters: Type.Object({
-      datasourceUid: Type.Optional(Type.String({ description: 'Prometheus datasource UID. Defaults to the first available Prometheus datasource.' })),
-      query: Type.String({ description: 'PromQL expression.' }),
-      type: Type.Optional(Type.Union([Type.Literal('instant'), Type.Literal('range')], { description: 'Query type. Defaults to instant.' })),
+      datasourceUid: Type.Optional(
+        Type.String({
+          description: 'Prometheus datasource UID. Defaults to the first available Prometheus datasource.',
+        })
+      ),
+      query: Type.Optional(Type.String({ description: 'PromQL expression for a single validation.' })),
+      queries: Type.Optional(
+        Type.Array(
+          Type.Object({
+            query: Type.String({ description: 'PromQL expression.' }),
+            type: Type.Optional(
+              Type.Union([Type.Literal('instant'), Type.Literal('range')], {
+                description: 'Query type. Defaults to instant.',
+              })
+            ),
+            start: Type.Optional(
+              Type.String({ description: 'Range start such as now-1h, now-6h, or an ISO timestamp.' })
+            ),
+            end: Type.Optional(Type.String({ description: 'Range end such as now or an ISO timestamp.' })),
+          }),
+          {
+            description:
+              'Batch of PromQL expressions to validate in one tool call. Prefer this when checking multiple dashboard queries.',
+          }
+        )
+      ),
+      type: Type.Optional(
+        Type.Union([Type.Literal('instant'), Type.Literal('range')], {
+          description: 'Query type. Defaults to instant.',
+        })
+      ),
       start: Type.Optional(Type.String({ description: 'Range start such as now-1h, now-6h, or an ISO timestamp.' })),
       end: Type.Optional(Type.String({ description: 'Range end such as now or an ISO timestamp.' })),
     }),
@@ -187,29 +247,44 @@ function makeQueryPrometheusTool(toolConfig: GrafanaToolConfig): AgentTool {
       const args = params as QueryPrometheusParams;
       throwIfAborted(signal);
       const ds = await getPrometheusDatasource(toolConfig, args.datasourceUid);
-      const queryType = args.type ?? 'instant';
-      const timeRange = queryType === 'range' ? makeTimeRange(args.start ?? 'now-1h', args.end ?? 'now') : getDefaultTimeRange();
-      const interval = queryType === 'range' ? chooseRangeInterval(timeRange) : '1m';
-      const response = await runPrometheusQuery(ds, args.query, queryType, timeRange, interval);
+      const querySpecs = querySpecsFromParams(args);
+      if (querySpecs.length === 0) {
+        throw new Error('query_prometheus requires query or queries.');
+      }
 
-      const frames = response.data ?? [];
-      const summary = summarizePrometheusQuery({
-        datasourceUid: ds.uid,
-        query: args.query,
-        queryType,
-        interval,
-        timeRange,
-        frames,
-      });
-      const result = truncateText(JSON.stringify(summary, null, 2), 40000);
+      if (querySpecs.length === 1) {
+        const summary = await runPrometheusQuerySummary(ds, querySpecs[0]);
+        const result = truncateText(JSON.stringify(summary, null, 2), 40000);
 
-      return textResult(result, {
+        return textResult(result, {
+          datasourceUid: ds.uid,
+          query: summary.query,
+          interval: summary.interval,
+          frames: summary.frameCount,
+          series: summary.series.length,
+          totalSeries: summary.totalSeries,
+          truncatedSeries: summary.truncatedSeries,
+          summarized: true,
+        });
+      }
+
+      const results: PrometheusQuerySummary[] = [];
+      for (const querySpec of querySpecs.slice(0, 10)) {
+        throwIfAborted(signal);
+        results.push(compactBatchPrometheusSummary(await runPrometheusQuerySummary(ds, querySpec)));
+      }
+      const batch = {
         datasourceUid: ds.uid,
-        query: args.query,
-        interval,
-        frames: frames.length,
-        series: summary.series.length,
+        queryCount: querySpecs.length,
+        truncatedQueries: querySpecs.length > results.length,
+        results,
+      };
+
+      return textResult(truncateText(JSON.stringify(batch, null, 2), 40000), {
+        datasourceUid: ds.uid,
+        queries: querySpecs.length,
         summarized: true,
+        batch: true,
       });
     },
   };
@@ -222,18 +297,30 @@ function makeQueryPrometheusRawTool(toolConfig: GrafanaToolConfig): AgentTool {
     description:
       'Run a PromQL query and return raw Grafana data frames. This is intentionally verbose and should only be enabled for developer/debug workflows.',
     parameters: Type.Object({
-      datasourceUid: Type.Optional(Type.String({ description: 'Prometheus datasource UID. Defaults to the first available Prometheus datasource.' })),
+      datasourceUid: Type.Optional(
+        Type.String({
+          description: 'Prometheus datasource UID. Defaults to the first available Prometheus datasource.',
+        })
+      ),
       query: Type.String({ description: 'PromQL expression.' }),
-      type: Type.Optional(Type.Union([Type.Literal('instant'), Type.Literal('range')], { description: 'Query type. Defaults to instant.' })),
+      type: Type.Optional(
+        Type.Union([Type.Literal('instant'), Type.Literal('range')], {
+          description: 'Query type. Defaults to instant.',
+        })
+      ),
       start: Type.Optional(Type.String({ description: 'Range start such as now-1h, now-6h, or an ISO timestamp.' })),
       end: Type.Optional(Type.String({ description: 'Range end such as now or an ISO timestamp.' })),
     }),
     async execute(_toolCallId, params, signal) {
       const args = params as QueryPrometheusParams;
+      if (!args.query) {
+        throw new Error('query_prometheus_raw requires query.');
+      }
       throwIfAborted(signal);
       const ds = await getPrometheusDatasource(toolConfig, args.datasourceUid);
       const queryType = args.type ?? 'instant';
-      const timeRange = queryType === 'range' ? makeTimeRange(args.start ?? 'now-1h', args.end ?? 'now') : getDefaultTimeRange();
+      const timeRange =
+        queryType === 'range' ? makeTimeRange(args.start ?? 'now-1h', args.end ?? 'now') : getDefaultTimeRange();
       const interval = queryType === 'range' ? chooseRangeInterval(timeRange) : '1m';
       const response = await runPrometheusQuery(ds, args.query, queryType, timeRange, interval);
       const frames = response.data ?? [];
@@ -250,22 +337,65 @@ function makeQueryPrometheusRawTool(toolConfig: GrafanaToolConfig): AgentTool {
   };
 }
 
-function getPrometheusDatasourceSettings(toolConfig: GrafanaToolConfig) {
-  return filterAllowedPrometheusDatasourceSettings(getDataSourceSrv().getList({ metrics: true }), toolConfig.allowedDatasourceUids);
+function querySpecsFromParams(args: QueryPrometheusParams): PrometheusQuerySpec[] {
+  if (Array.isArray(args.queries) && args.queries.length > 0) {
+    return args.queries.filter((querySpec) => typeof querySpec.query === 'string' && querySpec.query.trim());
+  }
+  return typeof args.query === 'string' && args.query.trim()
+    ? [{ query: args.query, type: args.type, start: args.start, end: args.end }]
+    : [];
 }
 
-async function getPrometheusDatasource(toolConfig: GrafanaToolConfig, uid?: string): Promise<ResourceCapableDataSource> {
+async function runPrometheusQuerySummary(
+  ds: ResourceCapableDataSource,
+  querySpec: PrometheusQuerySpec
+): Promise<PrometheusQuerySummary> {
+  const queryType = querySpec.type ?? 'instant';
+  const timeRange =
+    queryType === 'range' ? makeTimeRange(querySpec.start ?? 'now-1h', querySpec.end ?? 'now') : getDefaultTimeRange();
+  const interval = queryType === 'range' ? chooseRangeInterval(timeRange) : '1m';
+  const response = await runPrometheusQuery(ds, querySpec.query, queryType, timeRange, interval);
+  const frames = response.data ?? [];
+  return summarizePrometheusQuery({
+    datasourceUid: ds.uid,
+    query: querySpec.query,
+    queryType,
+    interval,
+    timeRange,
+    frames,
+  });
+}
+
+function getPrometheusDatasourceSettings(toolConfig: GrafanaToolConfig) {
+  return filterAllowedPrometheusDatasourceSettings(
+    getDataSourceSrv().getList({ metrics: true }),
+    toolConfig.allowedDatasourceUids
+  );
+}
+
+async function getPrometheusDatasource(
+  toolConfig: GrafanaToolConfig,
+  uid?: string
+): Promise<ResourceCapableDataSource> {
   const available = getPrometheusDatasourceSettings(toolConfig);
   const selected = uid ? available.find((ds) => ds.uid === uid) : available[0];
 
   if (!selected) {
-    throw new Error(uid ? `Datasource is not available to the assistant: ${uid}` : 'No Prometheus datasource is available to the assistant');
+    throw new Error(
+      uid
+        ? `Datasource is not available to the assistant: ${uid}`
+        : 'No Prometheus datasource is available to the assistant'
+    );
   }
 
   return getDataSourceSrv().get({ uid: selected.uid, type: selected.type }) as Promise<ResourceCapableDataSource>;
 }
 
-async function getDatasourceResource<T>(ds: ResourceCapableDataSource, path: string, params?: Record<string, unknown>): Promise<T> {
+async function getDatasourceResource<T>(
+  ds: ResourceCapableDataSource,
+  path: string,
+  params?: Record<string, unknown>
+): Promise<T> {
   if (typeof ds.getResource === 'function') {
     return ds.getResource<T>(path, params);
   }
@@ -382,15 +512,12 @@ type SeriesSummary = {
   points: number;
   nonNullPoints: number;
   nullPoints: number;
-  first?: SummaryPoint;
   last?: SummaryPoint;
   min?: SummaryPoint;
   max?: SummaryPoint;
   mean?: number;
   delta?: number;
   deltaPercent?: number;
-  samples: SummaryPoint[];
-  sampled: boolean;
 };
 
 type SummaryPoint = {
@@ -398,8 +525,8 @@ type SummaryPoint = {
   value: number | null;
 };
 
-const MAX_SERIES_SUMMARIES = 40;
-const MAX_POINT_SAMPLES = 8;
+const MAX_SERIES_SUMMARIES = 8;
+const MAX_BATCH_SERIES_SUMMARIES = 3;
 
 function summarizePrometheusQuery(options: {
   datasourceUid: string;
@@ -441,7 +568,6 @@ function summarizePrometheusQuery(options: {
 
 function summarizeNumberField(frame: DataFrame, field: Field, timeField?: Field): SeriesSummary {
   const points = getFieldLength(field, frame.length ?? 0);
-  const samples = sampleIndices(points, MAX_POINT_SAMPLES).map((index) => pointAt(field, timeField, index));
   let first: SummaryPoint | undefined;
   let last: SummaryPoint | undefined;
   let min: SummaryPoint | undefined;
@@ -474,13 +600,10 @@ function summarizeNumberField(frame: DataFrame, field: Field, timeField?: Field)
     points,
     nonNullPoints,
     nullPoints: Math.max(0, points - nonNullPoints),
-    first,
     last,
     min,
     max,
     mean: nonNullPoints > 0 ? roundNumber(sum / nonNullPoints) : undefined,
-    samples,
-    sampled: points > samples.length,
   };
 
   if (first && last && first.value !== null && last.value !== null) {
@@ -491,6 +614,14 @@ function summarizeNumberField(frame: DataFrame, field: Field, timeField?: Field)
   }
 
   return summary;
+}
+
+function compactBatchPrometheusSummary(summary: PrometheusQuerySummary): PrometheusQuerySummary {
+  return {
+    ...summary,
+    truncatedSeries: summary.truncatedSeries || summary.totalSeries > MAX_BATCH_SERIES_SUMMARIES,
+    series: summary.series.slice(0, MAX_BATCH_SERIES_SUMMARIES),
+  };
 }
 
 function isTimeField(field: Field) {
@@ -566,23 +697,6 @@ function valueAt(field: Field, index: number): unknown {
   return values[index];
 }
 
-function sampleIndices(length: number, maxSamples: number): number[] {
-  if (length <= 0) {
-    return [];
-  }
-  if (length <= maxSamples) {
-    return Array.from({ length }, (_, index) => index);
-  }
-
-  const indices = new Set<number>([0, 1, 2, length - 3, length - 2, length - 1]);
-  const remaining = Math.max(0, maxSamples - indices.size);
-  for (let index = 1; index <= remaining; index++) {
-    indices.add(Math.round((index * (length - 1)) / (remaining + 1)));
-  }
-
-  return Array.from(indices).sort((left, right) => left - right).slice(0, maxSamples);
-}
-
 function collectNotices(frames: DataFrame[]): QueryNotice[] {
   const seen = new Set<string>();
   const notices: QueryNotice[] = [];
@@ -615,7 +729,9 @@ function collectExecutedQueryStrings(frames: DataFrame[]): string[] {
   return Array.from(queries).slice(0, 3);
 }
 
-async function resolveQueryResponse(result: Promise<DataQueryResponse> | Observable<DataQueryResponse>): Promise<DataQueryResponse> {
+async function resolveQueryResponse(
+  result: Promise<DataQueryResponse> | Observable<DataQueryResponse>
+): Promise<DataQueryResponse> {
   if (isPromise<DataQueryResponse>(result)) {
     return result;
   }
@@ -623,7 +739,9 @@ async function resolveQueryResponse(result: Promise<DataQueryResponse> | Observa
 }
 
 function isPromise<T>(value: unknown): value is Promise<T> {
-  return Boolean(value && typeof value === 'object' && 'then' in value && typeof (value as Promise<T>).then === 'function');
+  return Boolean(
+    value && typeof value === 'object' && 'then' in value && typeof (value as Promise<T>).then === 'function'
+  );
 }
 
 function durationToMs(duration: string): number | undefined {

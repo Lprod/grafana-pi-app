@@ -1,3 +1,5 @@
+import { mkdir, writeFile } from 'node:fs/promises';
+import path from 'node:path';
 import { test, expect } from './fixtures';
 import { ROUTES } from '../src/constants';
 import { testIds } from '../src/components/testIds';
@@ -20,6 +22,7 @@ type BenchmarkEvent = {
     stopReason?: unknown;
     errorMessage?: unknown;
     content?: unknown;
+    usage?: unknown;
   };
   messageCount?: number;
 };
@@ -35,6 +38,16 @@ type ToolCallSummary = {
   isError?: boolean;
   subagentToolCalls?: number;
   errorText?: string;
+  resultTextBytes?: number;
+};
+
+type BenchmarkUsage = {
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+  totalTokens: number;
+  cost: number;
 };
 
 test.describe.configure({ mode: 'serial' });
@@ -91,7 +104,14 @@ test.describe('agent benchmark', () => {
       contentType: 'application/json',
     });
 
-    console.log(formatBenchmarkReport(events, { promptStartedAt, timeoutMs, timedOut }));
+    const report = formatBenchmarkReport(events, { promptStartedAt, timeoutMs, timedOut });
+    await testInfo.attach('agent-benchmark-report.txt', {
+      body: report,
+      contentType: 'text/plain',
+    });
+    await writeBenchmarkArtifacts(events, report);
+
+    console.log(report);
 
     if (timedOut) {
       throw new Error(`Agent benchmark timed out after ${timeoutMs}ms.`);
@@ -100,6 +120,11 @@ test.describe('agent benchmark', () => {
     const finalAssistantError = findFinalAssistantError(events);
     if (finalAssistantError) {
       throw new Error(`Agent benchmark ended with assistant error: ${finalAssistantError}`);
+    }
+
+    const qualityError = findDashboardQualityError(events);
+    if (qualityError) {
+      throw new Error(`Agent benchmark failed quality gate: ${qualityError}`);
     }
   });
 });
@@ -119,7 +144,15 @@ function formatBenchmarkReport(
   const agentEnd = [...events].reverse().find((event) => event.type === 'agent_end')?.timestamp;
   const elapsedMs = (agentEnd ?? Date.now()) - agentStart;
   const toolCalls = summarizeToolCalls(events);
+  const toolWallMs = toolCalls.reduce((total, call) => total + (call.durationMs ?? 0), 0);
+  const firstToolStart = toolCalls[0]?.startedAt;
+  const assistantTurns = events.filter(
+    (event) => event.type === 'message_end' && event.message?.role === 'assistant'
+  ).length;
+  const messageCount = [...events].reverse().find((event) => typeof event.messageCount === 'number')?.messageCount;
+  const usage = summarizeUsage(events);
   const finalAssistantError = findFinalAssistantError(events);
+  const qualityError = options.timedOut ? undefined : findDashboardQualityError(events);
   const lines = [
     '',
     'Agent benchmark report',
@@ -129,6 +162,13 @@ function formatBenchmarkReport(
     `Timeout: ${formatDuration(options.timeoutMs)}`,
     `Status: ${options.timedOut ? 'timed out' : finalAssistantError ? 'failed' : 'completed'}`,
     `Elapsed: ${formatDuration(elapsedMs)}`,
+    `Time to first tool: ${firstToolStart ? formatDuration(firstToolStart - agentStart) : 'none'}`,
+    `Tool wall time: ${formatDuration(toolWallMs)}`,
+    `Non-tool time: ${formatDuration(Math.max(0, elapsedMs - toolWallMs))}`,
+    `Assistant turns: ${assistantTurns}`,
+    `Messages: ${messageCount ?? 'unknown'}`,
+    `Token usage: input=${usage.input}, output=${usage.output}, cacheRead=${usage.cacheRead}, cacheWrite=${usage.cacheWrite}, total=${usage.totalTokens}`,
+    `Quality gate: ${options.timedOut ? 'not run' : qualityError ? `failed: ${qualityError}` : 'passed'}`,
     `Events: ${events.length}`,
     `Tool calls: ${toolCalls.length}`,
   ];
@@ -147,6 +187,9 @@ function formatBenchmarkReport(
       ];
       if (call.subagentToolCalls !== undefined) {
         parts.push(`${call.subagentToolCalls} nested calls`);
+      }
+      if (call.resultTextBytes !== undefined) {
+        parts.push(`${call.resultTextBytes} result bytes`);
       }
       if (call.isError) {
         parts.push('error');
@@ -211,12 +254,25 @@ function summarizeToolCalls(events: BenchmarkEvent[]): ToolCallSummary[] {
         durationMs,
         isError: event.isError,
         subagentToolCalls: extractSubagentToolCallCount(event.result) ?? existing.subagentToolCalls,
-        errorText: extractErrorText(event.result),
+        errorText: event.isError ? extractResultText(event.result) : undefined,
+        resultTextBytes: extractResultText(event.result)?.length,
       });
     }
   }
 
   return [...calls.values()].sort((left, right) => left.startedAt - right.startedAt);
+}
+
+async function writeBenchmarkArtifacts(events: BenchmarkEvent[], report: string) {
+  const outputDir = path.join(process.cwd(), 'test-results', 'agent-benchmark');
+  const runSuffix = process.env.BENCH_RUN_INDEX ? `-run-${process.env.BENCH_RUN_INDEX}` : '';
+  await mkdir(outputDir, { recursive: true });
+  await Promise.all([
+    writeFile(path.join(outputDir, 'latest-events.json'), JSON.stringify(events, null, 2)),
+    writeFile(path.join(outputDir, 'latest-report.txt'), report),
+    writeFile(path.join(outputDir, `events${runSuffix}.json`), JSON.stringify(events, null, 2)),
+    writeFile(path.join(outputDir, `report${runSuffix}.txt`), report),
+  ]);
 }
 
 function extractSubagentToolCallCount(result: unknown) {
@@ -225,20 +281,18 @@ function extractSubagentToolCallCount(result: unknown) {
   return Array.isArray(toolCalls) ? toolCalls.length : undefined;
 }
 
-function extractErrorText(result: unknown) {
+function extractResultText(result: unknown) {
   const content = getRecord(result)?.content;
   if (!Array.isArray(content)) {
     return undefined;
   }
 
-  const text = content
+  return content
     .map((block) => getRecord(block))
     .filter((block): block is Record<string, unknown> => Boolean(block) && block.type === 'text')
     .map((block) => block.text)
     .filter((value): value is string => typeof value === 'string')
     .join(' ');
-
-  return text || undefined;
 }
 
 function findFinalAssistantError(events: BenchmarkEvent[]) {
@@ -248,9 +302,94 @@ function findFinalAssistantError(events: BenchmarkEvent[]) {
   return typeof finalAssistantMessage?.errorMessage === 'string' ? finalAssistantMessage.errorMessage : undefined;
 }
 
+function findDashboardQualityError(events: BenchmarkEvent[]) {
+  const synced = [...events]
+    .reverse()
+    .find((event) => event.type === 'tool_execution_end' && event.toolName === 'sync_dashboard' && !event.isError);
+  if (!synced) {
+    return 'sync_dashboard did not complete successfully';
+  }
+
+  const rendered = [...events]
+    .reverse()
+    .find((event) => event.type === 'tool_execution_end' && event.toolName === 'render_dashboard' && !event.isError);
+  const details = getRecord(getRecord(rendered?.result)?.details);
+  const dashboard = getRecord(details?.dashboard);
+  if (!dashboard) {
+    return 'render_dashboard did not return a dashboard summary';
+  }
+
+  const panels = recordsField(dashboard, 'panels');
+  if (panels.length < 2) {
+    return `expected at least 2 panels, got ${panels.length}`;
+  }
+
+  const panelText = JSON.stringify(panels).toLowerCase();
+  if (!panelText.includes('rate(')) {
+    return 'dashboard panels do not include a rate() query';
+  }
+  if (
+    !panelText.includes('error') &&
+    !panelText.includes('5..') &&
+    !panelText.includes('4..') &&
+    !panelText.includes('status')
+  ) {
+    return 'dashboard panels do not include an error/status signal';
+  }
+
+  return undefined;
+}
+
 function readPositiveInteger(value: string | undefined, fallback: number) {
   const parsed = value ? Number(value) : NaN;
   return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function summarizeUsage(events: BenchmarkEvent[]): BenchmarkUsage {
+  const total = zeroUsage();
+  for (const event of events) {
+    if (event.type !== 'message_end' || event.message?.role !== 'assistant') {
+      continue;
+    }
+    const usage = getRecord(event.message.usage);
+    if (!usage) {
+      continue;
+    }
+    total.input += numericField(usage, 'input');
+    total.output += numericField(usage, 'output');
+    total.cacheRead += numericField(usage, 'cacheRead');
+    total.cacheWrite += numericField(usage, 'cacheWrite');
+    total.totalTokens += numericField(usage, 'totalTokens');
+    const cost = usage.cost;
+    total.cost += typeof cost === 'number' ? cost : numericField(getRecord(cost), 'total');
+  }
+  if (total.totalTokens === 0) {
+    total.totalTokens = total.input + total.output + total.cacheRead + total.cacheWrite;
+  }
+  return total;
+}
+
+function zeroUsage(): BenchmarkUsage {
+  return {
+    input: 0,
+    output: 0,
+    cacheRead: 0,
+    cacheWrite: 0,
+    totalTokens: 0,
+    cost: 0,
+  };
+}
+
+function numericField(record: Record<string, unknown> | undefined, field: string) {
+  const value = record?.[field];
+  return typeof value === 'number' && Number.isFinite(value) ? value : 0;
+}
+
+function recordsField(record: Record<string, unknown> | undefined, field: string) {
+  const value = record?.[field];
+  return Array.isArray(value)
+    ? value.map(getRecord).filter((item): item is Record<string, unknown> => Boolean(item))
+    : [];
 }
 
 function formatDuration(ms: number) {

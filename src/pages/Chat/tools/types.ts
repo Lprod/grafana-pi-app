@@ -34,6 +34,7 @@ export type CreateGrafanaToolsOptions = GrafanaToolConfig & {
   includeAdHocDashboardTools?: boolean;
   includeJsonnetLibraryTools?: boolean;
   includeRawPrometheusQueryTool?: boolean;
+  includeMetricsSubagentTool?: boolean;
 };
 
 export type ResourceCapableDataSource = DataSourceApi & {
@@ -72,12 +73,17 @@ export type InspectMetricSeriesParams = DatasourceParams & {
   limit?: number;
 };
 
-export type QueryPrometheusParams = DatasourceParams & {
+export type PrometheusQuerySpec = {
   query: string;
   type?: 'instant' | 'range';
   start?: string;
   end?: string;
 };
+
+export type QueryPrometheusParams = DatasourceParams &
+  Partial<PrometheusQuerySpec> & {
+    queries?: PrometheusQuerySpec[];
+  };
 
 export type UploadDashboardParams = {
   dashboard_json: string;

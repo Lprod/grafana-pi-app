@@ -10,6 +10,39 @@ import type {
   ManagedDashboardToolSet,
 } from './types';
 
+type ManagedJsonnetFileInfo = {
+  path: string;
+  version: number;
+  checksum: string;
+  lineCount: number;
+  dashboardJsonnetSize: number;
+};
+
+type ManagedDashboardRenderResult = {
+  dashboard?: Record<string, unknown>;
+  resource?: {
+    metadata?: {
+      name?: unknown;
+    };
+  };
+  sourceChecksum?: string;
+  autoRepaired?: boolean;
+  repairs?: string[];
+  jsonnetFile?: ManagedJsonnetFileInfo;
+  dashboard_jsonnet?: string;
+};
+
+type ManagedDashboardSyncResult = {
+  uid: string;
+  url: string;
+  status: string;
+  sourceChecksum: string;
+  autoRepaired?: boolean;
+  repairs?: string[];
+  jsonnetFile?: ManagedJsonnetFileInfo;
+  dashboard_jsonnet?: string;
+};
+
 export function createManagedDashboardTools(toolConfig: CreateGrafanaToolsOptions): ManagedDashboardToolSet {
   const listManaged = makeGrafanaListManagedDashboardsTool();
   const getSource = makeGrafanaGetManagedDashboardSourceTool();
@@ -43,8 +76,7 @@ function makeGrafanaGetManagedDashboardSourceTool(): AgentTool {
   return {
     name: 'get_dashboard_source',
     label: 'Get managed dashboard source',
-    description:
-      'Fetch the stored Jsonnet source for an app-managed dashboard so it can be edited and re-synced.',
+    description: 'Fetch the stored Jsonnet source for an app-managed dashboard so it can be edited and re-synced.',
     parameters: Type.Object({
       uid: Type.String({ description: 'Managed dashboard UID.' }),
     }),
@@ -67,12 +99,13 @@ function makeGrafanaRenderManagedDashboardTool(toolConfig: CreateGrafanaToolsOpt
     async execute(_toolCallId, params, signal) {
       const args = await prepareManagedDashboardParams(params as ManagedDashboardParams, toolConfig, signal);
       throwIfAborted(signal);
-      const result = await pluginResourceFetch<unknown>('/managed-dashboards/render', { method: 'POST', data: args });
-      return textResult(truncateText(JSON.stringify(omitStoredJsonnetSource(result), null, 2), 120000), {
-        uid: args.uid,
-        path: args.path,
-        sourceBytes: sourceBytes(args, toolConfig),
+      const result = await pluginResourceFetch<ManagedDashboardRenderResult>('/managed-dashboards/render', {
+        method: 'POST',
+        data: args,
       });
+      hydrateAutoRepairedJsonnetFile(result, toolConfig);
+      const summary = compactManagedDashboardRenderResult(result, args, toolConfig);
+      return textResult(JSON.stringify(summary, null, 2), summary);
     },
   };
 }
@@ -87,13 +120,11 @@ function makeGrafanaSyncManagedDashboardTool(toolConfig: CreateGrafanaToolsOptio
     async execute(_toolCallId, params, signal) {
       const args = await prepareManagedDashboardParams(params as ManagedDashboardParams, toolConfig, signal);
       throwIfAborted(signal);
-      const result = await pluginResourceFetch<{ uid: string; url: string; status: string; sourceChecksum: string }>(
-        '/managed-dashboards/sync',
-        {
-          method: 'POST',
-          data: args,
-        }
-      );
+      const result = await pluginResourceFetch<ManagedDashboardSyncResult>('/managed-dashboards/sync', {
+        method: 'POST',
+        data: args,
+      });
+      hydrateAutoRepairedJsonnetFile(result, toolConfig);
       const details = {
         uid: result.uid,
         url: result.url,
@@ -101,6 +132,9 @@ function makeGrafanaSyncManagedDashboardTool(toolConfig: CreateGrafanaToolsOptio
         sourceChecksum: result.sourceChecksum,
         path: args.path,
         sourceBytes: sourceBytes(args, toolConfig),
+        autoRepaired: result.autoRepaired,
+        repairs: result.repairs,
+        jsonnetFile: result.jsonnetFile,
       };
       return textResult(
         `Managed dashboard ${result.status}: ${result.url}\nUID: ${result.uid}\nSource: ${result.sourceChecksum}`,
@@ -168,20 +202,92 @@ function sourceBytes(args: ManagedDashboardParams, toolConfig: CreateGrafanaTool
   return runtime?.getFile(path)?.dashboardJsonnetSize;
 }
 
-function omitStoredJsonnetSource(value: unknown): unknown {
-  if (Array.isArray(value)) {
-    return value.map(omitStoredJsonnetSource);
-  }
-  if (!value || typeof value !== 'object') {
-    return value;
-  }
+function compactManagedDashboardRenderResult(
+  result: ManagedDashboardRenderResult,
+  args: ManagedDashboardParams,
+  toolConfig: CreateGrafanaToolsOptions
+) {
+  const dashboard = result.dashboard ?? {};
+  const panels = recordsField(dashboard, 'panels');
+  const uid = stringField(dashboard, 'uid') ?? stringField(result.resource?.metadata, 'name') ?? args.uid;
+  const path = result.jsonnetFile?.path ?? args.path;
+  const sourceByteCount = result.jsonnetFile?.dashboardJsonnetSize ?? sourceBytes(args, toolConfig);
 
-  return Object.fromEntries(
-    Object.entries(value as Record<string, unknown>).map(([key, entry]) => [
-      key,
-      key === 'elohmeier.grafanapiapp/jsonnetSource'
-        ? '[omitted: stored Jsonnet source]'
-        : omitStoredJsonnetSource(entry),
-    ])
+  return {
+    dashboard: {
+      title: stringField(dashboard, 'title'),
+      uid,
+      tags: stringArrayField(dashboard, 'tags'),
+      panelCount: panels.length,
+      panels: panels.map(compactDashboardPanel),
+    },
+    sourceChecksum: result.sourceChecksum,
+    path,
+    sourceBytes: sourceByteCount,
+    autoRepaired: result.autoRepaired,
+    repairs: result.repairs,
+    jsonnetFile: result.jsonnetFile,
+  };
+}
+
+function hydrateAutoRepairedJsonnetFile(
+  result: { jsonnetFile?: ManagedJsonnetFileInfo; dashboard_jsonnet?: string },
+  toolConfig: CreateGrafanaToolsOptions
+) {
+  if (!result.jsonnetFile || typeof result.dashboard_jsonnet !== 'string') {
+    return;
+  }
+  toolConfig.virtualJsonnetFiles?.setFile(
+    {
+      ...result.jsonnetFile,
+      content: result.dashboard_jsonnet,
+    },
+    { hydrated: true }
   );
+}
+
+function compactDashboardPanel(panel: Record<string, unknown>, index: number) {
+  return {
+    id: panel.id,
+    title: stringField(panel, 'title') ?? `Panel ${index + 1}`,
+    type: stringField(panel, 'type') ?? 'unknown',
+    gridPos: recordField(panel, 'gridPos'),
+    datasourceUid: datasourceUid(panel.datasource),
+    targets: recordsField(panel, 'targets').map((target) => ({
+      refId: target.refId,
+      expr: target.expr,
+      legendFormat: target.legendFormat,
+      datasourceUid: datasourceUid(target.datasource),
+    })),
+  };
+}
+
+function datasourceUid(value: unknown) {
+  const record = asRecord(value);
+  return record ? stringField(record, 'uid') : undefined;
+}
+
+function recordsField(record: Record<string, unknown> | undefined, field: string) {
+  const value = record?.[field];
+  return Array.isArray(value)
+    ? value.map(asRecord).filter((item): item is Record<string, unknown> => Boolean(item))
+    : [];
+}
+
+function recordField(record: Record<string, unknown> | undefined, field: string) {
+  return asRecord(record?.[field]);
+}
+
+function stringField(record: Record<string, unknown> | undefined, field: string) {
+  const value = record?.[field];
+  return typeof value === 'string' ? value : undefined;
+}
+
+function stringArrayField(record: Record<string, unknown> | undefined, field: string) {
+  const value = record?.[field];
+  return Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === 'string') : [];
+}
+
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : undefined;
 }

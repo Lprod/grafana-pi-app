@@ -9,26 +9,26 @@ type MetricsSubagentParams = {
   metricPrefix?: string;
 };
 
-type JsonnetSubagentParams = {
-  task: string;
-  uid?: string;
-};
-
 type SubagentToolOptions = {
   runtime: GrafanaToolRuntime;
   metricsTools: AgentTool[];
-  jsonnetTools: AgentTool[];
+  includeMetrics?: boolean;
 };
 
 export function createSubagentTools(options: SubagentToolOptions): AgentTool[] {
-  return [makeMetricsExplorerTool(options.runtime, options.metricsTools), makeJsonnetExplorerTool(options.runtime, options.jsonnetTools)];
+  const tools: AgentTool[] = [];
+  if (options.includeMetrics !== false) {
+    tools.push(makeMetricsExplorerTool(options.runtime, options.metricsTools));
+  }
+  return tools;
 }
 
 function makeMetricsExplorerTool(runtime: GrafanaToolRuntime, tools: AgentTool[]): AgentTool {
   return {
     name: 'explore_metrics',
     label: 'Explore metrics',
-    description: 'Delegate metric and PromQL reconnaissance to an isolated Grafana metrics subagent. It can only discover datasources, list metadata, and validate PromQL.',
+    description:
+      'Delegate metric and PromQL reconnaissance to an isolated Grafana metrics subagent. It can only discover datasources, list metadata, and validate PromQL.',
     executionMode: 'sequential',
     parameters: Type.Object({
       task: Type.String({ description: 'Specific metrics exploration task and expected output.' }),
@@ -58,33 +58,6 @@ function makeMetricsExplorerTool(runtime: GrafanaToolRuntime, tools: AgentTool[]
   };
 }
 
-function makeJsonnetExplorerTool(runtime: GrafanaToolRuntime, tools: AgentTool[]): AgentTool {
-  return {
-    name: 'explore_jsonnet',
-    label: 'Explore Jsonnet',
-    description: 'Delegate vendored Jsonnet/Grafonnet and managed-dashboard source reconnaissance to an isolated subagent. It cannot write dashboards.',
-    executionMode: 'sequential',
-    parameters: Type.Object({
-      task: Type.String({ description: 'Specific Jsonnet/Grafonnet exploration task and expected output.' }),
-      uid: Type.Optional(Type.String({ description: 'Optional app-managed dashboard UID whose stored Jsonnet source should be inspected.' })),
-    }),
-    async execute(_toolCallId, params, signal, onUpdate) {
-      const args = params as JsonnetSubagentParams;
-      const task = [args.task, args.uid ? `Inspect managed dashboard UID: ${args.uid}.` : ''].filter(Boolean).join('\n');
-
-      return runGrafanaSubagent({
-        kind: 'jsonnet',
-        task,
-        systemPrompt: JSONNET_SUBAGENT_PROMPT,
-        tools,
-        runtime,
-        signal,
-        onUpdate,
-      });
-    },
-  };
-}
-
 const METRICS_SUBAGENT_PROMPT = `You are a Grafana metrics exploration subagent.
 
 Scope:
@@ -100,23 +73,5 @@ Output:
 - Validated PromQL snippets, with what each answers.
 - Data-shape or cardinality caveats.
 - Open questions if the available metrics are insufficient.
-
-Keep the final answer compact and directly usable by the parent assistant.`;
-
-const JSONNET_SUBAGENT_PROMPT = `You are a Grafana Jsonnet/Grafonnet exploration subagent.
-
-Scope:
-- Inspect stored Jsonnet source for app-managed dashboards and vendored Grafonnet/Jsonnet libraries.
-- Use list/search/read tools to find APIs and examples.
-- Render managed dashboards only when it helps validate Jsonnet output.
-- Do not create, update, delete, upload, or sync dashboards.
-- Do not request managerAllowsEdits.
-
-Output:
-- Managed dashboard source or library files inspected.
-- Grafonnet APIs or Jsonnet patterns to use.
-- Concrete source edits or Jsonnet patterns to use.
-- Render validation findings if you rendered a dashboard.
-- Risks or missing inputs for the parent assistant.
 
 Keep the final answer compact and directly usable by the parent assistant.`;
