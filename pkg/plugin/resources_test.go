@@ -187,6 +187,13 @@ func TestOpenAIRequestKeepsUserAndToolContentNonEmpty(t *testing.T) {
 	if payload.Messages[1].Content != "(empty tool result)" {
 		t.Fatalf("unexpected tool fallback content: %q", payload.Messages[1].Content)
 	}
+	encodedPayload, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("marshal payload: %s", err)
+	}
+	if bytes.Contains(encodedPayload, []byte(`"metadata"`)) {
+		t.Fatalf("chat completions payload should not include metadata without store enabled: %s", encodedPayload)
+	}
 }
 
 func TestManagedDashboardRenderUsesVendoredJsonnetAndManagerMetadata(t *testing.T) {

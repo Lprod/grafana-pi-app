@@ -47,14 +47,13 @@ type proxyTool struct {
 }
 
 type openAIChatRequest struct {
-	Model         string                 `json:"model"`
-	Messages      []openAIMessage        `json:"messages"`
-	Tools         []openAITool           `json:"tools,omitempty"`
-	Stream        bool                   `json:"stream"`
-	StreamOptions map[string]bool        `json:"stream_options,omitempty"`
-	Temperature   *float64               `json:"temperature,omitempty"`
-	MaxTokens     *int                   `json:"max_tokens,omitempty"`
-	Metadata      map[string]interface{} `json:"metadata,omitempty"`
+	Model         string          `json:"model"`
+	Messages      []openAIMessage `json:"messages"`
+	Tools         []openAITool    `json:"tools,omitempty"`
+	Stream        bool            `json:"stream"`
+	StreamOptions map[string]bool `json:"stream_options,omitempty"`
+	Temperature   *float64        `json:"temperature,omitempty"`
+	MaxTokens     *int            `json:"max_tokens,omitempty"`
 }
 
 type openAIMessage struct {
@@ -229,7 +228,6 @@ func (a *App) openAIRequest(req proxyStreamRequest) openAIChatRequest {
 		StreamOptions: map[string]bool{"include_usage": true},
 		Temperature:   req.Options.Temperature,
 		MaxTokens:     req.Options.MaxTokens,
-		Metadata:      map[string]interface{}{"grafana_plugin": "elohmeier-grafanapiapp-app"},
 	}
 }
 
