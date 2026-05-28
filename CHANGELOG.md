@@ -1,3 +1,10 @@
+# [1.1.0](https://github.com/elohmeier/grafana-pi-app/compare/v1.0.1...v1.1.0) (2026-05-28)
+
+
+### Features
+
+* render ([8afcab5](https://github.com/elohmeier/grafana-pi-app/commit/8afcab5d31fadda81fc71047348ce5dc2440e18d))
+
 ## [1.0.1](https://github.com/elohmeier/grafana-pi-app/compare/v1.0.0...v1.0.1) (2026-05-28)
 
 
