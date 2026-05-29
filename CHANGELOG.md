@@ -1,3 +1,10 @@
+# [2.2.0](https://github.com/elohmeier/grafana-pi-app/compare/v2.1.0...v2.2.0) (2026-05-29)
+
+
+### Features
+
+* add InfluxDB query support ([dd154f4](https://github.com/elohmeier/grafana-pi-app/commit/dd154f46a714d0bda0b625d970bb7283e56e92fd))
+
 # [2.1.0](https://github.com/elohmeier/grafana-pi-app/compare/v2.0.0...v2.1.0) (2026-05-29)
 
 
