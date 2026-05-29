@@ -4,6 +4,7 @@ export {
   createGrafanaToolsForSkillGroups,
   createSkillTools,
   DEFAULT_JSONNET_FILE_PATH,
+  filterAllowedInfluxDatasourceSettings,
   filterAllowedPrometheusDatasourceSettings,
   filterAllowedRqliteDatasourceSettings,
   getUnavailableDashboardDatasourceUids,

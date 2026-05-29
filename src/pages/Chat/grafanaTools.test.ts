@@ -40,6 +40,7 @@ import {
   createGrafanaTools,
   createGrafanaToolsForSkillGroups,
   createSkillTools,
+  filterAllowedInfluxDatasourceSettings,
   filterAllowedPrometheusDatasourceSettings,
   filterAllowedRqliteDatasourceSettings,
   getUnavailableDashboardDatasourceUids,
@@ -52,6 +53,15 @@ const datasourceSettings = [
   { name: 'Prometheus B', uid: 'prom-b', type: 'prometheus', isDefault: false },
   { name: 'rqlite A', uid: 'rqlite-a', type: 'g42-rqlite-datasource', isDefault: false },
   { name: 'rqlite B', uid: 'rqlite-b', type: 'g42-rqlite-datasource', isDefault: false },
+  { name: 'Influx SQL', uid: 'influx-sql', type: 'influxdb', isDefault: false, jsonData: { version: 'SQL' } },
+  { name: 'Influx Flux', uid: 'influx-flux', type: 'influxdb', isDefault: false, jsonData: { version: 'Flux' } },
+  {
+    name: 'InfluxQL',
+    uid: 'influx-influxql',
+    type: 'influxdb',
+    isDefault: false,
+    jsonData: { version: 'InfluxQL' },
+  },
   { name: 'Loki', uid: 'loki', type: 'loki', isDefault: false },
 ] as unknown as DataSourceInstanceSettings[];
 
@@ -72,6 +82,14 @@ describe('grafana datasource tool policy', () => {
     expect(filterAllowedRqliteDatasourceSettings(datasourceSettings)).toEqual([
       datasourceSettings[2],
       datasourceSettings[3],
+    ]);
+  });
+
+  it('keeps all visible InfluxDB datasources when no InfluxDB allow-list is configured', () => {
+    expect(filterAllowedInfluxDatasourceSettings(datasourceSettings)).toEqual([
+      datasourceSettings[4],
+      datasourceSettings[5],
+      datasourceSettings[6],
     ]);
   });
 
@@ -338,9 +356,136 @@ describe('grafana datasource tool policy', () => {
   it('rejects explicit rqlite datasource UIDs outside the rqlite allow-list', async () => {
     const tool = getTool(createGrafanaTools({ allowedRqliteDatasourceUids: ['rqlite-b'] }), 'query_rqlite');
 
+    await expect(tool.execute('call-1', { datasourceUid: 'rqlite-a', sql: 'SELECT 1' }, undefined)).rejects.toThrow(
+      'rqlite datasource is not available to the assistant: rqlite-a'
+    );
+    expect(mockDataSourceSrv.get).not.toHaveBeenCalled();
+  });
+
+  it('filters InfluxDB datasource discovery to configured UIDs', async () => {
+    const tool = getTool(
+      createGrafanaTools({ allowedInfluxDatasourceUids: ['influx-flux'] }),
+      'list_influx_datasources'
+    );
+
+    const result = await tool.execute('call-1', {}, undefined);
+
+    expect(JSON.parse(result.content[0].text)).toEqual([
+      {
+        name: 'Influx Flux',
+        uid: 'influx-flux',
+        type: 'influxdb',
+        version: 'Flux',
+        isDefault: false,
+      },
+    ]);
+  });
+
+  it('queries InfluxDB SQL datasources with rawSql and summarizes rows', async () => {
+    const frame = makeTableFrame({
+      fields: [
+        { name: 'time', type: 'time', values: [Date.UTC(2026, 0, 1, 0, 0, 0)] },
+        { name: 'usage', type: 'number', values: [0.82] },
+      ],
+    });
+    const dataSource = {
+      uid: 'influx-sql',
+      type: 'influxdb',
+      query: jest.fn().mockResolvedValue({ state: 'Done', data: [frame] }),
+    };
+    mockDataSourceSrv.get.mockResolvedValue(dataSource);
+    const tool = getTool(createGrafanaTools({ allowedInfluxDatasourceUids: ['influx-sql'] }), 'query_influx');
+
+    const result = await tool.execute(
+      'call-1',
+      {
+        query: 'SELECT time, usage FROM cpu WHERE time >= $__timeFrom AND time <= $__timeTo',
+        language: 'sql',
+        start: 'now-1h',
+        end: 'now',
+      },
+      undefined
+    );
+    const request = dataSource.query.mock.calls[0][0];
+    const body = JSON.parse(result.content[0].text);
+
+    expect(request.targets[0]).toMatchObject({
+      rawSql: 'SELECT time, usage FROM cpu WHERE time >= $__timeFrom AND time <= $__timeTo',
+      format: 'table',
+      editorMode: 'code',
+      datasource: { uid: 'influx-sql', type: 'influxdb' },
+    });
+    expect(result.details).toMatchObject({
+      datasourceUid: 'influx-sql',
+      language: 'sql',
+      format: 'table',
+      summarized: true,
+      rows: 1,
+    });
+    expect(body.frames[0]).toMatchObject({
+      rowCount: 1,
+      fields: [
+        { name: 'time', type: 'time' },
+        { name: 'usage', type: 'number' },
+      ],
+      rows: [{ time: '2026-01-01T00:00:00.000Z', usage: 0.82 }],
+    });
+    expect(result.content[0].text).not.toContain('"values"');
+  });
+
+  it('queries Flux datasources with raw query text', async () => {
+    const dataSource = {
+      uid: 'influx-flux',
+      type: 'influxdb',
+      query: jest.fn().mockResolvedValue({ state: 'Done', data: [] }),
+    };
+    mockDataSourceSrv.get.mockResolvedValue(dataSource);
+    const tool = getTool(createGrafanaTools({ allowedInfluxDatasourceUids: ['influx-flux'] }), 'query_influx');
+
+    await tool.execute(
+      'call-1',
+      { query: 'from(bucket: "metrics") |> range(start: -1h)', language: 'flux' },
+      undefined
+    );
+
+    expect(dataSource.query.mock.calls[0][0].targets[0]).toMatchObject({
+      query: 'from(bucket: "metrics") |> range(start: -1h)',
+      rawQuery: true,
+      editorMode: 'code',
+      datasource: { uid: 'influx-flux', type: 'influxdb' },
+    });
+  });
+
+  it('queries InfluxQL datasources with resultFormat', async () => {
+    const dataSource = {
+      uid: 'influx-influxql',
+      type: 'influxdb',
+      query: jest.fn().mockResolvedValue({ state: 'Done', data: [] }),
+    };
+    mockDataSourceSrv.get.mockResolvedValue(dataSource);
+    const tool = getTool(createGrafanaTools({ allowedInfluxDatasourceUids: ['influx-influxql'] }), 'query_influx');
+
+    await tool.execute(
+      'call-1',
+      { query: 'SELECT mean("value") FROM "cpu" WHERE $timeFilter', language: 'influxql' },
+      undefined
+    );
+
+    expect(dataSource.query.mock.calls[0][0].targets[0]).toMatchObject({
+      query: 'SELECT mean("value") FROM "cpu" WHERE $timeFilter',
+      rawQuery: true,
+      resultFormat: 'time_series',
+      editorMode: 'code',
+      datasource: { uid: 'influx-influxql', type: 'influxdb' },
+    });
+  });
+
+  it('rejects explicit InfluxDB datasource UIDs outside the InfluxDB allow-list', async () => {
+    const tool = getTool(createGrafanaTools({ allowedInfluxDatasourceUids: ['influx-sql'] }), 'query_influx');
+
     await expect(
-      tool.execute('call-1', { datasourceUid: 'rqlite-a', sql: 'SELECT 1' }, undefined)
-    ).rejects.toThrow('rqlite datasource is not available to the assistant: rqlite-a');
+      tool.execute('call-1', { datasourceUid: 'influx-flux', query: 'from(bucket: "metrics")' }, undefined)
+    ).rejects.toThrow('InfluxDB datasource is not available to the assistant: influx-flux');
     expect(mockDataSourceSrv.get).not.toHaveBeenCalled();
   });
 
@@ -812,6 +957,12 @@ describe('grafana datasource tool policy', () => {
       'list_rqlite_columns',
       'query_rqlite',
     ]);
+  });
+
+  it('adds InfluxDB tools when the InfluxDB skill group is selected', () => {
+    const names = createGrafanaToolsForSkillGroups({}, ['influx']).map((tool) => tool.name);
+
+    expect(names).toEqual(['list_influx_datasources', 'query_influx']);
   });
 
   it('adds managed dashboard tools when the dashboard skill group is selected', () => {

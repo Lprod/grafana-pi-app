@@ -20,7 +20,12 @@ jest.mock('@grafana/scenes', () => {
   class EmbeddedScene extends MockSceneObject {
     static Component = ({ model }: { model: any }) => {
       const state = panelState(model);
-      return React.createElement('div', { 'data-testid': 'mock-embedded-scene' }, state?.title ?? 'scene', state?.headerActions);
+      return React.createElement(
+        'div',
+        { 'data-testid': 'mock-embedded-scene' },
+        state?.title ?? 'scene',
+        state?.headerActions
+      );
     };
   }
 
@@ -143,6 +148,11 @@ describe('ToolRenderer', () => {
           },
           {
             type: 'toolCall',
+            name: 'list_influx_datasources',
+            arguments: {},
+          },
+          {
+            type: 'toolCall',
             name: 'list_grafonnet',
             arguments: {},
           },
@@ -152,8 +162,33 @@ describe('ToolRenderer', () => {
 
     expect(container.textContent).toContain('Discover Prometheus datasources');
     expect(container.textContent).toContain('List dashboards');
+    expect(container.textContent).toContain('Discover InfluxDB datasources');
     expect(container.textContent).toContain('List Jsonnet library files');
     expect(container.textContent).not.toContain('{}');
+  });
+
+  it('renders query_influx arguments as a readable query summary', () => {
+    const { container } = render(
+      <ContentBlocks
+        content={[
+          {
+            type: 'toolCall',
+            name: 'query_influx',
+            arguments: {
+              datasourceUid: 'influx-sql',
+              language: 'sql',
+              format: 'table',
+              query: 'SELECT time, usage FROM cpu WHERE time >= $__timeFrom AND time <= $__timeTo',
+            },
+          },
+        ]}
+      />
+    );
+
+    expect(container.textContent).toContain('Query InfluxDB | datasource influx-sql');
+    expect(container.textContent).toContain('SELECT time, usage FROM cpu');
+    expect(container.textContent).not.toContain('"query"');
+    expect(screen.getByTestId('database')).toBeInTheDocument();
   });
 
   it('renders inspection tool arguments as readable summaries', () => {

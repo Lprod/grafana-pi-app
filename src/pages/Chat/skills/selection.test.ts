@@ -36,6 +36,21 @@ describe('Grafana skill selection', () => {
     expect(selection.toolGroups).toEqual(expect.arrayContaining(['metrics', 'subagents', 'rqlite', 'skillResources']));
   });
 
+  it('activates the InfluxDB skill for InfluxDB requests', () => {
+    const selection = selectGrafanaSkills('query InfluxDB with Flux for CPU usage', GRAFANA_SKILLS);
+
+    expect(selection.activeSkillNames).toEqual(['influx-datasource']);
+    expect(selection.toolGroups).toEqual(expect.arrayContaining(['metrics', 'subagents', 'influx', 'skillResources']));
+  });
+
+  it('does not activate rqlite for InfluxDB SQL requests', () => {
+    const selection = selectGrafanaSkills('run an InfluxDB SQL query for host metrics', GRAFANA_SKILLS);
+
+    expect(selection.activeSkillNames).toEqual(['influx-datasource']);
+    expect(selection.toolGroups).toContain('influx');
+    expect(selection.toolGroups).not.toContain('rqlite');
+  });
+
   it('renders only active skill instructions into the system prompt', () => {
     const prompt = renderGrafanaSystemPrompt({
       skills: GRAFANA_SKILLS,

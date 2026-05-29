@@ -6,7 +6,9 @@ const DASHBOARD_INTENT =
   /\b(dashboard|dashboards|panel|panels|row|rows|variable|variables|jsonnet|render|sync|managed dashboard|grafana view)\b/i;
 const DASHBOARD_WRITE_INTENT =
   /\b(create|build|generate|make|add|update|edit|modify|change|sync|apply|render|write)\b[\s\S]{0,80}\b(dashboard|panel|jsonnet)\b/i;
-const RQLITE_INTENT = /\b(rqlite|sqlite|sql|pragma|database tables?|select\s+[\s\S]{1,120}\s+from)\b/i;
+const INFLUX_INTENT = /\b(influxdb?|flux|influxql|influx\s+sql)\b/i;
+const RQLITE_EXPLICIT_INTENT = /\b(rqlite|sqlite|pragma|database tables?)\b/i;
+const RQLITE_SQL_INTENT = /\b(sql|select\s+[\s\S]{1,120}\s+from)\b/i;
 const SKILL_REFERENCE = /\$([a-z0-9][a-z0-9-]{0,62}[a-z0-9])/gi;
 
 export function selectGrafanaSkills(
@@ -25,8 +27,15 @@ export function selectGrafanaSkills(
     activeNames.add('grafana-dashboard');
   }
 
-  if (RQLITE_INTENT.test(prompt) && skillByName.has('rqlite-datasource')) {
+  const hasInfluxIntent = INFLUX_INTENT.test(prompt);
+  const hasRqliteIntent = RQLITE_EXPLICIT_INTENT.test(prompt) || (!hasInfluxIntent && RQLITE_SQL_INTENT.test(prompt));
+
+  if (hasRqliteIntent && skillByName.has('rqlite-datasource')) {
     activeNames.add('rqlite-datasource');
+  }
+
+  if (hasInfluxIntent && skillByName.has('influx-datasource')) {
+    activeNames.add('influx-datasource');
   }
 
   for (const skill of skills) {

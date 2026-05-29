@@ -23,7 +23,7 @@ describe('configured Grafana skills', () => {
             name: 'team-runbook',
             description: 'Team incident workflow.',
             content: '# Team Runbook\n\nUse the internal incident workflow.',
-            toolGroups: ['metrics', 'rqlite', 'dashboardRead', 'adHocDashboards'],
+            toolGroups: ['metrics', 'rqlite', 'influx', 'dashboardRead', 'adHocDashboards'],
             resources: [
               {
                 path: 'references/runbook.md',
@@ -46,6 +46,7 @@ describe('configured Grafana skills', () => {
       filePath: 'plugin-config/customSkills/team-runbook',
       toolGroups: expect.arrayContaining(['skillResources', 'metrics', 'rqlite', 'dashboardRead']),
     });
+    expect(skills[1].toolGroups).toContain('influx');
     expect(skills[1].toolGroups).not.toContain('adHocDashboards');
     expect(skills[1].resources['references/runbook.md']).toMatchObject({
       path: 'references/runbook.md',
@@ -86,7 +87,7 @@ describe('configured Grafana skills', () => {
           "description": "Team incident workflow.",
           "content": "# Team Runbook",
           "activation": { "keywords": ["incident"] },
-          "toolGroups": ["metrics", "rqlite", "skillResources"]
+          "toolGroups": ["metrics", "rqlite", "influx", "skillResources"]
         }
       ]`)
     ).toEqual([
@@ -95,7 +96,7 @@ describe('configured Grafana skills', () => {
         description: 'Team incident workflow.',
         content: '# Team Runbook',
         activation: { keywords: ['incident'] },
-        toolGroups: ['metrics', 'rqlite', 'skillResources'],
+        toolGroups: ['metrics', 'rqlite', 'influx', 'skillResources'],
       },
     ]);
 
