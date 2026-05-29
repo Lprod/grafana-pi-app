@@ -4,10 +4,7 @@ import type { DataSourceApi, DataSourceInstanceSettings } from '@grafana/data';
 import type { PiAppJsonData } from '../../../types';
 import type { SkillToolGroup } from '../skills/types';
 
-export type GrafanaToolConfig = Pick<
-  PiAppJsonData,
-  'allowedPrometheusDatasourceUids' | 'allowedRqliteDatasourceUids' | 'allowedInfluxDatasourceUids'
->;
+export type GrafanaToolConfig = Pick<PiAppJsonData, 'allowedPrometheusDatasourceUids' | 'allowedRqliteDatasourceUids'>;
 
 export type GrafanaToolRuntime = {
   model: Model<any>;
@@ -98,14 +95,6 @@ export type QueryRqliteParams = DatasourceParams & {
   sql: string;
   format?: 'table' | 'time_series';
   timeColumns?: string[];
-  start?: string;
-  end?: string;
-};
-
-export type QueryInfluxParams = DatasourceParams & {
-  query: string;
-  language?: 'flux' | 'influxql' | 'sql';
-  format?: 'table' | 'time_series';
   start?: string;
   end?: string;
 };
@@ -224,7 +213,6 @@ export type JsonnetLibToolSet = {
 export type GrafanaToolRegistry = {
   metrics: AgentTool[];
   rqlite: AgentTool[];
-  influx: AgentTool[];
   dashboards: AgentTool[];
   managedDashboards: ManagedDashboardToolSet;
   jsonnetFiles: JsonnetFileToolSet;

@@ -13,7 +13,6 @@ apps:
       systemPromptAddendum: ''
       isOpenAIAPIKeySet: true
       allowedPrometheusDatasourceUids: ['prometheus']
-      allowedInfluxDatasourceUids: ['influx-v1']
       customSkills: []
     secureJsonData:
       openAIAPIKey: $__env{OPENAI_API_KEY}

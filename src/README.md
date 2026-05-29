@@ -1,6 +1,6 @@
 # Observability Analyst
 
-Observability Analyst adds an LLM analyst to Grafana for metric exploration, PromQL validation, read-only rqlite SQL, read-only InfluxDB queries, and dashboard authoring.
+Observability Analyst adds an LLM analyst to Grafana for metric exploration, PromQL validation, read-only rqlite SQL, and dashboard authoring.
 
 The assistant uses the current Grafana user's datasource and dashboard permissions. LLM requests are proxied through the app plugin backend with an OpenAI-compatible API key stored in secure plugin settings.
 The default chat toolset keeps `explore_metrics` available for broad metric reconnaissance and does not expose a Jsonnet subagent.
@@ -10,7 +10,6 @@ The default chat toolset keeps `explore_metrics` available for broad metric reco
 - Grafana 13.0 or newer.
 - At least one Prometheus datasource for metric exploration.
 - Optionally, at least one rqlite datasource for SQL exploration.
-- Optionally, at least one InfluxDB datasource for Flux, InfluxQL, or InfluxDB SQL exploration.
 - An OpenAI-compatible chat completions endpoint and API key.
 - Grafana image rendering if dashboard screenshot verification is required.
 - Grafana external service accounts for app-managed dashboard sync.
@@ -19,7 +18,7 @@ The default chat toolset keeps `explore_metrics` available for broad metric reco
 
 1. Enable the app plugin.
 2. Open the plugin configuration page.
-3. Set the OpenAI-compatible base URL, central model, API key, optional system prompt addendum, optional Prometheus, rqlite, and InfluxDB datasource allow-lists, and optional custom skills.
+3. Set the OpenAI-compatible base URL, central model, API key, optional system prompt addendum, optional Prometheus and rqlite datasource allow-lists, and optional custom skills.
 4. Open **Observability Analyst** from the app navigation.
 5. Ask the assistant to inspect metrics, validate PromQL, or create dashboards.
 

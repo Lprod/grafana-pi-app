@@ -8,7 +8,6 @@ Observability Analyst is a Grafana app plugin that embeds an LLM analyst for obs
 - Lists metric names and label values through Grafana datasource resource APIs.
 - Runs PromQL through Grafana datasource query APIs, returning compact min/max/last/sample summaries for range queries by default.
 - Discovers rqlite datasources, inspects tables and columns, and runs read-only SQL through the rqlite datasource plugin.
-- Discovers InfluxDB datasources and runs read-only Flux, InfluxQL, or InfluxDB SQL through Grafana datasource query APIs.
 - Creates app-managed dashboards from model-authored Jsonnet source. The source is stored with each dashboard so future edits can update the Jsonnet and re-sync through the app.
 - Lists, fetches, and screenshots dashboards through Grafana APIs.
 - Keeps broad metric reconnaissance available through a restricted metrics subagent.
@@ -23,14 +22,13 @@ Configure the app plugin from Grafana's plugin settings page:
 - `systemPromptAddendum`: Optional central instructions appended to the built-in system prompt. Do not include secrets because this is stored in `jsonData`.
 - `allowedPrometheusDatasourceUids`: Optional list of Prometheus datasource UIDs the assistant may discover, query, and reference in uploaded dashboards. Leave empty to allow all Prometheus datasources visible to the current Grafana user.
 - `allowedRqliteDatasourceUids`: Optional list of rqlite datasource UIDs the assistant may discover and query. Leave empty to allow all rqlite datasources visible to the current Grafana user.
-- `allowedInfluxDatasourceUids`: Optional list of InfluxDB datasource UIDs the assistant may discover and query. Leave empty to allow all InfluxDB datasources visible to the current Grafana user.
 - `customSkills`: Optional non-secret skill definitions stored in `jsonData`. Users activate explicit custom skills with `$skill-name`; admins can also configure keyword or regex activation.
 - `openAIAPIKey`: Secret API key stored in `secureJsonData`.
 
-Chat users cannot override the model, system prompt addendum, or datasource allow-list from the assistant page. The backend always uses the centrally configured model and appends the configured system prompt addendum when proxying LLM requests, and Grafana datasource tools enforce the central allow-lists before querying.
+Chat users cannot override the model, system prompt addendum, or datasource allow-list from the assistant page. The backend always uses the centrally configured model and appends the configured system prompt addendum when proxying LLM requests, and Grafana datasource tools enforce the central allow-list before querying.
 
 For local Docker provisioning, `provisioning/plugins/app.yaml` reads `OPENAI_API_KEY`.
-The local demo config points Grafana at `http://host.docker.internal:8080/v1`, sets the model to the Qwen llama-server model, and limits assistant datasource access to the provisioned `prometheus` and `influx-v1` datasources.
+The local demo config points Grafana at `http://host.docker.internal:8080/v1`, sets the model to the Qwen llama-server model, and limits assistant datasource access to the provisioned `prometheus` datasource.
 When `OPENAI_API_KEY` is unset, Compose provides a local dummy key because llama-server only needs a bearer token-shaped value.
 
 Managed dashboard writes use the plugin service account declared in `plugin.json`. In local Docker, `docker-compose.yaml` enables Grafana's external service account support for this and starts Grafana image rendering so screenshot verification can run.
@@ -62,7 +60,7 @@ The default chat toolset includes `explore_metrics` as a high-level fallback for
 
 Dashboard instructions are split into repo-local skills under `.agents/skills/<skill-name>/SKILL.md`, using the same default `SKILL.md` directory shape as local agent skill installs. `npm run generate:skills` validates those files and bundles them into `src/pages/Chat/skills/bundledSkills.generated.ts` for the frontend.
 
-The chat agent always has metric discovery tools and `explore_metrics` available. Dashboard guidance activates when the prompt asks for dashboard, panel, Jsonnet, render, or sync work, which also enables the managed dashboard and Jsonnet tool groups for that turn. rqlite guidance activates when the prompt asks about rqlite, SQLite, SQL, or database tables. InfluxDB guidance activates when the prompt asks about InfluxDB, Flux, InfluxQL, or InfluxDB SQL. New bundled skills can be added by creating another `.agents/skills/<name>/SKILL.md`; add optional text resources under `references/`, `templates/`, or `assets/`.
+The chat agent always has metric discovery tools and `explore_metrics` available. Dashboard guidance activates when the prompt asks for dashboard, panel, Jsonnet, render, or sync work, which also enables the managed dashboard and Jsonnet tool groups for that turn. rqlite guidance activates when the prompt asks about rqlite, SQLite, SQL, or database tables. New bundled skills can be added by creating another `.agents/skills/<name>/SKILL.md`; add optional text resources under `references/`, `templates/`, or `assets/`.
 
 Admins can also add small instance-specific custom skills through plugin configuration:
 
@@ -86,7 +84,7 @@ Admins can also add small instance-specific custom skills through plugin configu
 ]
 ```
 
-Custom skills are non-secret frontend configuration and are sent to the configured LLM when active. Supported custom skill tool groups are `metrics`, `rqlite`, `influx`, `dashboardRead`, `jsonnetFiles`, `managedDashboards`, `subagents`, and `skillResources`.
+Custom skills are non-secret frontend configuration and are sent to the configured LLM when active. Supported custom skill tool groups are `metrics`, `rqlite`, `dashboardRead`, `jsonnetFiles`, `managedDashboards`, `subagents`, and `skillResources`.
 
 ## Development
 
@@ -167,15 +165,7 @@ To benchmark read-only analysis of the demo Prometheus incident, run:
 npm run benchmark:analysis
 ```
 
-This benchmark asks the assistant to investigate the six-hour synthetic Prometheus data set without creating dashboards. It writes reports to `test-results/analysis-benchmark/latest-report.txt`, `latest-answer.md`, and `latest-events.json`.
-
-To benchmark read-only analysis of the same demo incident through InfluxDB v1, run:
-
-```bash
-npm run benchmark:influx-analysis
-```
-
-This benchmark uses the provisioned `influx-v1` datasource and writes reports to `test-results/influx-analysis-benchmark/latest-report.txt`, `latest-answer.md`, and `latest-events.json`.
+This benchmark asks the assistant to investigate the six-hour synthetic data set without creating dashboards. It writes reports to `test-results/analysis-benchmark/latest-report.txt`, `latest-answer.md`, and `latest-events.json`.
 
 To benchmark only the `explore_metrics` discovery path, run:
 

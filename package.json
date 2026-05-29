@@ -13,7 +13,6 @@
     "e2e": "playwright test",
     "benchmark:agent": "node scripts/benchmark-agent.mjs",
     "benchmark:analysis": "node scripts/benchmark-analysis.mjs",
-    "benchmark:influx-analysis": "node scripts/benchmark-influx-analysis.mjs",
     "benchmark:explore-metrics": "node scripts/benchmark-explore-metrics.mjs",
     "server": "docker compose up --build",
     "sign": "npx --yes @grafana/sign-plugin@latest",

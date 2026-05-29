@@ -437,8 +437,6 @@ function asSimpleToolCallSummary(
       return { summary: 'Discover Prometheus datasources' };
     case 'list_rqlite_datasources':
       return { summary: 'Discover rqlite datasources' };
-    case 'list_influx_datasources':
-      return { summary: 'Discover InfluxDB datasources' };
     case 'list_rqlite_tables':
       return {
         summary: `List rqlite tables | ${formatDatasourceSummary(record)}`,
@@ -460,16 +458,6 @@ function asSimpleToolCallSummary(
           { label: 'Format', value: stringField(record, 'format') ?? 'table' },
         ],
         code: stringField(record, 'sql'),
-      };
-    case 'query_influx':
-      return {
-        summary: summaryLine(['Query InfluxDB', formatDatasourceSummary(record)]),
-        items: [
-          { label: 'Datasource', value: formatDatasourceMetaValue(record) },
-          { label: 'Language', value: stringField(record, 'language') },
-          { label: 'Format', value: stringField(record, 'format') },
-        ],
-        code: stringField(record, 'query'),
       };
     case 'list_metrics':
       return {
@@ -799,8 +787,6 @@ const TOOL_ICONS: Record<string, IconName> = {
   list_rqlite_tables: 'table',
   list_rqlite_columns: 'list-ul',
   query_rqlite: 'database',
-  list_influx_datasources: 'database',
-  query_influx: 'database',
   list_metrics: 'list-ul',
   list_label_values: 'list-ul',
   inspect_metric_series: 'search',

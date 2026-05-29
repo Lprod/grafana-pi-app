@@ -35,7 +35,6 @@ type State = {
   allowedUsersText: string;
   allowedPrometheusDatasourceUids: string[];
   allowedRqliteDatasourceUids: string[];
-  allowedInfluxDatasourceUids: string[];
   systemPromptAddendum: string;
   customSkillsJson: string;
 };
@@ -58,15 +57,11 @@ const AppConfig = ({ plugin }: AppConfigProps) => {
     allowedRqliteDatasourceUids: Array.isArray(jsonData?.allowedRqliteDatasourceUids)
       ? jsonData.allowedRqliteDatasourceUids
       : [],
-    allowedInfluxDatasourceUids: Array.isArray(jsonData?.allowedInfluxDatasourceUids)
-      ? jsonData.allowedInfluxDatasourceUids
-      : [],
     systemPromptAddendum: typeof jsonData?.systemPromptAddendum === 'string' ? jsonData.systemPromptAddendum : '',
     customSkillsJson: formatCustomSkillsJson(jsonData?.customSkills),
   });
   const datasourceOptions = getPrometheusDatasourceOptions(state.allowedPrometheusDatasourceUids);
   const rqliteDatasourceOptions = getRqliteDatasourceOptions(state.allowedRqliteDatasourceUids);
-  const influxDatasourceOptions = getInfluxDatasourceOptions(state.allowedInfluxDatasourceUids);
   const customSkillsError = useMemo(() => validateCustomSkillsJson(state.customSkillsJson), [state.customSkillsJson]);
   const allowedUsers = useMemo(() => parseAllowedUsersInput(state.allowedUsersText), [state.allowedUsersText]);
   const allowedUsersError =
@@ -138,13 +133,6 @@ const AppConfig = ({ plugin }: AppConfigProps) => {
     });
   };
 
-  const onChangeAllowedInfluxDatasourceUids = (options: Array<ComboboxOption<string>>) => {
-    setState({
-      ...state,
-      allowedInfluxDatasourceUids: options.map((option) => option.value),
-    });
-  };
-
   const onChangeSystemPromptAddendum = (event: ChangeEvent<HTMLTextAreaElement>) => {
     setState({
       ...state,
@@ -174,7 +162,6 @@ const AppConfig = ({ plugin }: AppConfigProps) => {
         allowedUsers,
         allowedPrometheusDatasourceUids: state.allowedPrometheusDatasourceUids,
         allowedRqliteDatasourceUids: state.allowedRqliteDatasourceUids,
-        allowedInfluxDatasourceUids: state.allowedInfluxDatasourceUids,
         systemPromptAddendum: state.systemPromptAddendum.trim(),
         customSkills,
       },
@@ -314,23 +301,6 @@ const AppConfig = ({ plugin }: AppConfigProps) => {
             onChange={onChangeAllowedRqliteDatasourceUids}
           />
         </Field>
-
-        <Field
-          label="Allowed InfluxDB datasources"
-          description="Leave empty to allow all InfluxDB datasources visible to the current Grafana user. Select datasources to restrict assistant queries."
-          className={s.marginTop}
-        >
-          <MultiCombobox
-            width={60}
-            id="allowed-influx-datasource-uids"
-            data-testid={testIds.appConfig.allowedInfluxDatasourceUids}
-            options={influxDatasourceOptions}
-            value={state.allowedInfluxDatasourceUids}
-            placeholder="All visible InfluxDB datasources"
-            isClearable
-            onChange={onChangeAllowedInfluxDatasourceUids}
-          />
-        </Field>
       </FieldSet>
 
       <FieldSet label="Custom skills" className={s.marginTopXl}>
@@ -452,28 +422,6 @@ const getPrometheusDatasourceOptions = (selectedUids: string[]): Array<ComboboxO
 const getRqliteDatasourceOptions = (selectedUids: string[]): Array<ComboboxOption<string>> => {
   const options = getDataSourceSrv()
     .getList({ metrics: true, type: 'g42-rqlite-datasource' })
-    .filter((ds) => Boolean(ds.uid))
-    .map((ds) => ({
-      label: ds.name,
-      value: ds.uid,
-      description: `${ds.uid}${ds.isDefault ? ' (default)' : ''}`,
-    }))
-    .sort((left, right) => left.label.localeCompare(right.label));
-  const availableUids = new Set(options.map((option) => option.value));
-  const missingOptions = selectedUids
-    .filter((uid) => uid && !availableUids.has(uid))
-    .map((uid) => ({
-      label: uid,
-      value: uid,
-      description: 'Configured UID not visible in this session',
-    }));
-
-  return [...options, ...missingOptions];
-};
-
-const getInfluxDatasourceOptions = (selectedUids: string[]): Array<ComboboxOption<string>> => {
-  const options = getDataSourceSrv()
-    .getList({ metrics: true, type: 'influxdb' })
     .filter((ds) => Boolean(ds.uid))
     .map((ds) => ({
       label: ds.name,

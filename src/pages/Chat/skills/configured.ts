@@ -4,7 +4,6 @@ import type { BundledSkillResource, GrafanaSkill, GrafanaSkillActivation, SkillT
 export const CONFIGURABLE_SKILL_TOOL_GROUPS = [
   'metrics',
   'rqlite',
-  'influx',
   'dashboardRead',
   'jsonnetFiles',
   'managedDashboards',

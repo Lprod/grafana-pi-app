@@ -3,7 +3,6 @@ import { createDashboardTools } from './dashboards';
 import { createJsonnetFileTools } from './jsonnetFiles';
 import { createJsonnetLibTools } from './jsonnetLibs';
 import { createManagedDashboardTools } from './managedDashboards';
-import { createInfluxTools, filterAllowedInfluxDatasourceSettings } from './influx';
 import { createMetricTools, filterAllowedPrometheusDatasourceSettings } from './metrics';
 import { createRqliteTools, filterAllowedRqliteDatasourceSettings } from './rqlite';
 import { createSubagentTools } from './subagents';
@@ -11,11 +10,7 @@ import type { CreateGrafanaToolsOptions, GrafanaToolRegistry, SkillToolGroup } f
 
 export { getUnavailableDashboardDatasourceUids } from './dashboardPolicy';
 export { DEFAULT_JSONNET_FILE_PATH, normalizeJsonnetPath } from './jsonnetFiles';
-export {
-  filterAllowedInfluxDatasourceSettings,
-  filterAllowedPrometheusDatasourceSettings,
-  filterAllowedRqliteDatasourceSettings,
-};
+export { filterAllowedPrometheusDatasourceSettings, filterAllowedRqliteDatasourceSettings };
 export { createSkillTools } from './skills';
 export type {
   CreateGrafanaToolsOptions,
@@ -31,7 +26,6 @@ export type { SubagentRunDetails, SubagentToolCall, SubagentUsage } from './suba
 export function createGrafanaToolRegistry(options: CreateGrafanaToolsOptions = {}): GrafanaToolRegistry {
   const metrics = createMetricTools(options);
   const rqlite = createRqliteTools(options);
-  const influx = createInfluxTools(options);
   const dashboards = createDashboardTools(options, options.includeAdHocDashboardTools);
   const jsonnetFiles = createJsonnetFileTools(options);
   const managedDashboards = createManagedDashboardTools(options);
@@ -49,7 +43,6 @@ export function createGrafanaToolRegistry(options: CreateGrafanaToolsOptions = {
   return {
     metrics,
     rqlite,
-    influx,
     dashboards,
     jsonnetFiles,
     managedDashboards,
@@ -59,7 +52,6 @@ export function createGrafanaToolRegistry(options: CreateGrafanaToolsOptions = {
     all: [
       ...metrics,
       ...rqlite,
-      ...influx,
       ...jsonnetFiles.all,
       ...parentManagedDashboardTools,
       ...subagents,
@@ -92,10 +84,6 @@ export function createGrafanaToolsForSkillGroups(
 
   if (groupSet.has('rqlite')) {
     selected.push(...registry.rqlite);
-  }
-
-  if (groupSet.has('influx')) {
-    selected.push(...registry.influx);
   }
 
   if (groupSet.has('jsonnetFiles')) {

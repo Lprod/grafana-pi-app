@@ -1,7 +1,6 @@
 export type SkillToolGroup =
   | 'metrics'
   | 'rqlite'
-  | 'influx'
   | 'dashboardRead'
   | 'jsonnetFiles'
   | 'managedDashboards'

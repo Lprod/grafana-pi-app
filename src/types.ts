@@ -32,7 +32,6 @@ export type PiAppJsonData = {
   // Legacy name kept for existing plugin settings.
   allowedDatasourceUids?: string[];
   allowedRqliteDatasourceUids?: string[];
-  allowedInfluxDatasourceUids?: string[];
   systemPromptAddendum?: string;
   customSkills?: PiAppCustomSkill[];
 };
