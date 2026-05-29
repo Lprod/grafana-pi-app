@@ -1,7 +1,7 @@
 import React, { useMemo, useState } from 'react';
 import { css, cx, keyframes } from '@emotion/css';
 import type { AgentToolResult } from '@earendil-works/pi-agent-core';
-import { renderMarkdown, type GrafanaTheme2 } from '@grafana/data';
+import { renderMarkdown, type GrafanaTheme2, type IconName } from '@grafana/data';
 import {
   EmbeddedScene,
   PanelBuilders,
@@ -10,7 +10,7 @@ import {
   SceneQueryRunner,
   SceneTimeRange,
 } from '@grafana/scenes';
-import { Badge, LinkButton, Spinner, useStyles2 } from '@grafana/ui';
+import { Badge, Icon, LinkButton, Spinner, useStyles2 } from '@grafana/ui';
 import type { SubagentRunDetails, SubagentToolCall } from './tools';
 import {
   highlightJsonnetLines,
@@ -189,10 +189,12 @@ function ToolCallBlock({
 }) {
   const styles = useStyles2(getToolStyles);
   const structuredToolCall = renderStructuredToolCall(name, args, partialJson, Boolean(isStreaming));
+  const icon = toolIconName(name);
   return (
     <div className={styles.toolCall}>
       <div className={styles.toolCallHeader}>
         <Badge text={isStreaming ? 'preparing' : 'tool call'} color="blue" />
+        {icon && <Icon aria-hidden className={styles.toolTypeIcon} name={icon} />}
         <strong>{name}</strong>
       </div>
       {structuredToolCall ?? (
@@ -308,6 +310,7 @@ function ToolHeader({
   compact?: boolean;
 }) {
   const styles = useStyles2(getToolStyles);
+  const icon = toolIconName(name);
   const badge =
     status === 'running' ? (
       <Badge text="running" color="blue" />
@@ -321,9 +324,56 @@ function ToolHeader({
     <div className={cx(styles.toolHeader, compact && styles.toolHeaderCompact)}>
       {status === 'running' && <Spinner size="sm" />}
       {badge}
+      {icon && <Icon aria-hidden className={styles.toolTypeIcon} name={icon} />}
       <strong>{name}</strong>
     </div>
   );
+}
+
+const TOOL_ICONS: Record<string, IconName> = {
+  list_datasources: 'database',
+  grafana_get_datasources: 'database',
+  list_metrics: 'list-ul',
+  list_label_values: 'list-ul',
+  inspect_metric_series: 'search',
+  query_prometheus: 'gf-prometheus',
+  query_prometheus_raw: 'gf-prometheus',
+  explore_metrics: 'compass',
+  write_jsonnet: 'brackets-curly',
+  grafana_write_jsonnet_file: 'brackets-curly',
+  edit_jsonnet: 'file-edit-alt',
+  grafana_edit_jsonnet_file: 'file-edit-alt',
+  fix_jsonnet: 'bug',
+  read_jsonnet: 'file-alt',
+  grafana_read_jsonnet_file: 'file-alt',
+  search_grafonnet: 'search',
+  search_jsonnet_libs: 'search',
+  read_grafonnet: 'book-open',
+  read_jsonnet_lib: 'book-open',
+  list_grafonnet: 'list-ul',
+  list_jsonnet_libs: 'list-ul',
+  list_dashboards: 'dashboard',
+  grafana_list_dashboards: 'dashboard',
+  list_managed_dashboards: 'dashboard',
+  get_dashboard: 'dashboard',
+  grafana_get_dashboard: 'dashboard',
+  get_dashboard_source: 'file-alt',
+  grafana_get_managed_dashboard_source: 'file-alt',
+  render_dashboard: 'dashboard',
+  grafana_render_managed_dashboard: 'dashboard',
+  sync_dashboard: 'sync',
+  grafana_sync_managed_dashboard: 'sync',
+  upload_dashboard: 'upload',
+  grafana_upload_dashboard: 'upload',
+  delete_dashboard: 'trash-alt',
+  grafana_delete_dashboard: 'trash-alt',
+  screenshot_dashboard: 'camera',
+  grafana_screenshot: 'camera',
+  read_skill_resource: 'book',
+};
+
+function toolIconName(name: string): IconName | undefined {
+  return TOOL_ICONS[name];
 }
 
 function SubagentDetailsView({ details, compact }: { details: SubagentRunDetails; compact?: boolean }) {
@@ -699,6 +749,7 @@ function PrometheusBatchQueryResultItem({ index, result }: { index: number; resu
   const styles = useStyles2(getToolStyles);
   const [isOpen, setIsOpen] = useState(index === 0);
   const visualization = isOpen ? prometheusTimeseriesVisualizationFromSummary(result) : undefined;
+  const summaryMeta = formatQueryResultSummaryMeta(result);
 
   return (
     <details
@@ -706,9 +757,17 @@ function PrometheusBatchQueryResultItem({ index, result }: { index: number; resu
       open={isOpen}
       onToggle={(event) => setIsOpen(event.currentTarget.open)}
     >
-      <summary>
-        <span>Query {index + 1}</span>
-        <code>{result.query}</code>
+      <summary className={styles.queryResultSummary}>
+        <Icon
+          aria-hidden
+          className={styles.queryResultChevron}
+          name={isOpen ? 'angle-down' : 'angle-right'}
+        />
+        <span className={styles.queryResultIndex}>Query {index + 1}</span>
+        <code className={styles.queryResultExpression} title={result.query}>
+          {result.query}
+        </code>
+        <span className={styles.queryResultMeta}>{summaryMeta}</span>
       </summary>
       <PrometheusQueryResultView result={result} visualization={visualization} />
     </details>
@@ -2280,6 +2339,17 @@ function formatDelta(delta: number | undefined, deltaPercent: number | undefined
   return `${formatNumber(delta)}${percent}`;
 }
 
+function formatQueryResultSummaryMeta(result: PrometheusQuerySummaryView) {
+  const parts = [result.queryType, `${formatCount(result.totalSeries)} series`];
+  if (result.interval !== '-') {
+    parts.push(result.interval);
+  }
+  if (result.truncatedSeries) {
+    parts.push('truncated');
+  }
+  return parts.join(' | ');
+}
+
 function formatNumber(value: number | null | undefined) {
   if (value === null || value === undefined) {
     return '-';
@@ -2442,6 +2512,10 @@ const getToolStyles = (theme: GrafanaTheme2) => ({
   toolHeaderCompact: css({
     fontSize: theme.typography.bodySmall.fontSize,
   }),
+  toolTypeIcon: css({
+    color: theme.colors.text.secondary,
+    flex: '0 0 auto',
+  }),
   toolCall: css({
     display: 'grid',
     gap: theme.spacing(1),
@@ -2564,26 +2638,59 @@ const getToolStyles = (theme: GrafanaTheme2) => ({
     border: `1px solid ${theme.colors.border.weak}`,
     borderRadius: theme.shape.radius.default,
     background: theme.colors.background.primary,
-    '& > summary': {
-      display: 'flex',
-      alignItems: 'center',
-      gap: theme.spacing(1),
-      minWidth: 0,
-      cursor: 'pointer',
-      color: theme.colors.text.secondary,
-      fontSize: theme.typography.bodySmall.fontSize,
+    '&:hover': {
+      borderColor: theme.colors.border.medium,
     },
-    '& > summary > code': {
-      minWidth: 0,
-      overflow: 'hidden',
-      textOverflow: 'ellipsis',
-      whiteSpace: 'nowrap',
-      color: theme.colors.text.primary,
-      fontFamily: theme.typography.fontFamilyMonospace,
+    '&[open]': {
+      borderColor: theme.colors.border.medium,
     },
-    '&[open] > summary': {
+    '&[open] summary': {
       marginBottom: theme.spacing(1),
     },
+  }),
+  queryResultSummary: css({
+    display: 'grid',
+    gridTemplateColumns: 'auto auto minmax(0, 1fr) auto',
+    alignItems: 'center',
+    gap: theme.spacing(1),
+    minWidth: 0,
+    cursor: 'pointer',
+    color: theme.colors.text.secondary,
+    fontSize: theme.typography.bodySmall.fontSize,
+    listStyle: 'none',
+    '&::marker': {
+      content: '""',
+    },
+    '&::-webkit-details-marker': {
+      display: 'none',
+    },
+    '&:focus-visible': {
+      outline: `2px solid ${theme.colors.primary.border}`,
+      outlineOffset: theme.spacing(0.5),
+      borderRadius: theme.shape.radius.default,
+    },
+  }),
+  queryResultChevron: css({
+    color: theme.colors.text.secondary,
+    flexShrink: 0,
+  }),
+  queryResultIndex: css({
+    color: theme.colors.text.primary,
+    fontWeight: theme.typography.fontWeightMedium,
+    whiteSpace: 'nowrap',
+  }),
+  queryResultExpression: css({
+    minWidth: 0,
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
+    color: theme.colors.text.primary,
+    fontFamily: theme.typography.fontFamilyMonospace,
+    fontSize: theme.typography.bodySmall.fontSize,
+  }),
+  queryResultMeta: css({
+    color: theme.colors.text.secondary,
+    whiteSpace: 'nowrap',
   }),
   chipList: css({
     display: 'flex',

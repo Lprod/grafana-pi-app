@@ -105,6 +105,24 @@ describe('ToolRenderer', () => {
     expect(container.textContent).toContain("title: 'CPU'");
     expect(container.textContent).not.toContain('"content"');
     expect(container.textContent).not.toContain('\\n');
+    expect(screen.getByTestId('brackets-curly')).toBeInTheDocument();
+  });
+
+  it('renders tool category icons in generic tool call headers', () => {
+    render(
+      <ContentBlocks
+        content={[
+          {
+            type: 'toolCall',
+            name: 'list_metrics',
+            arguments: {},
+          },
+        ]}
+      />
+    );
+
+    expect(screen.getByTestId('list-ul')).toBeInTheDocument();
+    expect(screen.getByText('list_metrics')).toBeInTheDocument();
   });
 
   it('renders streaming write_jsonnet content from partial JSON arguments', () => {
@@ -314,6 +332,11 @@ describe('ToolRenderer', () => {
     expect(container.textContent).toContain('Query 1');
     expect(container.textContent).toContain('Query 2');
     expect(container.textContent).toContain('rate(http_requests_total[5m])');
+    expect(container.textContent).toContain('range | 1 series | 30s');
+    expect(container.textContent).toContain('instant | 1 series | 1m');
+    expect(screen.getByTestId('gf-prometheus')).toBeInTheDocument();
+    expect(screen.getByTestId('angle-down')).toBeInTheDocument();
+    expect(screen.getByTestId('angle-right')).toBeInTheDocument();
     expect(screen.getByTestId('prometheus-timeseries-panel')).toBeInTheDocument();
     expect(container.textContent).not.toContain('"queryCount"');
   });
