@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
+	"github.com/grafana/authlib/authz"
 	"github.com/grafana/grafana-plugin-sdk-go/backend"
 	"github.com/grafana/grafana-plugin-sdk-go/backend/instancemgmt"
 	"github.com/grafana/grafana-plugin-sdk-go/backend/resource/httpadapter"
@@ -28,11 +30,16 @@ type App struct {
 	settings     appSettings
 	httpClient   *http.Client
 	jsonnetFiles *virtualJsonnetFileStore
+	authzMu      sync.Mutex
+	authzToken   string
+	authzClient  authz.EnforcementClient
 }
 
 type appSettings struct {
 	OpenAIBaseURL                   string   `json:"openAIBaseUrl"`
 	DefaultModel                    string   `json:"defaultModel"`
+	AccessMode                      string   `json:"accessMode"`
+	AllowedUsers                    []string `json:"allowedUsers"`
 	AllowedPrometheusDatasourceUIDs []string `json:"allowedPrometheusDatasourceUids"`
 	SystemPromptAddendum            string   `json:"systemPromptAddendum"`
 	OpenAIAPIKey                    string
@@ -94,6 +101,8 @@ func loadSettings(settings backend.AppInstanceSettings) appSettings {
 	if loaded.DefaultModel == "" {
 		loaded.DefaultModel = "gpt-4.1"
 	}
+	loaded.AccessMode = normalizeAccessMode(loaded.AccessMode)
+	loaded.AllowedUsers = normalizeAllowedUsers(loaded.AllowedUsers)
 	loaded.OpenAIAPIKey = settings.DecryptedSecureJSONData["openAIAPIKey"]
 
 	return loaded

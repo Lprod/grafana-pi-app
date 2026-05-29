@@ -28,8 +28,19 @@
       "defaultNav": true
     }
   ],
+  "roles": [
+    {
+      "role": {
+        "name": "Access",
+        "description": "Use the Observability Analyst app.",
+        "permissions": [{ "action": "g42-pi-app.app:access" }]
+      },
+      "grants": ["Admin"]
+    }
+  ],
   "iam": {
     "permissions": [
+      { "action": "users.permissions:read", "scope": "users:*" },
       { "action": "dashboards:create", "scope": "folders:uid:*" },
       { "action": "dashboards:read", "scope": "folders:uid:*" },
       { "action": "dashboards:write", "scope": "folders:uid:*" },

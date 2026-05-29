@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/grafana/authlib/authz"
 	"github.com/grafana/grafana-plugin-sdk-go/backend"
 	"github.com/grafana/grafana-plugin-sdk-go/config"
 )
@@ -22,7 +23,43 @@ func (s *mockCallResourceResponseSender) Send(response *backend.CallResourceResp
 	return nil
 }
 
-func TestLLMStreamRequiresConfiguredAPIKey(t *testing.T) {
+type fakeAuthzClient struct {
+	allowed bool
+}
+
+func (f fakeAuthzClient) Compile(context.Context, string, string, ...string) (authz.Checker, error) {
+	return func(...authz.Resource) bool { return f.allowed }, nil
+}
+
+func (f fakeAuthzClient) HasAccess(context.Context, string, string, ...authz.Resource) (bool, error) {
+	return f.allowed, nil
+}
+
+func (f fakeAuthzClient) LookupResources(context.Context, string, string) ([]authz.Resource, error) {
+	return nil, nil
+}
+
+func adminPluginContext() backend.PluginContext {
+	return backend.PluginContext{
+		User: &backend.User{
+			Login: "admin",
+			Email: "admin@example.com",
+			Role:  "Admin",
+		},
+	}
+}
+
+func viewerPluginContext(login, email string) backend.PluginContext {
+	return backend.PluginContext{
+		User: &backend.User{
+			Login: login,
+			Email: email,
+			Role:  "Viewer",
+		},
+	}
+}
+
+func TestResourceAccessDefaultsToAll(t *testing.T) {
 	inst, err := NewApp(context.Background(), backend.AppInstanceSettings{})
 	if err != nil {
 		t.Fatalf("new app: %s", err)
@@ -32,8 +69,172 @@ func TestLLMStreamRequiresConfiguredAPIKey(t *testing.T) {
 	var sender mockCallResourceResponseSender
 	err = app.CallResource(context.Background(), &backend.CallResourceRequest{
 		Method: http.MethodPost,
-		Path:   "llm/stream",
-		Body:   []byte(`{"model":{"id":"gpt-test"},"context":{"messages":[]}}`),
+		Path:   "jsonnet-libs/list",
+		Body:   []byte(`{}`),
+	}, &sender)
+	if err != nil {
+		t.Fatalf("CallResource error: %s", err)
+	}
+	if len(sender.responses) != 1 {
+		t.Fatalf("expected 1 response, got %d", len(sender.responses))
+	}
+	if sender.responses[0].Status != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", sender.responses[0].Status, string(sender.responses[0].Body))
+	}
+}
+
+func TestResourceAccessAdminsModeDeniesViewer(t *testing.T) {
+	jsonData, _ := json.Marshal(appSettings{AccessMode: accessModeAdmins})
+	inst, err := NewApp(context.Background(), backend.AppInstanceSettings{JSONData: jsonData})
+	if err != nil {
+		t.Fatalf("new app: %s", err)
+	}
+	app := inst.(*App)
+
+	var sender mockCallResourceResponseSender
+	err = app.CallResource(context.Background(), &backend.CallResourceRequest{
+		PluginContext: viewerPluginContext("viewer", "viewer@example.com"),
+		Method:        http.MethodPost,
+		Path:          "jsonnet-libs/list",
+		Body:          []byte(`{}`),
+	}, &sender)
+	if err != nil {
+		t.Fatalf("CallResource error: %s", err)
+	}
+	if len(sender.responses) != 1 {
+		t.Fatalf("expected 1 response, got %d", len(sender.responses))
+	}
+	if sender.responses[0].Status != http.StatusForbidden {
+		t.Fatalf("expected 403, got %d: %s", sender.responses[0].Status, string(sender.responses[0].Body))
+	}
+}
+
+func TestResourceAccessAllowsConfiguredUser(t *testing.T) {
+	jsonData, _ := json.Marshal(appSettings{
+		AccessMode:   accessModeUsers,
+		AllowedUsers: []string{"viewer@example.com"},
+	})
+	inst, err := NewApp(context.Background(), backend.AppInstanceSettings{JSONData: jsonData})
+	if err != nil {
+		t.Fatalf("new app: %s", err)
+	}
+	app := inst.(*App)
+
+	var sender mockCallResourceResponseSender
+	err = app.CallResource(context.Background(), &backend.CallResourceRequest{
+		PluginContext: viewerPluginContext("viewer", "viewer@example.com"),
+		Method:        http.MethodPost,
+		Path:          "jsonnet-libs/list",
+		Body:          []byte(`{}`),
+	}, &sender)
+	if err != nil {
+		t.Fatalf("CallResource error: %s", err)
+	}
+	if len(sender.responses) != 1 {
+		t.Fatalf("expected 1 response, got %d", len(sender.responses))
+	}
+	if sender.responses[0].Status != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", sender.responses[0].Status, string(sender.responses[0].Body))
+	}
+}
+
+func TestResourceAccessAllModeHasNoAppGate(t *testing.T) {
+	jsonData, _ := json.Marshal(appSettings{AccessMode: accessModeAll})
+	inst, err := NewApp(context.Background(), backend.AppInstanceSettings{JSONData: jsonData})
+	if err != nil {
+		t.Fatalf("new app: %s", err)
+	}
+	app := inst.(*App)
+
+	var sender mockCallResourceResponseSender
+	err = app.CallResource(context.Background(), &backend.CallResourceRequest{
+		Method: http.MethodPost,
+		Path:   "jsonnet-libs/list",
+		Body:   []byte(`{}`),
+	}, &sender)
+	if err != nil {
+		t.Fatalf("CallResource error: %s", err)
+	}
+	if len(sender.responses) != 1 {
+		t.Fatalf("expected 1 response, got %d", len(sender.responses))
+	}
+	if sender.responses[0].Status != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", sender.responses[0].Status, string(sender.responses[0].Body))
+	}
+}
+
+func TestResourceAccessRBACModeDeniesViewerWithoutForwardedIdentity(t *testing.T) {
+	jsonData, _ := json.Marshal(appSettings{AccessMode: accessModeRBAC})
+	inst, err := NewApp(context.Background(), backend.AppInstanceSettings{JSONData: jsonData})
+	if err != nil {
+		t.Fatalf("new app: %s", err)
+	}
+	app := inst.(*App)
+
+	var sender mockCallResourceResponseSender
+	err = app.CallResource(context.Background(), &backend.CallResourceRequest{
+		PluginContext: viewerPluginContext("viewer", "viewer@example.com"),
+		Method:        http.MethodPost,
+		Path:          "jsonnet-libs/list",
+		Body:          []byte(`{}`),
+	}, &sender)
+	if err != nil {
+		t.Fatalf("CallResource error: %s", err)
+	}
+	if len(sender.responses) != 1 {
+		t.Fatalf("expected 1 response, got %d", len(sender.responses))
+	}
+	if sender.responses[0].Status != http.StatusForbidden {
+		t.Fatalf("expected 403, got %d: %s", sender.responses[0].Status, string(sender.responses[0].Body))
+	}
+}
+
+func TestResourceAccessRBACModeAllowsViewerWithPermission(t *testing.T) {
+	jsonData, _ := json.Marshal(appSettings{AccessMode: accessModeRBAC})
+	inst, err := NewApp(context.Background(), backend.AppInstanceSettings{JSONData: jsonData})
+	if err != nil {
+		t.Fatalf("new app: %s", err)
+	}
+	app := inst.(*App)
+	app.authzToken = "service-account-token"
+	app.authzClient = fakeAuthzClient{allowed: true}
+	ctx := config.WithGrafanaConfig(context.Background(), config.NewGrafanaCfg(map[string]string{
+		config.AppURL:          "http://grafana.example",
+		config.AppClientSecret: "service-account-token",
+	}))
+
+	var sender mockCallResourceResponseSender
+	err = app.CallResource(ctx, &backend.CallResourceRequest{
+		PluginContext: viewerPluginContext("viewer", "viewer@example.com"),
+		Method:        http.MethodPost,
+		Path:          "jsonnet-libs/list",
+		Headers:       map[string][]string{grafanaIDHeader: []string{"id-token"}},
+		Body:          []byte(`{}`),
+	}, &sender)
+	if err != nil {
+		t.Fatalf("CallResource error: %s", err)
+	}
+	if len(sender.responses) != 1 {
+		t.Fatalf("expected 1 response, got %d", len(sender.responses))
+	}
+	if sender.responses[0].Status != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", sender.responses[0].Status, string(sender.responses[0].Body))
+	}
+}
+
+func TestLLMStreamRequiresConfiguredAPIKey(t *testing.T) {
+	inst, err := NewApp(context.Background(), backend.AppInstanceSettings{})
+	if err != nil {
+		t.Fatalf("new app: %s", err)
+	}
+	app := inst.(*App)
+
+	var sender mockCallResourceResponseSender
+	err = app.CallResource(context.Background(), &backend.CallResourceRequest{
+		PluginContext: adminPluginContext(),
+		Method:        http.MethodPost,
+		Path:          "llm/stream",
+		Body:          []byte(`{"model":{"id":"gpt-test"},"context":{"messages":[]}}`),
 	}, &sender)
 	if err != nil {
 		t.Fatalf("CallResource error: %s", err)
@@ -84,8 +285,9 @@ func TestLLMStreamRelaysOpenAICompatibleChunks(t *testing.T) {
 
 	var sender mockCallResourceResponseSender
 	err = app.CallResource(context.Background(), &backend.CallResourceRequest{
-		Method: http.MethodPost,
-		Path:   "llm/stream",
+		PluginContext: adminPluginContext(),
+		Method:        http.MethodPost,
+		Path:          "llm/stream",
 		Body: []byte(`{
 			"model":{"id":"gpt-user-supplied"},
 			"context":{
@@ -158,8 +360,9 @@ func TestLLMStreamParsesMultilineSSEAndBufferedToolArguments(t *testing.T) {
 
 	var sender mockCallResourceResponseSender
 	err = app.CallResource(context.Background(), &backend.CallResourceRequest{
-		Method: http.MethodPost,
-		Path:   "llm/stream",
+		PluginContext: adminPluginContext(),
+		Method:        http.MethodPost,
+		Path:          "llm/stream",
 		Body: []byte(`{
 			"context":{
 				"messages":[{"role":"user","content":"Query up"}],
@@ -254,9 +457,10 @@ g.dashboard.new('API Service RED')
 
 	var sender mockCallResourceResponseSender
 	err = app.CallResource(context.Background(), &backend.CallResourceRequest{
-		Method: http.MethodPost,
-		Path:   "managed-dashboards/render",
-		Body:   body,
+		PluginContext: adminPluginContext(),
+		Method:        http.MethodPost,
+		Path:          "managed-dashboards/render",
+		Body:          body,
 	}, &sender)
 	if err != nil {
 		t.Fatalf("CallResource error: %s", err)
@@ -364,9 +568,10 @@ func TestManagedDashboardRenderStoresModelAuthoredJsonnet(t *testing.T) {
 
 	var sender mockCallResourceResponseSender
 	err = app.CallResource(context.Background(), &backend.CallResourceRequest{
-		Method: http.MethodPost,
-		Path:   "managed-dashboards/render",
-		Body:   body,
+		PluginContext: adminPluginContext(),
+		Method:        http.MethodPost,
+		Path:          "managed-dashboards/render",
+		Body:          body,
 	}, &sender)
 	if err != nil {
 		t.Fatalf("CallResource error: %s", err)
@@ -430,9 +635,10 @@ func TestVirtualJsonnetFileWriteEditRead(t *testing.T) {
 
 	var writeSender mockCallResourceResponseSender
 	err = app.CallResource(context.Background(), &backend.CallResourceRequest{
-		Method: http.MethodPost,
-		Path:   "managed-dashboards/jsonnet-files/write",
-		Body:   writeBody,
+		PluginContext: adminPluginContext(),
+		Method:        http.MethodPost,
+		Path:          "managed-dashboards/jsonnet-files/write",
+		Body:          writeBody,
 	}, &writeSender)
 	if err != nil {
 		t.Fatalf("CallResource error: %s", err)
@@ -461,9 +667,10 @@ func TestVirtualJsonnetFileWriteEditRead(t *testing.T) {
 
 	var editSender mockCallResourceResponseSender
 	err = app.CallResource(context.Background(), &backend.CallResourceRequest{
-		Method: http.MethodPost,
-		Path:   "managed-dashboards/jsonnet-files/edit",
-		Body:   editBody,
+		PluginContext: adminPluginContext(),
+		Method:        http.MethodPost,
+		Path:          "managed-dashboards/jsonnet-files/edit",
+		Body:          editBody,
 	}, &editSender)
 	if err != nil {
 		t.Fatalf("CallResource error: %s", err)
@@ -482,9 +689,10 @@ func TestVirtualJsonnetFileWriteEditRead(t *testing.T) {
 	readBody, _ := json.Marshal(jsonnetFileReadRequest{SessionID: "session-a", Path: "dashboard.jsonnet", Offset: 2, Limit: 3})
 	var readSender mockCallResourceResponseSender
 	err = app.CallResource(context.Background(), &backend.CallResourceRequest{
-		Method: http.MethodPost,
-		Path:   "managed-dashboards/jsonnet-files/read",
-		Body:   readBody,
+		PluginContext: adminPluginContext(),
+		Method:        http.MethodPost,
+		Path:          "managed-dashboards/jsonnet-files/read",
+		Body:          readBody,
 	}, &readSender)
 	if err != nil {
 		t.Fatalf("CallResource error: %s", err)
@@ -514,9 +722,10 @@ func TestVirtualJsonnetFileEditRejectsInvalidJsonnet(t *testing.T) {
 	})
 	var writeSender mockCallResourceResponseSender
 	err = app.CallResource(context.Background(), &backend.CallResourceRequest{
-		Method: http.MethodPost,
-		Path:   "managed-dashboards/jsonnet-files/write",
-		Body:   writeBody,
+		PluginContext: adminPluginContext(),
+		Method:        http.MethodPost,
+		Path:          "managed-dashboards/jsonnet-files/write",
+		Body:          writeBody,
 	}, &writeSender)
 	if err != nil {
 		t.Fatalf("CallResource error: %s", err)
@@ -531,9 +740,10 @@ func TestVirtualJsonnetFileEditRejectsInvalidJsonnet(t *testing.T) {
 	})
 	var editSender mockCallResourceResponseSender
 	err = app.CallResource(context.Background(), &backend.CallResourceRequest{
-		Method: http.MethodPost,
-		Path:   "managed-dashboards/jsonnet-files/edit",
-		Body:   editBody,
+		PluginContext: adminPluginContext(),
+		Method:        http.MethodPost,
+		Path:          "managed-dashboards/jsonnet-files/edit",
+		Body:          editBody,
 	}, &editSender)
 	if err != nil {
 		t.Fatalf("CallResource error: %s", err)
@@ -545,9 +755,10 @@ func TestVirtualJsonnetFileEditRejectsInvalidJsonnet(t *testing.T) {
 	readBody, _ := json.Marshal(jsonnetFileReadRequest{SessionID: "session-invalid-edit", Path: "dashboard.jsonnet", Offset: 1, Limit: 5})
 	var readSender mockCallResourceResponseSender
 	err = app.CallResource(context.Background(), &backend.CallResourceRequest{
-		Method: http.MethodPost,
-		Path:   "managed-dashboards/jsonnet-files/read",
-		Body:   readBody,
+		PluginContext: adminPluginContext(),
+		Method:        http.MethodPost,
+		Path:          "managed-dashboards/jsonnet-files/read",
+		Body:          readBody,
 	}, &readSender)
 	if err != nil {
 		t.Fatalf("CallResource error: %s", err)
@@ -614,9 +825,10 @@ g.dashboard.new(
 	})
 	var writeSender mockCallResourceResponseSender
 	err = app.CallResource(context.Background(), &backend.CallResourceRequest{
-		Method: http.MethodPost,
-		Path:   "managed-dashboards/jsonnet-files/write",
-		Body:   writeBody,
+		PluginContext: adminPluginContext(),
+		Method:        http.MethodPost,
+		Path:          "managed-dashboards/jsonnet-files/write",
+		Body:          writeBody,
 	}, &writeSender)
 	if err != nil {
 		t.Fatalf("CallResource error: %s", err)
@@ -628,9 +840,10 @@ g.dashboard.new(
 	})
 	var repairSender mockCallResourceResponseSender
 	err = app.CallResource(context.Background(), &backend.CallResourceRequest{
-		Method: http.MethodPost,
-		Path:   "managed-dashboards/jsonnet-files/repair",
-		Body:   repairBody,
+		PluginContext: adminPluginContext(),
+		Method:        http.MethodPost,
+		Path:          "managed-dashboards/jsonnet-files/repair",
+		Body:          repairBody,
 	}, &repairSender)
 	if err != nil {
 		t.Fatalf("CallResource error: %s", err)
@@ -655,9 +868,10 @@ g.dashboard.new(
 	})
 	var renderSender mockCallResourceResponseSender
 	err = app.CallResource(context.Background(), &backend.CallResourceRequest{
-		Method: http.MethodPost,
-		Path:   "managed-dashboards/render",
-		Body:   renderBody,
+		PluginContext: adminPluginContext(),
+		Method:        http.MethodPost,
+		Path:          "managed-dashboards/render",
+		Body:          renderBody,
 	}, &renderSender)
 	if err != nil {
 		t.Fatalf("CallResource error: %s", err)
@@ -708,9 +922,10 @@ g.dashboard.new(
 	})
 	var writeSender mockCallResourceResponseSender
 	err = app.CallResource(context.Background(), &backend.CallResourceRequest{
-		Method: http.MethodPost,
-		Path:   "managed-dashboards/jsonnet-files/write",
-		Body:   writeBody,
+		PluginContext: adminPluginContext(),
+		Method:        http.MethodPost,
+		Path:          "managed-dashboards/jsonnet-files/write",
+		Body:          writeBody,
 	}, &writeSender)
 	if err != nil {
 		t.Fatalf("CallResource error: %s", err)
@@ -722,9 +937,10 @@ g.dashboard.new(
 	})
 	var repairSender mockCallResourceResponseSender
 	err = app.CallResource(context.Background(), &backend.CallResourceRequest{
-		Method: http.MethodPost,
-		Path:   "managed-dashboards/jsonnet-files/repair",
-		Body:   repairBody,
+		PluginContext: adminPluginContext(),
+		Method:        http.MethodPost,
+		Path:          "managed-dashboards/jsonnet-files/repair",
+		Body:          repairBody,
 	}, &repairSender)
 	if err != nil {
 		t.Fatalf("CallResource error: %s", err)
@@ -746,9 +962,10 @@ g.dashboard.new(
 	})
 	var renderSender mockCallResourceResponseSender
 	err = app.CallResource(context.Background(), &backend.CallResourceRequest{
-		Method: http.MethodPost,
-		Path:   "managed-dashboards/render",
-		Body:   renderBody,
+		PluginContext: adminPluginContext(),
+		Method:        http.MethodPost,
+		Path:          "managed-dashboards/render",
+		Body:          renderBody,
 	}, &renderSender)
 	if err != nil {
 		t.Fatalf("CallResource error: %s", err)
@@ -798,9 +1015,10 @@ g.dashboard.new(
 	})
 	var writeSender mockCallResourceResponseSender
 	err = app.CallResource(context.Background(), &backend.CallResourceRequest{
-		Method: http.MethodPost,
-		Path:   "managed-dashboards/jsonnet-files/write",
-		Body:   writeBody,
+		PluginContext: adminPluginContext(),
+		Method:        http.MethodPost,
+		Path:          "managed-dashboards/jsonnet-files/write",
+		Body:          writeBody,
 	}, &writeSender)
 	if err != nil {
 		t.Fatalf("CallResource error: %s", err)
@@ -812,9 +1030,10 @@ g.dashboard.new(
 	})
 	var renderSender mockCallResourceResponseSender
 	err = app.CallResource(context.Background(), &backend.CallResourceRequest{
-		Method: http.MethodPost,
-		Path:   "managed-dashboards/render",
-		Body:   renderBody,
+		PluginContext: adminPluginContext(),
+		Method:        http.MethodPost,
+		Path:          "managed-dashboards/render",
+		Body:          renderBody,
 	}, &renderSender)
 	if err != nil {
 		t.Fatalf("CallResource error: %s", err)
@@ -852,9 +1071,10 @@ func TestManagedDashboardRenderFromVirtualJsonnetFile(t *testing.T) {
 	})
 	var writeSender mockCallResourceResponseSender
 	err = app.CallResource(context.Background(), &backend.CallResourceRequest{
-		Method: http.MethodPost,
-		Path:   "managed-dashboards/jsonnet-files/write",
-		Body:   writeBody,
+		PluginContext: adminPluginContext(),
+		Method:        http.MethodPost,
+		Path:          "managed-dashboards/jsonnet-files/write",
+		Body:          writeBody,
 	}, &writeSender)
 	if err != nil {
 		t.Fatalf("CallResource error: %s", err)
@@ -866,9 +1086,10 @@ func TestManagedDashboardRenderFromVirtualJsonnetFile(t *testing.T) {
 	})
 	var renderSender mockCallResourceResponseSender
 	err = app.CallResource(context.Background(), &backend.CallResourceRequest{
-		Method: http.MethodPost,
-		Path:   "managed-dashboards/render",
-		Body:   renderBody,
+		PluginContext: adminPluginContext(),
+		Method:        http.MethodPost,
+		Path:          "managed-dashboards/render",
+		Body:          renderBody,
 	}, &renderSender)
 	if err != nil {
 		t.Fatalf("CallResource error: %s", err)
@@ -912,9 +1133,10 @@ func TestManagedDashboardRenderRejectsDisallowedDatasource(t *testing.T) {
 
 	var sender mockCallResourceResponseSender
 	err = app.CallResource(context.Background(), &backend.CallResourceRequest{
-		Method: http.MethodPost,
-		Path:   "managed-dashboards/render",
-		Body:   body,
+		PluginContext: adminPluginContext(),
+		Method:        http.MethodPost,
+		Path:          "managed-dashboards/render",
+		Body:          body,
 	}, &sender)
 	if err != nil {
 		t.Fatalf("CallResource error: %s", err)
@@ -968,9 +1190,10 @@ func TestManagedDashboardSourceReturnsStoredJsonnet(t *testing.T) {
 
 	var sender mockCallResourceResponseSender
 	err = app.CallResource(ctx, &backend.CallResourceRequest{
-		Method: http.MethodPost,
-		Path:   "managed-dashboards/source",
-		Body:   []byte(`{"uid":"stored-source"}`),
+		PluginContext: adminPluginContext(),
+		Method:        http.MethodPost,
+		Path:          "managed-dashboards/source",
+		Body:          []byte(`{"uid":"stored-source"}`),
 	}, &sender)
 	if err != nil {
 		t.Fatalf("CallResource error: %s", err)
@@ -1053,9 +1276,10 @@ func TestManagedDashboardSyncWritesDashboardResource(t *testing.T) {
 
 	var sender mockCallResourceResponseSender
 	err = app.CallResource(ctx, &backend.CallResourceRequest{
-		Method: http.MethodPost,
-		Path:   "managed-dashboards/sync",
-		Body:   body,
+		PluginContext: adminPluginContext(),
+		Method:        http.MethodPost,
+		Path:          "managed-dashboards/sync",
+		Body:          body,
 	}, &sender)
 	if err != nil {
 		t.Fatalf("CallResource error: %s", err)

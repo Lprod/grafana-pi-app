@@ -562,19 +562,19 @@ func writeJSONError(w http.ResponseWriter, status int, message string) {
 
 // registerRoutes takes a *http.ServeMux and registers HTTP handlers.
 func (a *App) registerRoutes(mux *http.ServeMux) {
-	mux.HandleFunc("/llm/stream", a.handleLLMStream)
+	mux.HandleFunc("/llm/stream", a.withAppAccess(a.handleLLMStream))
 	// streamProxy appends /api/stream to proxyUrl; keep this alias so the frontend
 	// can use Pi's client-side proxy stream implementation unchanged.
-	mux.HandleFunc("/llm/api/stream", a.handleLLMStream)
-	mux.HandleFunc("/managed-dashboards", a.handleManagedDashboardList)
-	mux.HandleFunc("/managed-dashboards/source", a.handleManagedDashboardSource)
-	mux.HandleFunc("/managed-dashboards/render", a.handleManagedDashboardRender)
-	mux.HandleFunc("/managed-dashboards/sync", a.handleManagedDashboardSync)
-	mux.HandleFunc("/managed-dashboards/jsonnet-files/write", a.handleJsonnetFileWrite)
-	mux.HandleFunc("/managed-dashboards/jsonnet-files/edit", a.handleJsonnetFileEdit)
-	mux.HandleFunc("/managed-dashboards/jsonnet-files/repair", a.handleJsonnetFileRepair)
-	mux.HandleFunc("/managed-dashboards/jsonnet-files/read", a.handleJsonnetFileRead)
-	mux.HandleFunc("/jsonnet-libs/search", a.handleJsonnetLibSearch)
-	mux.HandleFunc("/jsonnet-libs/read", a.handleJsonnetLibRead)
-	mux.HandleFunc("/jsonnet-libs/list", a.handleJsonnetLibList)
+	mux.HandleFunc("/llm/api/stream", a.withAppAccess(a.handleLLMStream))
+	mux.HandleFunc("/managed-dashboards", a.withAppAccess(a.handleManagedDashboardList))
+	mux.HandleFunc("/managed-dashboards/source", a.withAppAccess(a.handleManagedDashboardSource))
+	mux.HandleFunc("/managed-dashboards/render", a.withAppAccess(a.handleManagedDashboardRender))
+	mux.HandleFunc("/managed-dashboards/sync", a.withAppAccess(a.handleManagedDashboardSync))
+	mux.HandleFunc("/managed-dashboards/jsonnet-files/write", a.withAppAccess(a.handleJsonnetFileWrite))
+	mux.HandleFunc("/managed-dashboards/jsonnet-files/edit", a.withAppAccess(a.handleJsonnetFileEdit))
+	mux.HandleFunc("/managed-dashboards/jsonnet-files/repair", a.withAppAccess(a.handleJsonnetFileRepair))
+	mux.HandleFunc("/managed-dashboards/jsonnet-files/read", a.withAppAccess(a.handleJsonnetFileRead))
+	mux.HandleFunc("/jsonnet-libs/search", a.withAppAccess(a.handleJsonnetLibSearch))
+	mux.HandleFunc("/jsonnet-libs/read", a.withAppAccess(a.handleJsonnetLibRead))
+	mux.HandleFunc("/jsonnet-libs/list", a.withAppAccess(a.handleJsonnetLibList))
 }

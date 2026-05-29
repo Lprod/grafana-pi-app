@@ -8,6 +8,7 @@ import {
   SecretInput,
   MultiCombobox,
   TextArea,
+  RadioButtonGroup,
   type ComboboxOption,
 } from '@grafana/ui';
 import { PluginConfigPageProps, AppPluginMeta, PluginMeta, GrafanaTheme2 } from '@grafana/data';
@@ -15,14 +16,23 @@ import { getBackendSrv, getDataSourceSrv, locationService } from '@grafana/runti
 import { css } from '@emotion/css';
 import { testIds } from '../testIds';
 import { lastValueFrom } from 'rxjs';
-import type { PiAppJsonData } from '../../types';
+import type { PiAppAccessMode, PiAppJsonData } from '../../types';
 import { parseCustomSkillsJson, validateCustomSkillsJson } from '../../pages/Chat/skills/configured';
+import {
+  APP_ACCESS_ACTION,
+  accessModeOptions,
+  formatAllowedUsersInput,
+  getConfiguredAccessMode,
+  parseAllowedUsersInput,
+} from '../../utils/access';
 
 type State = {
   openAIBaseUrl: string;
   defaultModel: string;
   isOpenAIAPIKeySet: boolean;
   openAIAPIKey: string;
+  accessMode: PiAppAccessMode;
+  allowedUsersText: string;
   allowedPrometheusDatasourceUids: string[];
   allowedRqliteDatasourceUids: string[];
   systemPromptAddendum: string;
@@ -39,6 +49,8 @@ const AppConfig = ({ plugin }: AppConfigProps) => {
     defaultModel: jsonData?.defaultModel || 'gpt-4.1',
     openAIAPIKey: '',
     isOpenAIAPIKeySet: Boolean(jsonData?.isOpenAIAPIKeySet),
+    accessMode: getConfiguredAccessMode(jsonData),
+    allowedUsersText: formatAllowedUsersInput(jsonData?.allowedUsers),
     allowedPrometheusDatasourceUids: Array.isArray(jsonData?.allowedPrometheusDatasourceUids)
       ? jsonData.allowedPrometheusDatasourceUids
       : [],
@@ -51,11 +63,17 @@ const AppConfig = ({ plugin }: AppConfigProps) => {
   const datasourceOptions = getPrometheusDatasourceOptions(state.allowedPrometheusDatasourceUids);
   const rqliteDatasourceOptions = getRqliteDatasourceOptions(state.allowedRqliteDatasourceUids);
   const customSkillsError = useMemo(() => validateCustomSkillsJson(state.customSkillsJson), [state.customSkillsJson]);
+  const allowedUsers = useMemo(() => parseAllowedUsersInput(state.allowedUsersText), [state.allowedUsersText]);
+  const allowedUsersError =
+    state.accessMode === 'users' && allowedUsers.length === 0
+      ? 'Enter at least one Grafana login or email.'
+      : undefined;
 
   const isSubmitDisabled = Boolean(
     !state.openAIBaseUrl ||
     !state.defaultModel ||
     (!state.isOpenAIAPIKeySet && !state.openAIAPIKey) ||
+    allowedUsersError ||
     customSkillsError
   );
 
@@ -84,6 +102,20 @@ const AppConfig = ({ plugin }: AppConfigProps) => {
     setState({
       ...state,
       defaultModel: event.target.value.trim(),
+    });
+  };
+
+  const onChangeAccessMode = (accessMode: PiAppAccessMode) => {
+    setState({
+      ...state,
+      accessMode,
+    });
+  };
+
+  const onChangeAllowedUsers = (event: ChangeEvent<HTMLTextAreaElement>) => {
+    setState({
+      ...state,
+      allowedUsersText: event.currentTarget.value,
     });
   };
 
@@ -126,6 +158,8 @@ const AppConfig = ({ plugin }: AppConfigProps) => {
         openAIBaseUrl: state.openAIBaseUrl,
         defaultModel: state.defaultModel,
         isOpenAIAPIKeySet: true,
+        accessMode: state.accessMode,
+        allowedUsers,
         allowedPrometheusDatasourceUids: state.allowedPrometheusDatasourceUids,
         allowedRqliteDatasourceUids: state.allowedRqliteDatasourceUids,
         systemPromptAddendum: state.systemPromptAddendum.trim(),
@@ -141,6 +175,39 @@ const AppConfig = ({ plugin }: AppConfigProps) => {
 
   return (
     <form onSubmit={onSubmit}>
+      <FieldSet label="Access" className={s.marginTopXl}>
+        <Field
+          label="Who can use the app"
+          description={`RBAC mode checks the ${APP_ACCESS_ACTION} permission. The plugin role grants it to organization admins by default.`}
+        >
+          <RadioButtonGroup<PiAppAccessMode>
+            options={accessModeOptions}
+            value={state.accessMode}
+            onChange={onChangeAccessMode}
+          />
+        </Field>
+
+        {state.accessMode === 'users' && (
+          <Field
+            label="Allowed users"
+            description="One Grafana login or email per line. Organization admins are always allowed."
+            className={s.marginTop}
+            invalid={Boolean(allowedUsersError)}
+            error={allowedUsersError}
+          >
+            <TextArea
+              className={s.allowedUsersTextArea}
+              data-testid={testIds.appConfig.allowedUsers}
+              id="allowed-users"
+              rows={5}
+              value={state.allowedUsersText}
+              placeholder="alice@example.com"
+              onChange={onChangeAllowedUsers}
+            />
+          </Field>
+        )}
+      </FieldSet>
+
       <FieldSet label="OpenAI-compatible LLM" className={s.marginTopXl}>
         <Field label="API Key" description="Stored in secureJsonData and only used by the backend plugin.">
           <SecretInput
@@ -279,6 +346,11 @@ const getStyles = (theme: GrafanaTheme2) => ({
   promptTextArea: css`
     max-width: 640px;
     width: 100%;
+  `,
+  allowedUsersTextArea: css`
+    max-width: 640px;
+    width: 100%;
+    font-family: ${theme.typography.fontFamilyMonospace};
   `,
   customSkillsTextArea: css`
     max-width: 860px;
