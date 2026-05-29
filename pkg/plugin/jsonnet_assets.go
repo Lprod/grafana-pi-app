@@ -51,7 +51,7 @@ func renderJsonnetSource(source string) ([]byte, error) {
 	vm := jsonnet.MakeVM()
 	vm.Importer(&embeddedJsonnetImporter{files: jsonnetAssets, contents: map[string]jsonnet.Contents{}})
 
-	rendered, err := vm.EvaluateSnippet("dashboard.jsonnet", source)
+	rendered, err := vm.EvaluateAnonymousSnippet("dashboard.jsonnet", source)
 	if err != nil {
 		return nil, err
 	}

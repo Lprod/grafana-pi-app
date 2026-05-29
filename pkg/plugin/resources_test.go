@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/grafana/grafana-plugin-sdk-go/backend"
+	"github.com/grafana/grafana-plugin-sdk-go/config"
 )
 
 type mockCallResourceResponseSender struct {
@@ -935,9 +936,9 @@ func TestManagedDashboardSourceReturnsStoredJsonnet(t *testing.T) {
 		t.Fatalf("new app: %s", err)
 	}
 	app := inst.(*App)
-	ctx := backend.WithGrafanaConfig(context.Background(), backend.NewGrafanaCfg(map[string]string{
-		backend.AppURL:          grafana.URL,
-		backend.AppClientSecret: "service-account-token",
+	ctx := config.WithGrafanaConfig(context.Background(), config.NewGrafanaCfg(map[string]string{
+		config.AppURL:          grafana.URL,
+		config.AppClientSecret: "service-account-token",
 	}))
 
 	var sender mockCallResourceResponseSender
@@ -1018,9 +1019,9 @@ func TestManagedDashboardSyncWritesDashboardResource(t *testing.T) {
 		t.Fatalf("new app: %s", err)
 	}
 	app := inst.(*App)
-	ctx := backend.WithGrafanaConfig(context.Background(), backend.NewGrafanaCfg(map[string]string{
-		backend.AppURL:          grafana.URL,
-		backend.AppClientSecret: "service-account-token",
+	ctx := config.WithGrafanaConfig(context.Background(), config.NewGrafanaCfg(map[string]string{
+		config.AppURL:          grafana.URL,
+		config.AppClientSecret: "service-account-token",
 	}))
 	source := "{ title: 'API Service Direct', uid: 'direct-jsonnet-sync', panels: [] }"
 	body, _ := json.Marshal(managedDashboardRequest{DashboardJsonnet: source})

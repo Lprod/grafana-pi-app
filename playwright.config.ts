@@ -15,8 +15,10 @@ const pluginE2eAuth = `${dirname(require.resolve('@grafana/plugin-e2e'))}/auth`;
  */
 export default defineConfig<PluginOptions>({
   testDir: './tests',
-  /* Run tests in files in parallel */
-  fullyParallel: true,
+  /* Tests share Grafana plugin settings, so keep the suite serialized. */
+  fullyParallel: false,
+  workers: 1,
+  grepInvert: process.env.RUN_AGENT_BENCHMARKS === '1' ? undefined : /benchmark/,
   /* Fail the build on CI if you accidentally left test.only in the source code. */
   forbidOnly: !!process.env.CI,
   /* Retry on CI only */

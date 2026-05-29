@@ -15,7 +15,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/grafana/grafana-plugin-sdk-go/backend"
+	"github.com/grafana/grafana-plugin-sdk-go/config"
 )
 
 const (
@@ -634,7 +634,7 @@ func (e grafanaAPIError) Error() string {
 }
 
 func (a *App) grafanaAPI(req *http.Request, method string, apiPath string, body []byte) ([]byte, error) {
-	cfg := backend.GrafanaConfigFromContext(req.Context())
+	cfg := config.GrafanaConfigFromContext(req.Context())
 	appURL, err := cfg.AppURL()
 	if err != nil {
 		return nil, err
@@ -662,7 +662,9 @@ func (a *App) grafanaAPI(req *http.Request, method string, apiPath string, body 
 	if err != nil {
 		return nil, err
 	}
-	defer res.Body.Close()
+	defer func() {
+		_ = res.Body.Close()
+	}()
 
 	responseBody, _ := io.ReadAll(io.LimitReader(res.Body, 2_000_000))
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
@@ -684,7 +686,7 @@ func joinGrafanaURL(appURL string, apiPath string) (string, error) {
 }
 
 func (a *App) dashboardURL(req *http.Request, uid string) string {
-	cfg := backend.GrafanaConfigFromContext(req.Context())
+	cfg := config.GrafanaConfigFromContext(req.Context())
 	appURL, err := cfg.AppURL()
 	if err != nil {
 		return "/d/" + url.PathEscape(uid)

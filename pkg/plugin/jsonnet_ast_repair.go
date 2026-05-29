@@ -25,7 +25,7 @@ func repairJsonnetDashboardSource(source string) (string, []string, error) {
 	content := normalizeSourceLineEndings(source)
 	root, _, err := formatter.SnippetToRawAST(defaultVirtualJsonnetPath, content)
 	if err != nil {
-		return "", nil, fmt.Errorf("Jsonnet must parse before structural repair can run: %w", err)
+		return "", nil, fmt.Errorf("jsonnet must parse before structural repair can run: %w", err)
 	}
 
 	repair := jsonnetDashboardRepair{
@@ -560,7 +560,7 @@ func replaceJsonnetRange(source string, loc *ast.LocationRange, replacement stri
 
 func jsonnetRangeOffsets(source string, loc *ast.LocationRange) (int, int, error) {
 	if loc == nil || !loc.IsSet() {
-		return 0, 0, errors.New("Jsonnet AST node has no source range")
+		return 0, 0, errors.New("jsonnet AST node has no source range")
 	}
 	start, err := jsonnetLocationOffset(source, loc.Begin)
 	if err != nil {
@@ -589,7 +589,7 @@ func jsonnetLocationOffset(source string, loc ast.Location) (int, error) {
 		offset++
 	}
 	if line != loc.Line {
-		return 0, fmt.Errorf("Jsonnet source line %d is out of range", loc.Line)
+		return 0, fmt.Errorf("jsonnet source line %d is out of range", loc.Line)
 	}
 	columnOffset := loc.Column - 1
 	lineEnd := offset
@@ -597,7 +597,7 @@ func jsonnetLocationOffset(source string, loc ast.Location) (int, error) {
 		lineEnd++
 	}
 	if offset+columnOffset > lineEnd {
-		return 0, fmt.Errorf("Jsonnet source column %d is out of range on line %d", loc.Column, loc.Line)
+		return 0, fmt.Errorf("jsonnet source column %d is out of range on line %d", loc.Column, loc.Line)
 	}
 	return offset + columnOffset, nil
 }

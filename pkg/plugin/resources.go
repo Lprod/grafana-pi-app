@@ -178,7 +178,9 @@ func (a *App) handleLLMStream(w http.ResponseWriter, req *http.Request) {
 		_ = stream.write(errorEvent(err.Error()))
 		return
 	}
-	defer upstreamRes.Body.Close()
+	defer func() {
+		_ = upstreamRes.Body.Close()
+	}()
 
 	if upstreamRes.StatusCode < 200 || upstreamRes.StatusCode >= 300 {
 		message, _ := io.ReadAll(io.LimitReader(upstreamRes.Body, 32_768))
@@ -211,12 +213,8 @@ func (a *App) openAIRequest(req proxyStreamRequest) openAIChatRequest {
 	tools := make([]openAITool, 0, len(req.Context.Tools))
 	for _, tool := range req.Context.Tools {
 		tools = append(tools, openAITool{
-			Type: "function",
-			Function: openAIFunction{
-				Name:        tool.Name,
-				Description: tool.Description,
-				Parameters:  tool.Parameters,
-			},
+			Type:     "function",
+			Function: openAIFunction(tool),
 		})
 	}
 
