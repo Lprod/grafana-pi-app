@@ -3,4 +3,5 @@ export type PiAppJsonData = {
   defaultModel?: string;
   isOpenAIAPIKeySet?: boolean;
   allowedDatasourceUids?: string[];
+  systemPromptAddendum?: string;
 };

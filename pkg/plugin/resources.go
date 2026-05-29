@@ -197,10 +197,10 @@ func (a *App) openAIRequest(req proxyStreamRequest) openAIChatRequest {
 	model := a.settings.DefaultModel
 
 	messages := make([]openAIMessage, 0, len(req.Context.Messages)+1)
-	if req.Context.SystemPrompt != "" {
+	if systemPrompt := a.effectiveSystemPrompt(req.Context.SystemPrompt); systemPrompt != "" {
 		messages = append(messages, openAIMessage{
 			Role:    "system",
-			Content: req.Context.SystemPrompt,
+			Content: systemPrompt,
 		})
 	}
 	for _, message := range req.Context.Messages {
@@ -227,6 +227,18 @@ func (a *App) openAIRequest(req proxyStreamRequest) openAIChatRequest {
 		Temperature:   req.Options.Temperature,
 		MaxTokens:     req.Options.MaxTokens,
 	}
+}
+
+func (a *App) effectiveSystemPrompt(systemPrompt string) string {
+	systemPrompt = strings.TrimSpace(systemPrompt)
+	addendum := strings.TrimSpace(a.settings.SystemPromptAddendum)
+	if addendum == "" {
+		return systemPrompt
+	}
+	if systemPrompt == "" {
+		return "## Instance instructions\n" + addendum
+	}
+	return systemPrompt + "\n\n## Instance instructions\n" + addendum
 }
 
 func (a *App) relayOpenAIStream(body io.Reader, stream proxyEventWriter) error {

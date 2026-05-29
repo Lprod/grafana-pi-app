@@ -4,6 +4,7 @@ export const testIds = {
     openAIAPIKey: 'data-testid ac-openai-api-key',
     openAIBaseUrl: 'data-testid ac-openai-base-url',
     defaultModel: 'data-testid ac-default-model',
+    systemPromptAddendum: 'data-testid ac-system-prompt-addendum',
     allowedDatasourceUids: 'data-testid ac-allowed-datasource-uids',
     submit: 'data-testid ac-submit-form',
   },

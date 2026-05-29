@@ -1,5 +1,15 @@
 import React, { ChangeEvent, FormEvent, useState } from 'react';
-import { Button, Field, Input, useStyles2, FieldSet, SecretInput, MultiCombobox, type ComboboxOption } from '@grafana/ui';
+import {
+  Button,
+  Field,
+  Input,
+  useStyles2,
+  FieldSet,
+  SecretInput,
+  MultiCombobox,
+  TextArea,
+  type ComboboxOption,
+} from '@grafana/ui';
 import { PluginConfigPageProps, AppPluginMeta, PluginMeta, GrafanaTheme2 } from '@grafana/data';
 import { getBackendSrv, getDataSourceSrv, locationService } from '@grafana/runtime';
 import { css } from '@emotion/css';
@@ -13,6 +23,7 @@ type State = {
   isOpenAIAPIKeySet: boolean;
   openAIAPIKey: string;
   allowedDatasourceUids: string[];
+  systemPromptAddendum: string;
 };
 
 export interface AppConfigProps extends PluginConfigPageProps<AppPluginMeta<PiAppJsonData>> {}
@@ -26,6 +37,7 @@ const AppConfig = ({ plugin }: AppConfigProps) => {
     openAIAPIKey: '',
     isOpenAIAPIKeySet: Boolean(jsonData?.isOpenAIAPIKeySet),
     allowedDatasourceUids: Array.isArray(jsonData?.allowedDatasourceUids) ? jsonData.allowedDatasourceUids : [],
+    systemPromptAddendum: typeof jsonData?.systemPromptAddendum === 'string' ? jsonData.systemPromptAddendum : '',
   });
   const datasourceOptions = getPrometheusDatasourceOptions(state.allowedDatasourceUids);
 
@@ -68,6 +80,13 @@ const AppConfig = ({ plugin }: AppConfigProps) => {
     });
   };
 
+  const onChangeSystemPromptAddendum = (event: ChangeEvent<HTMLTextAreaElement>) => {
+    setState({
+      ...state,
+      systemPromptAddendum: event.currentTarget.value,
+    });
+  };
+
   const onSubmit = (event: FormEvent) => {
     event.preventDefault();
     updatePluginAndReload(plugin.meta.id, {
@@ -78,6 +97,7 @@ const AppConfig = ({ plugin }: AppConfigProps) => {
         defaultModel: state.defaultModel,
         isOpenAIAPIKeySet: true,
         allowedDatasourceUids: state.allowedDatasourceUids,
+        systemPromptAddendum: state.systemPromptAddendum.trim(),
       },
       secureJsonData: state.isOpenAIAPIKeySet
         ? undefined
@@ -103,7 +123,11 @@ const AppConfig = ({ plugin }: AppConfigProps) => {
           />
         </Field>
 
-        <Field label="Base URL" description="OpenAI-compatible API root, without /chat/completions." className={s.marginTop}>
+        <Field
+          label="Base URL"
+          description="OpenAI-compatible API root, without /chat/completions."
+          className={s.marginTop}
+        >
           <Input
             width={60}
             id="openai-base-url"
@@ -114,7 +138,11 @@ const AppConfig = ({ plugin }: AppConfigProps) => {
           />
         </Field>
 
-        <Field label="Model" description="Central model used for all assistant requests. Chat users cannot override it." className={s.marginTop}>
+        <Field
+          label="Model"
+          description="Central model used for all assistant requests. Chat users cannot override it."
+          className={s.marginTop}
+        >
           <Input
             width={40}
             id="default-model"
@@ -122,6 +150,22 @@ const AppConfig = ({ plugin }: AppConfigProps) => {
             value={state.defaultModel}
             placeholder="gpt-4.1"
             onChange={onChangeDefaultModel}
+          />
+        </Field>
+
+        <Field
+          label="System prompt addendum"
+          description="Optional central instructions appended after the built-in guardrails. Do not include secrets."
+          className={s.marginTop}
+        >
+          <TextArea
+            className={s.promptTextArea}
+            data-testid={testIds.appConfig.systemPromptAddendum}
+            id="system-prompt-addendum"
+            rows={8}
+            value={state.systemPromptAddendum}
+            placeholder="Prefer concise incident summaries. Mention dashboard changes explicitly."
+            onChange={onChangeSystemPromptAddendum}
           />
         </Field>
 
@@ -163,6 +207,10 @@ const getStyles = (theme: GrafanaTheme2) => ({
   `,
   marginTopXl: css`
     margin-top: ${theme.spacing(6)};
+  `,
+  promptTextArea: css`
+    max-width: 640px;
+    width: 100%;
   `,
 });
 

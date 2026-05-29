@@ -34,6 +34,7 @@ type appSettings struct {
 	OpenAIBaseURL         string   `json:"openAIBaseUrl"`
 	DefaultModel          string   `json:"defaultModel"`
 	AllowedDatasourceUIDs []string `json:"allowedDatasourceUids"`
+	SystemPromptAddendum  string   `json:"systemPromptAddendum"`
 	OpenAIAPIKey          string
 }
 

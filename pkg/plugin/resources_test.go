@@ -107,6 +107,31 @@ func TestLLMStreamRelaysOpenAICompatibleChunks(t *testing.T) {
 	}
 }
 
+func TestOpenAIRequestAppendsConfiguredSystemPromptAddendum(t *testing.T) {
+	app := App{settings: appSettings{DefaultModel: "gpt-default", SystemPromptAddendum: "Prefer concise incident summaries."}}
+
+	payload := app.openAIRequest(proxyStreamRequest{
+		Context: proxyContext{
+			SystemPrompt: "You help.",
+			Messages: []proxyMessage{
+				{Role: "user", Content: json.RawMessage(`"Summarize this incident"`)},
+			},
+		},
+	})
+
+	if len(payload.Messages) != 2 {
+		t.Fatalf("expected system and user messages, got %d", len(payload.Messages))
+	}
+	if payload.Messages[0].Role != "system" {
+		t.Fatalf("expected first message to be system, got %q", payload.Messages[0].Role)
+	}
+	for _, expected := range []string{"You help.", "## Instance instructions", "Prefer concise incident summaries."} {
+		if !strings.Contains(payload.Messages[0].Content, expected) {
+			t.Fatalf("expected system prompt to contain %q, got %q", expected, payload.Messages[0].Content)
+		}
+	}
+}
+
 func TestLLMStreamParsesMultilineSSEAndBufferedToolArguments(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")

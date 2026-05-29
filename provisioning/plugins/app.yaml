@@ -8,6 +8,7 @@ apps:
     jsonData:
       openAIBaseUrl: http://host.docker.internal:8080/v1
       defaultModel: unsloth/Qwen3.6-35B-A3B-MTP-GGUF:UD-Q4_K_XL
+      systemPromptAddendum: ''
       isOpenAIAPIKeySet: true
       allowedDatasourceUids: ['prometheus']
     secureJsonData:
