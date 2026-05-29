@@ -255,7 +255,9 @@ def render_openmetrics_history(start_timestamp: int, total_seconds: int, step_se
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Write historical OpenMetrics samples for the Grafana Pi local demo stack.")
+    parser = argparse.ArgumentParser(
+        description="Write historical OpenMetrics samples for the Observability Analyst local demo stack."
+    )
     parser.add_argument("--output", default=os.getenv("OPENMETRICS_OUTPUT", "/demo/history.openmetrics"))
     parser.add_argument("--hours", type=int, default=int(os.getenv("HISTORY_HOURS", str(DEFAULT_HISTORY_HOURS))))
     parser.add_argument("--step-seconds", type=int, default=int(os.getenv("HISTORY_STEP_SECONDS", str(DEFAULT_STEP_SECONDS))))

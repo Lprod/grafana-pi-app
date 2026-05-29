@@ -429,7 +429,7 @@ async function runPrometheusQuery(
 
   const request: DataQueryRequest = {
     app: CoreApp.Unknown,
-    requestId: `pi-query-${Date.now()}`,
+    requestId: `observability-query-${Date.now()}`,
     interval,
     intervalMs,
     maxDataPoints: PROMETHEUS_QUERY_MAX_DATA_POINTS,

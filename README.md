@@ -1,6 +1,6 @@
-# Grafana Pi App
+# Observability Analyst
 
-Grafana Pi App is a Grafana app plugin that embeds a Pi-powered LLM chat assistant for observability work. The assistant runs in a Grafana-native React UI, uses the current Grafana user's datasource and dashboard permissions, and calls an OpenAI-compatible LLM through the plugin backend so API keys stay server-side.
+Observability Analyst is a Grafana app plugin that embeds an LLM analyst for observability work. The analyst runs in a Grafana-native React UI, uses the current Grafana user's datasource and dashboard permissions, and calls an OpenAI-compatible LLM through the plugin backend so API keys stay server-side.
 
 ## What it does
 
@@ -44,13 +44,13 @@ The assistant can render, sync, and later retrieve Jsonnet-backed dashboards wit
 - `render_dashboard`
 - `sync_dashboard`
 
-Synced dashboards are saved through the `dashboard.grafana.app` resource API with `grafana.app/managedBy=plugin`, `grafana.app/managerId=elohmeier-grafanapiapp-app`, the source checksum, and the exact Jsonnet source. The app intentionally does not set `grafana.app/managerAllowsEdits`, so normal Grafana UI edits are treated as read-only/export flows while stored Jsonnet remains the source of truth.
+Synced dashboards are saved through the `dashboard.grafana.app` resource API with `grafana.app/managedBy=plugin`, `grafana.app/managerId=g42-pi-app`, the source checksum, and the exact Jsonnet source. The app intentionally does not set `grafana.app/managerAllowsEdits`, so normal Grafana UI edits are treated as read-only/export flows while stored Jsonnet remains the source of truth.
 
 The default chat toolset does not expose raw dashboard JSON upload/delete tools, raw Prometheus data-frame output, direct vendored Jsonnet file browsing, or a Jsonnet subagent. Dashboard writes go through the Jsonnet-backed managed dashboard sync path.
 
 ## Subagents
 
-The default chat toolset includes `explore_metrics` as a high-level fallback for broad metric and PromQL reconnaissance. It starts a nested Pi agent with a narrow tool allow-list: the metrics subagent can only discover datasources, inspect Prometheus metadata, and validate PromQL. Dashboard write tools stay available only to the parent assistant.
+The default chat toolset includes `explore_metrics` as a high-level fallback for broad metric and PromQL reconnaissance. It starts a nested agent with a narrow tool allow-list: the metrics subagent can only discover datasources, inspect Prometheus metadata, and validate PromQL. Dashboard write tools stay available only to the parent assistant.
 
 ## Skills
 
@@ -147,4 +147,4 @@ npm run benchmark:explore-metrics
 
 This benchmark requires exactly one top-level `explore_metrics` call, checks the returned metric coverage and nested tool count, and writes reports to `test-results/explore-metrics-benchmark/latest-report.txt`, `latest-answer.md`, and `latest-events.json`.
 
-Open Grafana at http://localhost:3000 and navigate to the Pi Assistant app page.
+Open Grafana at http://localhost:3000 and navigate to the Observability Analyst app page.

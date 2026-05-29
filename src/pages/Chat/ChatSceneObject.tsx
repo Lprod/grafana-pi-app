@@ -37,7 +37,18 @@ type StoredSession = SessionIndexItem & {
 type ToolRunState = Record<string, ToolRunView>;
 
 const SESSION_INDEX_KEY = 'sessions:index';
+const CHAT_SESSION_EXPORT_KIND = 'g42-pi-app.chat-session';
+const LEGACY_CHAT_SESSION_EXPORT_KINDS = ['grafana-pi-app.chat-session'];
+const CHAT_SESSION_EXPORT_SCHEMA_VERSION = 1;
 const sessionKey = (id: string) => `sessions:${id}`;
+
+type ChatSessionExport = {
+  kind: typeof CHAT_SESSION_EXPORT_KIND;
+  schemaVersion: typeof CHAT_SESSION_EXPORT_SCHEMA_VERSION;
+  exportedAt: string;
+  pluginId: string;
+  session: StoredSession;
+};
 
 type BenchmarkAgentEvent = {
   type: AgentEvent['type'];
@@ -139,6 +150,7 @@ function ChatApp() {
   const titleRef = useRef('New chat');
   const sessionsRef = useRef<SessionIndexItem[]>([]);
   const storageRef = useRef(storage);
+  const importSessionInputRef = useRef<HTMLInputElement | null>(null);
   const messagesContainerRef = useRef<HTMLElement | null>(null);
   const autoScrollRef = useRef(true);
   const lastScrollTopRef = useRef(0);
@@ -156,10 +168,7 @@ function ChatApp() {
 
   const saveSession = useCallback(
     async (id: string, title: string, messages: AgentMessage[]) => {
-      if (
-        !messages.some((message) => message.role === 'user') &&
-        !messages.some((message) => message.role === 'assistant')
-      ) {
+      if (!hasPersistableMessages(messages)) {
         return;
       }
 
@@ -173,6 +182,7 @@ function ChatApp() {
       const stored: StoredSession = {
         ...indexItem,
         messages,
+        modelId: llmModel.id,
         virtualJsonnetFiles: virtualJsonnetFilesRef.current,
       };
       const next = [indexItem, ...sessionsRef.current.filter((session) => session.id !== id)].slice(0, 50);
@@ -180,7 +190,7 @@ function ChatApp() {
       await storage.setItem(sessionKey(id), JSON.stringify(stored));
       await persistIndex(next);
     },
-    [persistIndex, storage]
+    [llmModel.id, persistIndex, storage]
   );
 
   const buildAgent = useCallback(
@@ -360,6 +370,8 @@ function ChatApp() {
     agent?.abort();
   }, [agent]);
 
+  const isStreaming = Boolean(agent?.state.isStreaming);
+
   const keepAutoScrollEnabled = useCallback(() => {
     setAutoScrollEnabled(true);
   }, [setAutoScrollEnabled]);
@@ -434,6 +446,97 @@ function ChatApp() {
     }
   };
 
+  const handleExportDownloadClick = useCallback(
+    (event: React.MouseEvent<HTMLButtonElement>) => {
+      event.stopPropagation();
+
+      const currentAgent = agentRef.current;
+      const sessionId = sessionIdRef.current;
+      if (!currentAgent || !sessionId || currentAgent.state.isStreaming) {
+        return;
+      }
+
+      const messages = currentAgent.state.messages;
+      if (!hasPersistableMessages(messages)) {
+        setError('There are no chat messages to export.');
+        return;
+      }
+
+      const exportedAt = new Date().toISOString();
+      const indexItem = sessionsRef.current.find((session) => session.id === sessionId);
+      const title = titleRef.current || indexItem?.title || 'New chat';
+      const payload: ChatSessionExport = {
+        kind: CHAT_SESSION_EXPORT_KIND,
+        schemaVersion: CHAT_SESSION_EXPORT_SCHEMA_VERSION,
+        exportedAt,
+        pluginId: PLUGIN_ID,
+        session: {
+          id: sessionId,
+          title,
+          createdAt: indexItem?.createdAt ?? exportedAt,
+          updatedAt: exportedAt,
+          modelId: llmModel.id,
+          messages,
+          virtualJsonnetFiles: virtualJsonnetFilesRef.current,
+        },
+      };
+
+      try {
+        downloadJsonFile(payload, chatSessionExportFilename(title));
+        setError(undefined);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : String(err));
+      }
+    },
+    [llmModel.id]
+  );
+
+  const openImportSessionPicker = useCallback(() => {
+    if (agentRef.current?.state.isStreaming) {
+      return;
+    }
+
+    importSessionInputRef.current?.click();
+  }, []);
+
+  const importSessionFromFile = useCallback(
+    async (event: React.ChangeEvent<HTMLInputElement>) => {
+      const input = event.currentTarget;
+      const file = input.files?.[0];
+      input.value = '';
+      if (!file) {
+        return;
+      }
+
+      if (agentRef.current?.state.isStreaming) {
+        setError('Cannot import a session while the assistant is streaming.');
+        return;
+      }
+
+      try {
+        const imported = parseChatSessionExport(JSON.parse(await file.text()));
+        const id = createSessionId();
+        const title = imported.title || importTitleFromFilename(file.name) || 'Imported chat';
+
+        sessionIdRef.current = id;
+        titleRef.current = title;
+        virtualJsonnetFilesRef.current = imported.virtualJsonnetFiles ?? {};
+        virtualJsonnetHydratedRef.current = {};
+        keepAutoScrollEnabled();
+        setCurrentSessionId(id);
+        setCurrentTitle(title);
+        setError(undefined);
+        setToolRuns({});
+        buildAgent(imported.messages);
+        await saveSession(id, title, imported.messages);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        setError(`Could not import chat session: ${message}`);
+      }
+    },
+    [buildAgent, keepAutoScrollEnabled, saveSession]
+  );
+
   const visibleMessages = agent
     ? [
         ...agent.state.messages.map((message) => ({ message, isStreaming: false })),
@@ -444,7 +547,7 @@ function ChatApp() {
     .filter((run) => run.status === 'running')
     .sort((left, right) => left.updatedAt - right.updatedAt);
   const hasLLMConfig = Boolean(jsonData.isOpenAIAPIKeySet);
-  const isStreaming = Boolean(agent?.state.isStreaming);
+  const hasCurrentMessages = hasPersistableMessages(agent?.state.messages ?? []);
 
   return (
     <div className={styles.container} data-testid={testIds.chat.container}>
@@ -454,7 +557,29 @@ function ChatApp() {
             <div className={styles.sidebarTitle}>Sessions</div>
             <div className={styles.sidebarSubtle}>{sessions.length} saved</div>
           </div>
-          <Button icon="plus" size="sm" variant="secondary" onClick={startNewSession} aria-label="New session" />
+          <div className={styles.sidebarActions}>
+            <input
+              accept="application/json,.json"
+              data-testid={testIds.chat.importInput}
+              disabled={isStreaming}
+              hidden
+              ref={importSessionInputRef}
+              type="file"
+              onChange={importSessionFromFile}
+            />
+            <Button
+              aria-label="Import session"
+              data-testid={testIds.chat.import}
+              disabled={isStreaming}
+              icon="import"
+              size="sm"
+              title="Import session"
+              type="button"
+              variant="secondary"
+              onClick={openImportSessionPicker}
+            />
+            <Button icon="plus" size="sm" variant="secondary" onClick={startNewSession} aria-label="New session" />
+          </div>
         </div>
         <div className={styles.sessionList}>
           {sessions.map((session) => (
@@ -492,9 +617,28 @@ function ChatApp() {
               </Button>
             )}
             {currentSessionId && (
-              <Button icon="trash-alt" variant="secondary" fill="text" onClick={() => deleteSession(currentSessionId)}>
-                Delete
-              </Button>
+              <>
+                <Button
+                  data-testid={testIds.chat.export}
+                  disabled={isStreaming || !hasCurrentMessages}
+                  fill="text"
+                  icon="file-download"
+                  type="button"
+                  variant="secondary"
+                  onClick={handleExportDownloadClick}
+                >
+                  Export
+                </Button>
+                <Button
+                  icon="trash-alt"
+                  variant="secondary"
+                  fill="text"
+                  disabled={isStreaming || !hasCurrentMessages}
+                  onClick={() => deleteSession(currentSessionId)}
+                >
+                  Delete
+                </Button>
+              </>
             )}
           </div>
         </div>
@@ -566,7 +710,7 @@ function ChatApp() {
             rows={3}
             value={input}
             disabled={!agent || agent.state.isStreaming || !hasLLMConfig}
-            placeholder="Ask Pi to inspect metrics, validate PromQL, or create a dashboard..."
+            placeholder="Ask about metrics, PromQL, or a dashboard..."
             onChange={(event) => setInput(event.currentTarget.value)}
             onKeyDown={(event) => {
               if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
@@ -946,6 +1090,151 @@ function formatDate(value: string): string {
   });
 }
 
+function hasPersistableMessages(messages: AgentMessage[]) {
+  return messages.some((message) => message.role === 'user' || message.role === 'assistant');
+}
+
+function createJsonDownload(data: ChatSessionExport, filename: string) {
+  const serialized = JSON.stringify(data, null, 2);
+  if (!serialized) {
+    throw new Error('Could not serialize chat session export.');
+  }
+
+  const blob = new Blob([`${serialized}\n`], { type: 'application/octet-stream;charset=utf-8' });
+  return {
+    filename,
+    url: URL.createObjectURL(blob),
+  };
+}
+
+function downloadJsonFile(data: ChatSessionExport, filename: string) {
+  const download = createJsonDownload(data, filename);
+  const anchor = document.createElement('a');
+  anchor.href = download.url;
+  anchor.download = download.filename;
+  anchor.rel = 'noopener';
+  anchor.style.display = 'none';
+  anchor.addEventListener('click', stopDownloadClickPropagation, { capture: true });
+  document.body.append(anchor);
+  anchor.click();
+  anchor.remove();
+  window.setTimeout(() => URL.revokeObjectURL(download.url), 60000);
+}
+
+function stopDownloadClickPropagation(event: MouseEvent) {
+  event.stopPropagation();
+}
+
+function chatSessionExportFilename(title: string) {
+  const safeTitle = safeFilenamePart(title) || 'observability-analyst-chat-session';
+  return `${safeTitle}.json`;
+}
+
+function safeFilenamePart(value: string) {
+  return value
+    .trim()
+    .replace(/[^a-z0-9]+/gi, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 64)
+    .toLowerCase();
+}
+
+function importTitleFromFilename(filename: string) {
+  const withoutExtension = filename.replace(/\.json$/i, '').replace(/[-_]+/g, ' ');
+  return normalizeSessionTitle(withoutExtension);
+}
+
+function parseChatSessionExport(value: unknown): StoredSession {
+  if (!isRecord(value)) {
+    throw new Error('Import file must contain a JSON object.');
+  }
+  if (value.kind !== CHAT_SESSION_EXPORT_KIND && !LEGACY_CHAT_SESSION_EXPORT_KINDS.includes(String(value.kind))) {
+    throw new Error('Import file is not an Observability Analyst chat session export.');
+  }
+  if (value.schemaVersion !== CHAT_SESSION_EXPORT_SCHEMA_VERSION) {
+    throw new Error(`Unsupported chat session export version: ${String(value.schemaVersion)}`);
+  }
+  if (!isRecord(value.session)) {
+    throw new Error('Import file is missing a session object.');
+  }
+
+  const rawMessages = value.session.messages;
+  if (!Array.isArray(rawMessages) || !rawMessages.every(isAgentMessageLike)) {
+    throw new Error('Import file session.messages must be an array of chat messages.');
+  }
+
+  const messages = rawMessages as AgentMessage[];
+  if (!hasPersistableMessages(messages)) {
+    throw new Error('Import file does not contain any user or assistant messages.');
+  }
+
+  return {
+    id: typeof value.session.id === 'string' ? value.session.id : '',
+    title: normalizeSessionTitle(value.session.title),
+    createdAt: normalizeDateString(value.session.createdAt),
+    updatedAt: normalizeDateString(value.session.updatedAt),
+    modelId: typeof value.session.modelId === 'string' ? value.session.modelId : undefined,
+    messages,
+    virtualJsonnetFiles: parseVirtualJsonnetFiles(value.session.virtualJsonnetFiles),
+  };
+}
+
+function parseVirtualJsonnetFiles(value: unknown): Record<string, VirtualJsonnetFileSnapshot> | undefined {
+  if (value === null || value === undefined) {
+    return undefined;
+  }
+  if (!isRecord(value)) {
+    throw new Error('Import file session.virtualJsonnetFiles must be an object when present.');
+  }
+
+  const files: Record<string, VirtualJsonnetFileSnapshot> = {};
+  for (const [key, file] of Object.entries(value)) {
+    if (!isRecord(file)) {
+      throw new Error(`Imported Jsonnet file ${key} must be an object.`);
+    }
+
+    const content = file.content;
+    const version = file.version;
+    if (typeof content !== 'string' || typeof version !== 'number') {
+      throw new Error(`Imported Jsonnet file ${key} must include string content and numeric version.`);
+    }
+
+    const path = normalizeJsonnetPath(typeof file.path === 'string' ? file.path : key);
+    files[path] = {
+      path,
+      content,
+      version,
+      checksum: typeof file.checksum === 'string' ? file.checksum : '',
+      lineCount: typeof file.lineCount === 'number' ? file.lineCount : countLines(content),
+      dashboardJsonnetSize:
+        typeof file.dashboardJsonnetSize === 'number' ? file.dashboardJsonnetSize : content.length,
+      ...(typeof file.updatedAt === 'string' ? { updatedAt: file.updatedAt } : {}),
+    };
+  }
+
+  return files;
+}
+
+function isAgentMessageLike(value: unknown): value is AgentMessage {
+  return isRecord(value) && typeof value.role === 'string';
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+function normalizeSessionTitle(value: unknown) {
+  return typeof value === 'string' ? generateTitle(value) : '';
+}
+
+function normalizeDateString(value: unknown) {
+  return typeof value === 'string' && value.trim() ? value : new Date().toISOString();
+}
+
+function countLines(value: string) {
+  return value.split('\n').length;
+}
+
 const getStyles = (theme: GrafanaTheme2) => ({
   container: css({
     display: 'grid',
@@ -980,6 +1269,11 @@ const getStyles = (theme: GrafanaTheme2) => ({
     justifyContent: 'space-between',
     gap: theme.spacing(1),
     marginBottom: theme.spacing(2),
+  }),
+  sidebarActions: css({
+    display: 'flex',
+    alignItems: 'center',
+    gap: theme.spacing(1),
   }),
   sidebarTitle: css({
     fontWeight: theme.typography.fontWeightMedium,

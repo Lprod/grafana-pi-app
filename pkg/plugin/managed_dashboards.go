@@ -19,7 +19,7 @@ import (
 )
 
 const (
-	pluginID = "elohmeier-grafanapiapp-app"
+	pluginID = "g42-pi-app"
 
 	annotationFolder         = "grafana.app/folder"
 	annotationManagedBy      = "grafana.app/managedBy"
@@ -27,7 +27,7 @@ const (
 	annotationSourcePath     = "grafana.app/sourcePath"
 	annotationSourceChecksum = "grafana.app/sourceChecksum"
 	annotationSourceTS       = "grafana.app/sourceTimestamp"
-	annotationJsonnetSource  = "elohmeier.grafanapiapp/jsonnetSource"
+	annotationJsonnetSource  = "g42.piapp/jsonnetSource"
 
 	maxManagedDashboardJsonnetSourceBytes = 200 * 1024
 )
@@ -360,7 +360,7 @@ func (a *App) managedDashboardRenderResponse(request managedDashboardRequest, re
 	request.UID = normalizeManagedDashboardUID(request.UID, fmt.Sprint(dashboard["title"]))
 	dashboard["uid"] = request.UID
 	dashboard["editable"] = false
-	requiredTags := append(append([]string{}, request.Tags...), "genai", "managed-by-pi")
+	requiredTags := append(append([]string{}, request.Tags...), "genai", "managed-by-observability-analyst")
 	dashboard["tags"] = ensureStringTags(dashboard["tags"], requiredTags...)
 	delete(dashboard, "id")
 
@@ -440,14 +440,14 @@ func normalizeManagedDashboardRequest(request managedDashboardRequest) managedDa
 func normalizeManagedDashboardUID(uid string, title string) string {
 	raw := strings.TrimSpace(uid)
 	if raw == "" {
-		raw = "pi-" + strings.ToLower(title)
+		raw = "observability-" + strings.ToLower(title)
 	}
 	raw = strings.ToLower(raw)
 	raw = dashboardUIDPattern.ReplaceAllString(raw, "-")
 	raw = strings.Trim(raw, "-")
 	raw = strings.Join(strings.FieldsFunc(raw, func(r rune) bool { return r == '-' }), "-")
 	if raw == "" {
-		raw = "pi-dashboard"
+		raw = "observability-dashboard"
 	}
 	if len(raw) > 40 {
 		raw = strings.TrimRight(raw[:40], "-")

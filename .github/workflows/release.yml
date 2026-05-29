@@ -79,12 +79,14 @@ jobs:
           semantic-release
 
   package-plugin:
-    name: Package plugin release asset
+    name: Build, sign, and package plugin release asset
     needs: release
     if: needs.release.outputs.released == 'true'
-    runs-on: ubuntu-latest
     permissions:
+      id-token: write
       contents: write
+      attestations: write
+    runs-on: ubuntu-latest
     steps:
       - name: Check out release tag
         uses: actions/checkout@v6
@@ -92,56 +94,23 @@ jobs:
           ref: v${{ needs.release.outputs.version }}
           persist-credentials: false
 
-      - name: Set up Node.js
-        uses: actions/setup-node@v6
+      - name: Build and package plugin
+        id: package-plugin
+        uses: grafana/plugin-actions/package-plugin@main
         with:
-          node-version: 22
-          cache: npm
+          policy_token: ${{ secrets.GRAFANA_ACCESS_POLICY_TOKEN }}
+          go-version: '1.26'
+          node-version: '22'
 
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Build frontend
-        run: npm run build
-
-      - name: Set up Go
-        uses: actions/setup-go@v6
+      - name: Generate artifact attestation
+        uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4.1.0
         with:
-          go-version-file: go.mod
-
-      - name: Install Mage
-        run: |
-          go install github.com/magefile/mage@v1.17.2
-          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
-
-      - name: Build backend
-        run: mage -v buildAll
-
-      - name: Package plugin
-        id: package
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          plugin_id="$(node -p "require('./src/plugin.json').id")"
-          version="$(node -p "require('./package.json').version")"
-          archive="${plugin_id}-${version}.zip"
-          sha1sum_file="${archive}.sha1"
-
-          chmod 0755 dist/gpx_*
-          mkdir -p "artifacts/${plugin_id}"
-          cp -R dist/. "artifacts/${plugin_id}/"
-          (cd artifacts && zip -r "../${archive}" "${plugin_id}")
-          sha1sum "${archive}" > "${sha1sum_file}"
-
-          echo "archive=${archive}" >> "${GITHUB_OUTPUT}"
-          echo "sha1sum_file=${sha1sum_file}" >> "${GITHUB_OUTPUT}"
+          subject-path: ${{ steps.package-plugin.outputs.archive }}
 
       - name: Attach plugin to GitHub release
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          gh release upload "v${{ needs.release.outputs.version }}" \
-            "${{ steps.package.outputs.archive }}" \
-            "${{ steps.package.outputs.sha1sum_file }}" \
-            --clobber
+        uses: softprops/action-gh-release@b4309332981a82ec1c5618f44dd2e27cc8bfbfda # v3.0.0
+        with:
+          tag_name: v${{ needs.release.outputs.version }}
+          files: |
+            ./${{ steps.package-plugin.outputs.archive }}
+            ./${{ steps.package-plugin.outputs.archive-sha1sum }}

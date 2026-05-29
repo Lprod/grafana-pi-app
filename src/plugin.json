@@ -1,15 +1,15 @@
 {
   "$schema": "https://raw.githubusercontent.com/grafana/grafana/main/docs/sources/developers/plugins/plugin.schema.json",
   "type": "app",
-  "name": "Grafana Pi App",
-  "id": "elohmeier-grafanapiapp-app",
+  "name": "Observability Analyst",
+  "id": "g42-pi-app",
   "backend": true,
-  "executable": "gpx_grafana_pi_app",
+  "executable": "gpx_g42_pi_app",
   "info": {
     "keywords": ["app", "llm", "observability", "prometheus", "dashboards"],
-    "description": "Grafana-native Pi assistant for querying observability data and creating dashboards.",
+    "description": "Grafana-native observability analyst for querying metrics, validating PromQL, and creating dashboards.",
     "author": {
-      "name": "Elohmeier"
+      "name": "Enno Richter"
     },
     "logos": {
       "small": "img/logo.svg",
@@ -22,7 +22,7 @@
   "includes": [
     {
       "type": "page",
-      "name": "Pi Assistant",
+      "name": "Observability Analyst",
       "path": "/a/%PLUGIN_ID%/chat",
       "addToNav": true,
       "defaultNav": true

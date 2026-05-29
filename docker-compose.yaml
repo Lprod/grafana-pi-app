@@ -53,6 +53,7 @@ services:
     extends:
       file: .config/docker-compose-base.yaml
       service: grafana
+    container_name: 'g42-pi-app'
     build:
       args:
         grafana_version: ${GRAFANA_VERSION:-13.0.1}
@@ -64,6 +65,8 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
     environment:
+      GF_LOG_FILTERS: plugin.g42-pi-app:debug
+      GF_PLUGINS_ALLOW_LOADING_UNSIGNED_PLUGINS: g42-pi-app
       GF_FEATURE_TOGGLES_ENABLE: externalServiceAccounts
       GF_AUTH_MANAGED_SERVICE_ACCOUNTS_ENABLED: 'true'
       GF_RENDERING_SERVER_URL: http://renderer:8081/render

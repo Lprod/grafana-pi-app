@@ -290,7 +290,7 @@ describe('grafana datasource tool policy', () => {
 
     expect(fetch).toHaveBeenCalledWith(
       expect.objectContaining({
-        url: '/api/plugins/elohmeier-grafanapiapp-app/resources/managed-dashboards/sync',
+        url: '/api/plugins/g42-pi-app/resources/managed-dashboards/sync',
         method: 'POST',
         data: { dashboard_jsonnet: source },
         showErrorAlert: false,
@@ -350,14 +350,14 @@ describe('grafana datasource tool policy', () => {
     expect(fetch).toHaveBeenNthCalledWith(
       1,
       expect.objectContaining({
-        url: '/api/plugins/elohmeier-grafanapiapp-app/resources/managed-dashboards/jsonnet-files/write',
+        url: '/api/plugins/g42-pi-app/resources/managed-dashboards/jsonnet-files/write',
         data: { sessionId: 'session-tools', path: 'dashboard.jsonnet', content: source },
       })
     );
     expect(fetch).toHaveBeenNthCalledWith(
       2,
       expect.objectContaining({
-        url: '/api/plugins/elohmeier-grafanapiapp-app/resources/managed-dashboards/jsonnet-files/edit',
+        url: '/api/plugins/g42-pi-app/resources/managed-dashboards/jsonnet-files/edit',
         data: {
           sessionId: 'session-tools',
           path: 'dashboard.jsonnet',
@@ -433,7 +433,7 @@ describe('grafana datasource tool policy', () => {
     expect(fetch).toHaveBeenNthCalledWith(
       2,
       expect.objectContaining({
-        url: '/api/plugins/elohmeier-grafanapiapp-app/resources/managed-dashboards/jsonnet-files/repair',
+        url: '/api/plugins/g42-pi-app/resources/managed-dashboards/jsonnet-files/repair',
         data: {
           sessionId: 'session-fix',
           path: 'dashboard.jsonnet',
@@ -507,14 +507,14 @@ describe('grafana datasource tool policy', () => {
     expect(fetch).toHaveBeenNthCalledWith(
       1,
       expect.objectContaining({
-        url: '/api/plugins/elohmeier-grafanapiapp-app/resources/managed-dashboards/jsonnet-files/write',
+        url: '/api/plugins/g42-pi-app/resources/managed-dashboards/jsonnet-files/write',
         data: { sessionId: 'session-render', path: 'dashboard.jsonnet', content: source, version: 4 },
       })
     );
     expect(fetch).toHaveBeenNthCalledWith(
       2,
       expect.objectContaining({
-        url: '/api/plugins/elohmeier-grafanapiapp-app/resources/managed-dashboards/render',
+        url: '/api/plugins/g42-pi-app/resources/managed-dashboards/render',
         data: { path: 'dashboard.jsonnet', sessionId: 'session-render' },
       })
     );
@@ -604,7 +604,7 @@ describe('grafana datasource tool policy', () => {
         },
         config: {
           method: 'POST',
-          url: '/api/plugins/elohmeier-grafanapiapp-app/resources/managed-dashboards/sync',
+          url: '/api/plugins/g42-pi-app/resources/managed-dashboards/sync',
         },
       }))
     );
@@ -612,7 +612,7 @@ describe('grafana datasource tool policy', () => {
     const tool = getTool(createGrafanaTools({ allowedDatasourceUids: ['prom-a'] }), 'sync_dashboard');
 
     await expect(tool.execute('call-1', { dashboard_jsonnet: 'let textPanel() = {}' }, undefined)).rejects.toThrow(
-      'Grafana request failed (400 Bad Request) while calling POST /api/plugins/elohmeier-grafanapiapp-app/resources/managed-dashboards/sync: jsonnet compilation failed: dashboard.jsonnet:3:5-14 Did not expect: (IDENTIFIER, "textPanel")'
+      'Grafana request failed (400 Bad Request) while calling POST /api/plugins/g42-pi-app/resources/managed-dashboards/sync: jsonnet compilation failed: dashboard.jsonnet:3:5-14 Did not expect: (IDENTIFIER, "textPanel")'
     );
   });
 

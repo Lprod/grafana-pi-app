@@ -111,7 +111,7 @@ export function ToolResultMessageBody({
     return (
       <div className={cx(styles.toolFrame, subagentDetails.status === 'failed' && styles.toolFrameError)}>
         <ToolHeader name={toolName ?? subagentDetails.agent} status={subagentDetails.status} />
-        <ContentBlocks content={content} />
+        <SubagentResultView content={content} details={subagentDetails} />
         <SubagentDetailsView details={subagentDetails} />
       </div>
     );
@@ -210,12 +210,438 @@ function renderStructuredToolCall(
   partialJson: string | undefined,
   isStreaming: boolean
 ): React.ReactNode | undefined {
+  const prometheusQuery = asPrometheusQueryToolCall(name, args, partialJson, isStreaming);
+  if (prometheusQuery) {
+    return <PrometheusQueryToolCallView call={prometheusQuery} />;
+  }
+
+  const simpleCall = asSimpleToolCallSummary(name, args, partialJson, isStreaming);
+  if (simpleCall) {
+    return <SimpleToolCallSummaryView call={simpleCall} />;
+  }
+
   const jsonnetWrite = asJsonnetWriteToolCall(name, args, partialJson, isStreaming);
   if (jsonnetWrite) {
     return <JsonnetWriteToolCallView call={jsonnetWrite} />;
   }
 
   return undefined;
+}
+
+type PrometheusQueryToolCall = {
+  datasourceUid?: string;
+  queries: PrometheusQueryToolCallQuery[];
+  partial: boolean;
+};
+
+type PrometheusQueryToolCallQuery = {
+  query: string;
+  type: string;
+  start?: string;
+  end?: string;
+  interval?: string;
+};
+
+function PrometheusQueryToolCallView({ call }: { call: PrometheusQueryToolCall }) {
+  const styles = useStyles2(getToolStyles);
+  const commonType = commonPrometheusQueryToolCallType(call.queries);
+  const commonRange = commonPrometheusQueryToolCallRange(call.queries);
+  const queryCount = call.queries.length;
+  const querySummary = commonType
+    ? `${formatCount(queryCount)} ${commonType} ${queryCount === 1 ? 'query' : 'queries'}`
+    : `${formatCount(queryCount)} queries`;
+  const summaryParts = [
+    querySummary,
+    commonRange,
+    call.datasourceUid ? `datasource ${call.datasourceUid}` : 'default datasource',
+    call.partial ? 'streaming' : undefined,
+  ].filter(Boolean);
+
+  return (
+    <div className={styles.structuredResult}>
+      <div className={styles.resultSummary}>{summaryParts.join(' | ')}</div>
+      <div className={styles.prometheusQueryPlanList}>
+        {call.queries.map((query, index) => (
+          <div className={styles.prometheusQueryPlanRow} key={`${index}:${query.query}`}>
+            <span className={styles.prometheusQueryPlanIndex}>Query {index + 1}</span>
+            <span className={styles.prometheusQueryPlanMeta}>{formatPrometheusQueryToolCallMeta(query)}</span>
+            <code className={styles.prometheusQueryPlanExpression} title={query.query}>
+              {query.query}
+            </code>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function asPrometheusQueryToolCall(
+  name: string,
+  args: unknown,
+  partialJson: string | undefined,
+  isStreaming: boolean
+): PrometheusQueryToolCall | undefined {
+  if (name !== 'query_prometheus' && name !== 'query_prometheus_raw') {
+    return undefined;
+  }
+
+  const partial = partialJson ? prometheusQueryToolCallFromPartialJson(partialJson) : undefined;
+  const complete = prometheusQueryToolCallFromArgs(args, false);
+  if (partial && (isStreaming || !complete)) {
+    return partial;
+  }
+  return complete;
+}
+
+function prometheusQueryToolCallFromPartialJson(partialJson: string): PrometheusQueryToolCall | undefined {
+  try {
+    return prometheusQueryToolCallFromArgs(JSON.parse(partialJson), true);
+  } catch {
+    return undefined;
+  }
+}
+
+function prometheusQueryToolCallFromArgs(args: unknown, partial: boolean): PrometheusQueryToolCall | undefined {
+  if (!isRecord(args)) {
+    return undefined;
+  }
+
+  const queryRecords = recordsField(args, 'queries');
+  const queries =
+    queryRecords.length > 0
+      ? queryRecords
+          .map((queryRecord) => prometheusQueryToolCallQueryFromRecord(queryRecord, args))
+          .filter((query): query is PrometheusQueryToolCallQuery => Boolean(query))
+      : [prometheusQueryToolCallQueryFromRecord(args, args)].filter(
+          (query): query is PrometheusQueryToolCallQuery => Boolean(query)
+        );
+
+  if (queries.length === 0) {
+    return undefined;
+  }
+
+  return {
+    datasourceUid: stringField(args, 'datasourceUid'),
+    queries,
+    partial,
+  };
+}
+
+function prometheusQueryToolCallQueryFromRecord(
+  record: Record<string, unknown>,
+  defaults: Record<string, unknown>
+): PrometheusQueryToolCallQuery | undefined {
+  const query = stringField(record, 'query') ?? stringField(record, 'expr');
+  if (!query) {
+    return undefined;
+  }
+
+  const range = recordField(record, 'range');
+  const rawRange = recordField(range, 'raw');
+  const defaultRange = recordField(defaults, 'range');
+  const defaultRawRange = recordField(defaultRange, 'raw');
+  const start =
+    stringField(record, 'start') ??
+    stringField(record, 'from') ??
+    stringField(range, 'from') ??
+    stringField(rawRange, 'from') ??
+    stringField(defaults, 'start') ??
+    stringField(defaults, 'from') ??
+    stringField(defaultRange, 'from') ??
+    stringField(defaultRawRange, 'from');
+  const end =
+    stringField(record, 'end') ??
+    stringField(record, 'to') ??
+    stringField(range, 'to') ??
+    stringField(rawRange, 'to') ??
+    stringField(defaults, 'end') ??
+    stringField(defaults, 'to') ??
+    stringField(defaultRange, 'to') ??
+    stringField(defaultRawRange, 'to');
+  const type =
+    stringField(record, 'type') ??
+    stringField(record, 'queryType') ??
+    stringField(defaults, 'type') ??
+    stringField(defaults, 'queryType') ??
+    (start || end ? 'range' : 'instant');
+
+  return {
+    query,
+    type,
+    start,
+    end,
+    interval: stringField(record, 'interval') ?? stringField(record, 'step') ?? stringField(defaults, 'interval'),
+  };
+}
+
+function commonPrometheusQueryToolCallType(queries: PrometheusQueryToolCallQuery[]) {
+  const firstType = queries[0]?.type;
+  return firstType && queries.every((query) => query.type === firstType) ? firstType : undefined;
+}
+
+function commonPrometheusQueryToolCallRange(queries: PrometheusQueryToolCallQuery[]) {
+  const firstRange = formatPrometheusQueryToolCallRange(queries[0]);
+  return firstRange && queries.every((query) => formatPrometheusQueryToolCallRange(query) === firstRange)
+    ? firstRange
+    : undefined;
+}
+
+function formatPrometheusQueryToolCallMeta(query: PrometheusQueryToolCallQuery) {
+  return [query.type, formatPrometheusQueryToolCallRange(query), query.interval].filter(Boolean).join(' | ');
+}
+
+function formatPrometheusQueryToolCallRange(query: PrometheusQueryToolCallQuery | undefined) {
+  if (!query) {
+    return undefined;
+  }
+  if (query.start && query.end) {
+    return `${query.start} -> ${query.end}`;
+  }
+  if (query.start) {
+    return `from ${query.start}`;
+  }
+  if (query.end) {
+    return `to ${query.end}`;
+  }
+  return undefined;
+}
+
+type SimpleToolCallSummary = {
+  summary: string;
+  items?: Array<{ label: string; value?: React.ReactNode }>;
+  code?: string;
+};
+
+function SimpleToolCallSummaryView({ call }: { call: SimpleToolCallSummary }) {
+  const styles = useStyles2(getToolStyles);
+  return (
+    <div className={styles.structuredResult}>
+      <div className={styles.resultSummary}>{call.summary}</div>
+      {call.items && <ResultMetaGrid items={call.items} />}
+      {call.code && <pre className={styles.queryBlock}>{call.code}</pre>}
+    </div>
+  );
+}
+
+function asSimpleToolCallSummary(
+  name: string,
+  args: unknown,
+  partialJson: string | undefined,
+  isStreaming: boolean
+): SimpleToolCallSummary | undefined {
+  const record = toolCallArgsRecord(args, partialJson, isStreaming) ?? {};
+
+  switch (name) {
+    case 'list_datasources':
+    case 'grafana_get_datasources':
+      return { summary: 'Discover Prometheus datasources' };
+    case 'list_metrics':
+      return {
+        summary: `List metric names | ${formatDatasourceSummary(record)}`,
+        items: [{ label: 'Datasource', value: formatDatasourceMetaValue(record) }],
+      };
+    case 'list_label_values':
+      return labelValuesToolCallSummary(record);
+    case 'inspect_metric_series':
+      return inspectMetricSeriesToolCallSummary(record);
+    case 'list_dashboards':
+    case 'grafana_list_dashboards':
+      return { summary: 'List dashboards' };
+    case 'list_managed_dashboards':
+    case 'grafana_list_managed_dashboards':
+      return { summary: 'List managed dashboards' };
+    case 'get_dashboard':
+    case 'grafana_get_dashboard':
+      return dashboardToolCallSummary('Get dashboard', record);
+    case 'get_dashboard_source':
+    case 'grafana_get_managed_dashboard_source':
+      return dashboardToolCallSummary('Read managed dashboard source', record);
+    case 'render_dashboard':
+    case 'grafana_render_managed_dashboard':
+      return dashboardToolCallSummary('Render dashboard', record);
+    case 'sync_dashboard':
+    case 'grafana_sync_managed_dashboard':
+      return dashboardToolCallSummary('Sync managed dashboard', record);
+    case 'upload_dashboard':
+    case 'grafana_upload_dashboard':
+      return dashboardToolCallSummary('Upload dashboard', record);
+    case 'delete_dashboard':
+    case 'grafana_delete_dashboard':
+      return dashboardToolCallSummary('Delete dashboard', record);
+    case 'screenshot_dashboard':
+    case 'grafana_screenshot':
+      return screenshotDashboardToolCallSummary(record);
+    case 'list_grafonnet':
+    case 'list_jsonnet_libs':
+      return { summary: 'List Jsonnet library files' };
+    case 'search_grafonnet':
+    case 'search_jsonnet_libs':
+      return jsonnetSearchToolCallSummary(record);
+    case 'read_grafonnet':
+    case 'read_jsonnet_lib':
+    case 'read_jsonnet':
+    case 'grafana_read_jsonnet_file':
+      return jsonnetPathToolCallSummary('Read Jsonnet source', record);
+    case 'read_skill_resource':
+      return jsonnetPathToolCallSummary('Read skill resource', record);
+    case 'edit_jsonnet':
+    case 'grafana_edit_jsonnet_file':
+      return jsonnetPathToolCallSummary('Edit Jsonnet source', record);
+    case 'fix_jsonnet':
+      return jsonnetPathToolCallSummary('Repair Jsonnet source', record);
+    default:
+      return undefined;
+  }
+}
+
+function labelValuesToolCallSummary(record: Record<string, unknown>): SimpleToolCallSummary {
+  const label = stringField(record, 'label') ?? stringField(record, 'labelName') ?? stringField(record, 'name');
+  const selector = stringField(record, 'match') ?? stringField(record, 'selector') ?? stringField(record, 'metric');
+  return {
+    summary: summaryLine(['List label values', label ? `label ${label}` : undefined, formatDatasourceSummary(record)]),
+    items: [
+      { label: 'Label', value: label },
+      { label: 'Datasource', value: formatDatasourceMetaValue(record) },
+      { label: 'Selector', value: selector ? <code>{selector}</code> : undefined },
+    ],
+  };
+}
+
+function inspectMetricSeriesToolCallSummary(record: Record<string, unknown>): SimpleToolCallSummary {
+  const selector = stringField(record, 'match') ?? stringField(record, 'selector') ?? stringField(record, 'metric');
+  return {
+    summary: summaryLine(['Inspect metric series', selector ? 'selector provided' : undefined, formatDatasourceSummary(record)]),
+    items: [
+      { label: 'Datasource', value: formatDatasourceMetaValue(record) },
+      { label: 'Selector', value: selector ? <code>{selector}</code> : undefined },
+    ],
+    code: selector,
+  };
+}
+
+function dashboardToolCallSummary(action: string, record: Record<string, unknown>): SimpleToolCallSummary {
+  const dashboard = dashboardToolCallIdentifier(record);
+  const path = stringField(record, 'path') ?? stringField(record, 'file');
+  const folder = stringField(record, 'folderUid') ?? stringField(record, 'folder') ?? stringField(record, 'folderTitle');
+  return {
+    summary: summaryLine([action, dashboard]),
+    items: [
+      { label: 'Dashboard', value: dashboard ? <code>{dashboard}</code> : undefined },
+      { label: 'Path', value: path ? <code>{path}</code> : undefined },
+      { label: 'Folder', value: folder },
+      { label: 'Panel', value: stringOrNumberField(record, 'panelId') },
+      { label: 'Dry run', value: booleanLabel(record, 'dryRun') },
+    ],
+  };
+}
+
+function screenshotDashboardToolCallSummary(record: Record<string, unknown>): SimpleToolCallSummary {
+  const dashboard = dashboardToolCallIdentifier(record);
+  const width = numberField(record, 'width');
+  const height = numberField(record, 'height');
+  return {
+    summary: summaryLine(['Capture dashboard screenshot', dashboard]),
+    items: [
+      { label: 'Dashboard', value: dashboard ? <code>{dashboard}</code> : undefined },
+      { label: 'Panel', value: stringOrNumberField(record, 'panelId') },
+      { label: 'Size', value: width && height ? `${width} x ${height}` : undefined },
+    ],
+  };
+}
+
+function jsonnetSearchToolCallSummary(record: Record<string, unknown>): SimpleToolCallSummary {
+  const query =
+    stringField(record, 'query') ??
+    stringField(record, 'pattern') ??
+    stringField(record, 'search') ??
+    stringField(record, 'term');
+  return {
+    summary: summaryLine(['Search Jsonnet libraries', query]),
+    items: [
+      { label: 'Query', value: query ? <code>{query}</code> : undefined },
+      { label: 'Base path', value: stringField(record, 'basePath') },
+    ],
+    code: query,
+  };
+}
+
+function jsonnetPathToolCallSummary(action: string, record: Record<string, unknown>): SimpleToolCallSummary {
+  const path = jsonnetToolCallPath(record);
+  const lineRange = formatToolCallLineRange(record);
+  const instructions =
+    stringField(record, 'instructions') ?? stringField(record, 'prompt') ?? stringField(record, 'description');
+  return {
+    summary: summaryLine([action, path]),
+    items: [
+      { label: 'Path', value: path ? <code>{path}</code> : undefined },
+      { label: 'Lines', value: lineRange },
+      { label: 'Instructions', value: instructions },
+    ],
+  };
+}
+
+function toolCallArgsRecord(
+  args: unknown,
+  partialJson: string | undefined,
+  isStreaming: boolean
+): Record<string, unknown> | undefined {
+  if (isStreaming && partialJson) {
+    try {
+      const parsed = JSON.parse(partialJson);
+      if (isRecord(parsed)) {
+        return parsed;
+      }
+    } catch {
+      return isRecord(args) ? args : undefined;
+    }
+  }
+
+  return isRecord(args) ? args : undefined;
+}
+
+function formatDatasourceSummary(record: Record<string, unknown>) {
+  const datasourceUid = stringField(record, 'datasourceUid');
+  return datasourceUid ? `datasource ${datasourceUid}` : 'default datasource';
+}
+
+function formatDatasourceMetaValue(record: Record<string, unknown>) {
+  return stringField(record, 'datasourceUid') ?? 'default';
+}
+
+function dashboardToolCallIdentifier(record: Record<string, unknown>) {
+  return (
+    stringField(record, 'uid') ??
+    stringField(record, 'dashboardUid') ??
+    stringField(record, 'name') ??
+    stringField(record, 'title')
+  );
+}
+
+function jsonnetToolCallPath(record: Record<string, unknown>) {
+  return (
+    stringField(record, 'path') ??
+    stringField(record, 'file') ??
+    stringField(record, 'resource') ??
+    stringField(record, 'uri')
+  );
+}
+
+function formatToolCallLineRange(record: Record<string, unknown>) {
+  const start = numberField(record, 'startLine') ?? numberField(record, 'line');
+  const end = numberField(record, 'endLine');
+  if (start !== undefined && end !== undefined && end !== start) {
+    return `${start}-${end}`;
+  }
+  return start !== undefined ? String(start) : undefined;
+}
+
+function booleanLabel(record: Record<string, unknown>, key: string) {
+  const value = booleanField(record, key);
+  return value === undefined ? undefined : value ? 'yes' : 'no';
+}
+
+function summaryLine(parts: Array<string | undefined>) {
+  return parts.filter(Boolean).join(' | ');
 }
 
 type JsonnetWriteToolCall = {
@@ -374,6 +800,48 @@ const TOOL_ICONS: Record<string, IconName> = {
 
 function toolIconName(name: string): IconName | undefined {
   return TOOL_ICONS[name];
+}
+
+function SubagentResultView({ content, details }: { content: unknown; details: SubagentRunDetails }) {
+  const styles = useStyles2(getToolStyles);
+  const [isOpen, setIsOpen] = useState(false);
+  return (
+    <details
+      className={styles.subagentResult}
+      data-testid="subagent-result"
+      open={isOpen}
+    >
+      <summary
+        aria-expanded={isOpen}
+        className={styles.subagentResultSummary}
+        onClick={(event) => {
+          event.preventDefault();
+          setIsOpen((open) => !open);
+        }}
+      >
+        <Icon
+          aria-hidden
+          className={styles.queryResultChevron}
+          name={isOpen ? 'angle-down' : 'angle-right'}
+        />
+        <span>{subagentResultLabel(details)}</span>
+      </summary>
+      <div className={styles.subagentResultBody}>
+        <ContentBlocks content={content} />
+      </div>
+    </details>
+  );
+}
+
+function subagentResultLabel(details: SubagentRunDetails) {
+  const agentLabel = details.agent === 'metrics' ? 'Metrics explorer' : 'Jsonnet explorer';
+  if (details.status === 'failed') {
+    return `${agentLabel} error`;
+  }
+  if (details.status === 'running') {
+    return `${agentLabel} output`;
+  }
+  return `${agentLabel} result`;
 }
 
 function SubagentDetailsView({ details, compact }: { details: SubagentRunDetails; compact?: boolean }) {
@@ -904,7 +1372,7 @@ function createPrometheusTimeseriesScene(visualization: PrometheusTimeseriesVisu
     datasource,
     minInterval: visualization.interval,
     maxDataPoints: visualization.maxDataPoints ?? 1200,
-    requestIdPrefix: 'pi-query-render-',
+    requestIdPrefix: 'observability-query-render-',
     queries: [
       {
         refId: 'A',
@@ -2542,6 +3010,50 @@ const getToolStyles = (theme: GrafanaTheme2) => ({
     color: theme.colors.text.secondary,
     fontSize: theme.typography.bodySmall.fontSize,
   }),
+  prometheusQueryPlanList: css({
+    display: 'grid',
+    gap: theme.spacing(0.75),
+    minWidth: 0,
+  }),
+  prometheusQueryPlanRow: css({
+    display: 'grid',
+    gridTemplateColumns: 'auto minmax(0, 1fr)',
+    gridTemplateAreas: '"index meta" "index expression"',
+    alignItems: 'center',
+    columnGap: theme.spacing(1),
+    rowGap: theme.spacing(0.25),
+    minWidth: 0,
+    padding: theme.spacing(0.75, 1),
+    border: `1px solid ${theme.colors.border.weak}`,
+    borderRadius: theme.shape.radius.default,
+    background: theme.colors.background.primary,
+  }),
+  prometheusQueryPlanIndex: css({
+    gridArea: 'index',
+    color: theme.colors.text.primary,
+    fontSize: theme.typography.bodySmall.fontSize,
+    fontWeight: theme.typography.fontWeightMedium,
+    whiteSpace: 'nowrap',
+  }),
+  prometheusQueryPlanMeta: css({
+    gridArea: 'meta',
+    minWidth: 0,
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
+    color: theme.colors.text.secondary,
+    fontSize: theme.typography.bodySmall.fontSize,
+  }),
+  prometheusQueryPlanExpression: css({
+    gridArea: 'expression',
+    minWidth: 0,
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
+    color: theme.colors.text.primary,
+    fontFamily: theme.typography.fontFamilyMonospace,
+    fontSize: theme.typography.bodySmall.fontSize,
+  }),
   emptyState: css({
     padding: theme.spacing(1),
     color: theme.colors.text.secondary,
@@ -2899,6 +3411,45 @@ const getToolStyles = (theme: GrafanaTheme2) => ({
     gap: theme.spacing(1),
     color: theme.colors.text.secondary,
     fontSize: theme.typography.bodySmall.fontSize,
+  }),
+  subagentResult: css({
+    display: 'grid',
+    gap: theme.spacing(1),
+    minWidth: 0,
+    padding: theme.spacing(0.75, 1),
+    border: `1px solid ${theme.colors.border.weak}`,
+    borderRadius: theme.shape.radius.default,
+    background: theme.colors.background.primary,
+    '&[open]': {
+      borderColor: theme.colors.border.medium,
+    },
+    '&[open] summary': {
+      marginBottom: theme.spacing(0.5),
+    },
+  }),
+  subagentResultSummary: css({
+    display: 'flex',
+    alignItems: 'center',
+    gap: theme.spacing(1),
+    minWidth: 0,
+    cursor: 'pointer',
+    color: theme.colors.text.secondary,
+    fontSize: theme.typography.bodySmall.fontSize,
+    listStyle: 'none',
+    '&::marker': {
+      content: '""',
+    },
+    '&::-webkit-details-marker': {
+      display: 'none',
+    },
+    '&:focus-visible': {
+      outline: `2px solid ${theme.colors.primary.border}`,
+      outlineOffset: theme.spacing(0.5),
+      borderRadius: theme.shape.radius.default,
+    },
+  }),
+  subagentResultBody: css({
+    minWidth: 0,
   }),
   toolTimeline: css({
     display: 'grid',

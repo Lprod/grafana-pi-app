@@ -1,5 +1,5 @@
 import React from 'react';
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import { ContentBlocks, ToolResultMessageBody } from './ToolRenderer';
 
 jest.mock('@grafana/scenes', () => {
@@ -109,7 +109,7 @@ describe('ToolRenderer', () => {
   });
 
   it('renders tool category icons in generic tool call headers', () => {
-    render(
+    const { container } = render(
       <ContentBlocks
         content={[
           {
@@ -123,6 +123,189 @@ describe('ToolRenderer', () => {
 
     expect(screen.getByTestId('list-ul')).toBeInTheDocument();
     expect(screen.getByText('list_metrics')).toBeInTheDocument();
+    expect(container.textContent).toContain('List metric names | default datasource');
+    expect(container.textContent).not.toContain('{}');
+  });
+
+  it('renders empty discovery tool calls as intent summaries', () => {
+    const { container } = render(
+      <ContentBlocks
+        content={[
+          {
+            type: 'toolCall',
+            name: 'list_datasources',
+            arguments: {},
+          },
+          {
+            type: 'toolCall',
+            name: 'list_dashboards',
+            arguments: {},
+          },
+          {
+            type: 'toolCall',
+            name: 'list_grafonnet',
+            arguments: {},
+          },
+        ]}
+      />
+    );
+
+    expect(container.textContent).toContain('Discover Prometheus datasources');
+    expect(container.textContent).toContain('List dashboards');
+    expect(container.textContent).toContain('List Jsonnet library files');
+    expect(container.textContent).not.toContain('{}');
+  });
+
+  it('renders inspection tool arguments as readable summaries', () => {
+    const { container } = render(
+      <ContentBlocks
+        content={[
+          {
+            type: 'toolCall',
+            name: 'list_label_values',
+            arguments: {
+              datasourceUid: 'prometheus',
+              label: 'job',
+              match: 'http_requests_total',
+            },
+          },
+          {
+            type: 'toolCall',
+            name: 'inspect_metric_series',
+            arguments: {
+              match: 'up{job="api"}',
+            },
+          },
+        ]}
+      />
+    );
+
+    expect(container.textContent).toContain('List label values | label job | datasource prometheus');
+    expect(container.textContent).toContain('Inspect metric series | selector provided | default datasource');
+    expect(container.textContent).toContain('up{job="api"}');
+    expect(container.textContent).not.toContain('"label"');
+    expect(container.textContent).not.toContain('"match"');
+  });
+
+  it('renders query_prometheus_raw arguments with the Prometheus query plan', () => {
+    const { container } = render(
+      <ContentBlocks
+        content={[
+          {
+            type: 'toolCall',
+            name: 'query_prometheus_raw',
+            arguments: {
+              datasourceUid: 'prometheus',
+              query: 'up',
+              type: 'instant',
+            },
+          },
+        ]}
+      />
+    );
+
+    expect(container.textContent).toContain('1 instant query | datasource prometheus');
+    expect(container.textContent).toContain('Query 1');
+    expect(container.textContent).toContain('up');
+    expect(container.textContent).not.toContain('"query"');
+  });
+
+  it('renders dashboard and Jsonnet tool calls as summaries', () => {
+    const { container } = render(
+      <ContentBlocks
+        content={[
+          {
+            type: 'toolCall',
+            name: 'render_dashboard',
+            arguments: {
+              uid: 'service-health',
+              panelId: 4,
+            },
+          },
+          {
+            type: 'toolCall',
+            name: 'screenshot_dashboard',
+            arguments: {
+              uid: 'service-health',
+              width: 1200,
+              height: 800,
+            },
+          },
+          {
+            type: 'toolCall',
+            name: 'search_grafonnet',
+            arguments: {
+              query: 'timeseries panel',
+            },
+          },
+          {
+            type: 'toolCall',
+            name: 'edit_jsonnet',
+            arguments: {
+              path: 'dashboards/service.jsonnet',
+              startLine: 10,
+              endLine: 12,
+            },
+          },
+        ]}
+      />
+    );
+
+    expect(container.textContent).toContain('Render dashboard | service-health');
+    expect(container.textContent).toContain('Capture dashboard screenshot | service-health');
+    expect(container.textContent).toContain('1200 x 800');
+    expect(container.textContent).toContain('Search Jsonnet libraries | timeseries panel');
+    expect(container.textContent).toContain('Edit Jsonnet source | dashboards/service.jsonnet');
+    expect(container.textContent).toContain('10-12');
+    expect(container.textContent).not.toContain('"uid"');
+    expect(container.textContent).not.toContain('"path"');
+  });
+
+  it('renders batched query_prometheus arguments as a compact query plan', () => {
+    const queries = [
+      {
+        query: 'rate(http_requests_total{status=~"5.."}[5m])',
+        type: 'range',
+        start: 'now-6h',
+        end: 'now',
+      },
+      {
+        query: 'histogram_quantile(0.99, rate(http_request_duration_seconds_bucket[5m]))',
+        type: 'range',
+        start: 'now-6h',
+        end: 'now',
+      },
+      {
+        query: 'rate(node_cpu_seconds_total{mode="idle"}[5m])',
+        type: 'range',
+        start: 'now-6h',
+        end: 'now',
+      },
+    ];
+
+    const { container } = render(
+      <ContentBlocks
+        content={[
+          {
+            type: 'toolCall',
+            name: 'query_prometheus',
+            arguments: { queries },
+          },
+        ]}
+      />
+    );
+
+    expect(container.textContent).toContain('3 range queries | now-6h -> now | default datasource');
+    expect(container.textContent).toContain('Query 1');
+    expect(container.textContent).toContain('Query 2');
+    expect(container.textContent).toContain('Query 3');
+    expect(container.textContent).toContain('rate(http_requests_total{status=~"5.."}[5m])');
+    expect(container.textContent).toContain('histogram_quantile(0.99, rate(http_request_duration_seconds_bucket[5m]))');
+    expect(container.textContent).toContain('rate(node_cpu_seconds_total{mode="idle"}[5m])');
+    expect(container.textContent).toContain('range | now-6h -> now');
+    expect(container.textContent).not.toContain('"queries"');
+    expect(container.textContent).not.toContain('"start"');
+    expect(screen.getByTestId('gf-prometheus')).toBeInTheDocument();
   });
 
   it('renders streaming write_jsonnet content from partial JSON arguments', () => {
@@ -147,6 +330,55 @@ describe('ToolRenderer', () => {
     expect(container.textContent).toContain('local title = "Errors";');
     expect(container.textContent).toContain('{ title: title');
     expect(container.textContent).not.toContain('"content"');
+  });
+
+  it('collapses completed explore subagent output by default', () => {
+    const details = {
+      type: 'subagent',
+      agent: 'metrics',
+      status: 'completed',
+      task: 'Find availability metrics.',
+      toolNames: ['list_metrics'],
+      toolCalls: [
+        {
+          id: 'tool-1',
+          name: 'list_metrics',
+          args: {},
+          status: 'completed',
+          text: 'up',
+        },
+      ],
+      usage: {
+        turns: 1,
+        input: 10,
+        output: 4,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 14,
+        cost: 0,
+      },
+      finalOutput: 'Use up for availability.',
+    };
+
+    const { container } = render(
+      <ToolResultMessageBody
+        toolName="explore_metrics"
+        content={[{ type: 'text', text: 'Use up for availability.' }]}
+        details={details}
+      />
+    );
+
+    const result = screen.getByTestId('subagent-result') as HTMLDetailsElement;
+    expect(result.open).toBe(false);
+    expect(screen.getByText('Metrics explorer result')).toBeInTheDocument();
+    expect(screen.getByTestId('angle-right')).toBeInTheDocument();
+    expect(container.textContent).toContain('Metrics explorer');
+    expect(container.textContent).toContain('list_metrics');
+
+    fireEvent.click(screen.getByText('Metrics explorer result'));
+
+    expect(result.open).toBe(true);
+    expect(screen.getByTestId('angle-down')).toBeInTheDocument();
   });
 
   it('renders a time series panel for range query visualization details', () => {

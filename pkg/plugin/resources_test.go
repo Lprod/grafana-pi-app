@@ -255,7 +255,7 @@ g.dashboard.new('API Service RED')
 	if response.Dashboard["editable"] != false {
 		t.Fatalf("managed dashboards should render as not editable: %#v", response.Dashboard["editable"])
 	}
-	if !containsTag(response.Dashboard["tags"], "service") || !containsTag(response.Dashboard["tags"], "managed-by-pi") {
+	if !containsTag(response.Dashboard["tags"], "service") || !containsTag(response.Dashboard["tags"], "managed-by-observability-analyst") {
 		t.Fatalf("expected source and managed tags, got %#v", response.Dashboard["tags"])
 	}
 	annotations := response.Resource.Metadata.Annotations
