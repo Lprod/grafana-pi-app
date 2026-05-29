@@ -16,5 +16,13 @@ export const BUNDLED_GRAFANA_SKILLS = [
         "bytes": 894
       }
     }
+  },
+  {
+    "name": "rqlite-datasource",
+    "description": "Query rqlite SQLite-compatible datasources through Grafana using read-only SQL and schema inspection tools.",
+    "content": "---\nname: rqlite-datasource\ndescription: Query rqlite SQLite-compatible datasources through Grafana using read-only SQL and schema inspection tools.\n---\n\n# rqlite Datasource Skill\n\nUse this skill when the user asks about rqlite, SQLite, SQL query results, database tables, or table columns.\n\n## Rules\n\n- Discover rqlite datasources before selecting a datasource UID.\n- Inspect tables and columns before writing SQL unless the user provides a complete query.\n- Use `query_rqlite` only for read-only SQL: `SELECT`, `WITH ... SELECT`, `VALUES`, `EXPLAIN SELECT`, or `PRAGMA table_info`.\n- Do not attempt writes, schema changes, transactions, or maintenance statements.\n- Keep query results focused. Summarize rows and mention when the tool result is truncated.",
+    "filePath": ".agents/skills/rqlite-datasource/SKILL.md",
+    "disableModelInvocation": false,
+    "resources": {}
   }
 ] as const satisfies readonly BundledGrafanaSkill[];

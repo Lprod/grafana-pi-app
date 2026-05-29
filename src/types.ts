@@ -25,6 +25,7 @@ export type PiAppJsonData = {
   defaultModel?: string;
   isOpenAIAPIKeySet?: boolean;
   allowedDatasourceUids?: string[];
+  allowedRqliteDatasourceUids?: string[];
   systemPromptAddendum?: string;
   customSkills?: PiAppCustomSkill[];
 };

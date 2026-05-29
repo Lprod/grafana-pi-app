@@ -41,6 +41,7 @@ import {
   createGrafanaToolsForSkillGroups,
   createSkillTools,
   filterAllowedPrometheusDatasourceSettings,
+  filterAllowedRqliteDatasourceSettings,
   getDisallowedDashboardDatasourceUids,
   type VirtualJsonnetFileSnapshot,
 } from './grafanaTools';
@@ -49,6 +50,8 @@ import { GRAFANA_SKILLS } from './skills';
 const datasourceSettings = [
   { name: 'Prometheus A', uid: 'prom-a', type: 'prometheus', isDefault: true },
   { name: 'Prometheus B', uid: 'prom-b', type: 'prometheus', isDefault: false },
+  { name: 'rqlite A', uid: 'rqlite-a', type: 'g42-rqlite-datasource', isDefault: false },
+  { name: 'rqlite B', uid: 'rqlite-b', type: 'g42-rqlite-datasource', isDefault: false },
   { name: 'Loki', uid: 'loki', type: 'loki', isDefault: false },
 ] as unknown as DataSourceInstanceSettings[];
 
@@ -62,6 +65,13 @@ describe('grafana datasource tool policy', () => {
     expect(filterAllowedPrometheusDatasourceSettings(datasourceSettings)).toEqual([
       datasourceSettings[0],
       datasourceSettings[1],
+    ]);
+  });
+
+  it('keeps all visible rqlite datasources when no rqlite allow-list is configured', () => {
+    expect(filterAllowedRqliteDatasourceSettings(datasourceSettings)).toEqual([
+      datasourceSettings[2],
+      datasourceSettings[3],
     ]);
   });
 
@@ -238,6 +248,99 @@ describe('grafana datasource tool policy', () => {
     await expect(tool.execute('call-1', { datasourceUid: 'prom-a' }, undefined)).rejects.toThrow(
       'Datasource is not available to the assistant: prom-a'
     );
+    expect(mockDataSourceSrv.get).not.toHaveBeenCalled();
+  });
+
+  it('filters rqlite datasource discovery to configured UIDs', async () => {
+    const tool = getTool(createGrafanaTools({ allowedRqliteDatasourceUids: ['rqlite-b'] }), 'list_rqlite_datasources');
+
+    const result = await tool.execute('call-1', {}, undefined);
+
+    expect(JSON.parse(result.content[0].text)).toEqual([
+      {
+        name: 'rqlite B',
+        uid: 'rqlite-b',
+        type: 'g42-rqlite-datasource',
+        isDefault: false,
+      },
+    ]);
+  });
+
+  it('lists rqlite tables and columns through datasource resources', async () => {
+    const dataSource = {
+      uid: 'rqlite-b',
+      type: 'g42-rqlite-datasource',
+      getResource: jest.fn().mockResolvedValueOnce(['metrics']).mockResolvedValueOnce([
+        { name: 'time', type: 'INTEGER' },
+        { name: 'value', type: 'REAL' },
+      ]),
+    };
+    mockDataSourceSrv.get.mockResolvedValue(dataSource);
+    const tools = createGrafanaTools({ allowedRqliteDatasourceUids: ['rqlite-b'] });
+
+    const tableResult = await getTool(tools, 'list_rqlite_tables').execute('call-1', {}, undefined);
+    const columnResult = await getTool(tools, 'list_rqlite_columns').execute(
+      'call-2',
+      { table: 'metrics' },
+      undefined
+    );
+
+    expect(dataSource.getResource).toHaveBeenNthCalledWith(1, '/tables', undefined);
+    expect(dataSource.getResource).toHaveBeenNthCalledWith(2, '/columns', { table: 'metrics' });
+    expect(tableResult.content[0].text).toBe('metrics');
+    expect(JSON.parse(columnResult.content[0].text)).toEqual([
+      { name: 'time', type: 'INTEGER' },
+      { name: 'value', type: 'REAL' },
+    ]);
+  });
+
+  it('queries rqlite with read-only datasource query settings and summarizes rows', async () => {
+    const frame = makeTableFrame({
+      fields: [
+        { name: 'time', type: 'time', values: [Date.UTC(2026, 0, 1, 0, 0, 0)] },
+        { name: 'value', type: 'number', values: [42.5] },
+      ],
+    });
+    const dataSource = {
+      uid: 'rqlite-b',
+      type: 'g42-rqlite-datasource',
+      query: jest.fn().mockResolvedValue({ state: 'Done', data: [frame] }),
+    };
+    mockDataSourceSrv.get.mockResolvedValue(dataSource);
+    const tool = getTool(createGrafanaTools({ allowedRqliteDatasourceUids: ['rqlite-b'] }), 'query_rqlite');
+
+    const result = await tool.execute(
+      'call-1',
+      { sql: 'SELECT time, value FROM metrics', start: 'now-1h', end: 'now' },
+      undefined
+    );
+    const request = dataSource.query.mock.calls[0][0];
+    const body = JSON.parse(result.content[0].text);
+
+    expect(request.targets[0]).toMatchObject({
+      rawSql: 'SELECT time, value FROM metrics',
+      format: 'table',
+      timeColumns: ['time'],
+      editorMode: 'code',
+      readOnly: true,
+    });
+    expect(result.details).toMatchObject({ datasourceUid: 'rqlite-b', summarized: true, rows: 1 });
+    expect(body.frames[0]).toMatchObject({
+      rowCount: 1,
+      columns: [
+        { name: 'time', type: 'time' },
+        { name: 'value', type: 'number' },
+      ],
+      rows: [{ time: '2026-01-01T00:00:00.000Z', value: 42.5 }],
+    });
+  });
+
+  it('rejects explicit rqlite datasource UIDs outside the rqlite allow-list', async () => {
+    const tool = getTool(createGrafanaTools({ allowedRqliteDatasourceUids: ['rqlite-b'] }), 'query_rqlite');
+
+    await expect(
+      tool.execute('call-1', { datasourceUid: 'rqlite-a', sql: 'SELECT 1' }, undefined)
+    ).rejects.toThrow('rqlite datasource is not available to the assistant: rqlite-a');
     expect(mockDataSourceSrv.get).not.toHaveBeenCalled();
   });
 
@@ -700,6 +803,17 @@ describe('grafana datasource tool policy', () => {
     expect(names).not.toContain('screenshot_dashboard');
   });
 
+  it('adds rqlite tools when the rqlite skill group is selected', () => {
+    const names = createGrafanaToolsForSkillGroups({}, ['rqlite']).map((tool) => tool.name);
+
+    expect(names).toEqual([
+      'list_rqlite_datasources',
+      'list_rqlite_tables',
+      'list_rqlite_columns',
+      'query_rqlite',
+    ]);
+  });
+
   it('adds managed dashboard tools when the dashboard skill group is selected', () => {
     const names = createGrafanaToolsForSkillGroups(
       {
@@ -804,6 +918,25 @@ function makePrometheusFrame(options: {
       notices: [{ severity: 'info', text: 'demo notice' }],
       executedQueryString: 'Expr: http_requests_total\nStep: 30s',
     },
+  } as unknown as DataFrame;
+}
+
+function makeTableFrame(options: {
+  fields: Array<{
+    name: string;
+    type: string;
+    values: unknown[];
+  }>;
+}): DataFrame {
+  return {
+    name: 'A',
+    length: options.fields[0]?.values.length ?? 0,
+    fields: options.fields.map((field) => ({
+      name: field.name,
+      type: field.type,
+      values: field.values,
+      config: {},
+    })),
   } as unknown as DataFrame;
 }
 

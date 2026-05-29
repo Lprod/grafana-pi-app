@@ -435,6 +435,30 @@ function asSimpleToolCallSummary(
     case 'list_datasources':
     case 'grafana_get_datasources':
       return { summary: 'Discover Prometheus datasources' };
+    case 'list_rqlite_datasources':
+      return { summary: 'Discover rqlite datasources' };
+    case 'list_rqlite_tables':
+      return {
+        summary: `List rqlite tables | ${formatDatasourceSummary(record)}`,
+        items: [{ label: 'Datasource', value: formatDatasourceMetaValue(record) }],
+      };
+    case 'list_rqlite_columns':
+      return {
+        summary: summaryLine(['List rqlite columns', stringField(record, 'table'), formatDatasourceSummary(record)]),
+        items: [
+          { label: 'Datasource', value: formatDatasourceMetaValue(record) },
+          { label: 'Table', value: stringField(record, 'table') },
+        ],
+      };
+    case 'query_rqlite':
+      return {
+        summary: summaryLine(['Query rqlite', formatDatasourceSummary(record)]),
+        items: [
+          { label: 'Datasource', value: formatDatasourceMetaValue(record) },
+          { label: 'Format', value: stringField(record, 'format') ?? 'table' },
+        ],
+        code: stringField(record, 'sql'),
+      };
     case 'list_metrics':
       return {
         summary: `List metric names | ${formatDatasourceSummary(record)}`,
@@ -759,6 +783,10 @@ function ToolHeader({
 const TOOL_ICONS: Record<string, IconName> = {
   list_datasources: 'database',
   grafana_get_datasources: 'database',
+  list_rqlite_datasources: 'database',
+  list_rqlite_tables: 'table',
+  list_rqlite_columns: 'list-ul',
+  query_rqlite: 'database',
   list_metrics: 'list-ul',
   list_label_values: 'list-ul',
   inspect_metric_series: 'search',

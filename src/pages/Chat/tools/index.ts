@@ -4,12 +4,13 @@ import { createJsonnetFileTools } from './jsonnetFiles';
 import { createJsonnetLibTools } from './jsonnetLibs';
 import { createManagedDashboardTools } from './managedDashboards';
 import { createMetricTools, filterAllowedPrometheusDatasourceSettings } from './metrics';
+import { createRqliteTools, filterAllowedRqliteDatasourceSettings } from './rqlite';
 import { createSubagentTools } from './subagents';
 import type { CreateGrafanaToolsOptions, GrafanaToolRegistry, SkillToolGroup } from './types';
 
 export { getDisallowedDashboardDatasourceUids } from './dashboardPolicy';
 export { DEFAULT_JSONNET_FILE_PATH, normalizeJsonnetPath } from './jsonnetFiles';
-export { filterAllowedPrometheusDatasourceSettings };
+export { filterAllowedPrometheusDatasourceSettings, filterAllowedRqliteDatasourceSettings };
 export { createSkillTools } from './skills';
 export type {
   CreateGrafanaToolsOptions,
@@ -24,6 +25,7 @@ export type { SubagentRunDetails, SubagentToolCall, SubagentUsage } from './suba
 
 export function createGrafanaToolRegistry(options: CreateGrafanaToolsOptions = {}): GrafanaToolRegistry {
   const metrics = createMetricTools(options);
+  const rqlite = createRqliteTools(options);
   const dashboards = createDashboardTools(options, options.includeAdHocDashboardTools);
   const jsonnetFiles = createJsonnetFileTools(options);
   const managedDashboards = createManagedDashboardTools(options);
@@ -40,6 +42,7 @@ export function createGrafanaToolRegistry(options: CreateGrafanaToolsOptions = {
 
   return {
     metrics,
+    rqlite,
     dashboards,
     jsonnetFiles,
     managedDashboards,
@@ -48,6 +51,7 @@ export function createGrafanaToolRegistry(options: CreateGrafanaToolsOptions = {
     skills,
     all: [
       ...metrics,
+      ...rqlite,
       ...jsonnetFiles.all,
       ...parentManagedDashboardTools,
       ...subagents,
@@ -76,6 +80,10 @@ export function createGrafanaToolsForSkillGroups(
 
   if (groupSet.has('metrics')) {
     selected.push(...registry.metrics);
+  }
+
+  if (groupSet.has('rqlite')) {
+    selected.push(...registry.rqlite);
   }
 
   if (groupSet.has('jsonnetFiles')) {

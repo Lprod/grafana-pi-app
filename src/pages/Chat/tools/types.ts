@@ -4,7 +4,7 @@ import type { DataSourceApi, DataSourceInstanceSettings } from '@grafana/data';
 import type { PiAppJsonData } from '../../../types';
 import type { SkillToolGroup } from '../skills/types';
 
-export type GrafanaToolConfig = Pick<PiAppJsonData, 'allowedDatasourceUids'>;
+export type GrafanaToolConfig = Pick<PiAppJsonData, 'allowedDatasourceUids' | 'allowedRqliteDatasourceUids'>;
 
 export type GrafanaToolRuntime = {
   model: Model<any>;
@@ -86,6 +86,18 @@ export type QueryPrometheusParams = DatasourceParams &
   Partial<PrometheusQuerySpec> & {
     queries?: PrometheusQuerySpec[];
   };
+
+export type RqliteColumnsParams = DatasourceParams & {
+  table: string;
+};
+
+export type QueryRqliteParams = DatasourceParams & {
+  sql: string;
+  format?: 'table' | 'time_series';
+  timeColumns?: string[];
+  start?: string;
+  end?: string;
+};
 
 export type UploadDashboardParams = {
   dashboard_json: string;
@@ -200,6 +212,7 @@ export type JsonnetLibToolSet = {
 
 export type GrafanaToolRegistry = {
   metrics: AgentTool[];
+  rqlite: AgentTool[];
   dashboards: AgentTool[];
   managedDashboards: ManagedDashboardToolSet;
   jsonnetFiles: JsonnetFileToolSet;

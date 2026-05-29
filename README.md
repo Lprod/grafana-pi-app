@@ -7,6 +7,7 @@ Observability Analyst is a Grafana app plugin that embeds an LLM analyst for obs
 - Discovers Prometheus datasources visible to the current user.
 - Lists metric names and label values through Grafana datasource resource APIs.
 - Runs PromQL through Grafana datasource query APIs, returning compact min/max/last/sample summaries for range queries by default.
+- Discovers rqlite datasources, inspects tables and columns, and runs read-only SQL through the rqlite datasource plugin.
 - Creates app-managed dashboards from model-authored Jsonnet source. The source is stored with each dashboard so future edits can update the Jsonnet and re-sync through the app.
 - Lists, fetches, and screenshots dashboards through Grafana APIs.
 - Keeps broad metric reconnaissance available through a restricted metrics subagent.
@@ -20,6 +21,7 @@ Configure the app plugin from Grafana's plugin settings page:
 - `defaultModel`: Central model ID used for all assistant requests, for example `gpt-4.1`.
 - `systemPromptAddendum`: Optional central instructions appended to the built-in system prompt. Do not include secrets because this is stored in `jsonData`.
 - `allowedDatasourceUids`: Optional list of Prometheus datasource UIDs the assistant may discover, query, and reference in uploaded dashboards. Leave empty to allow all Prometheus datasources visible to the current Grafana user.
+- `allowedRqliteDatasourceUids`: Optional list of rqlite datasource UIDs the assistant may discover and query. Leave empty to allow all rqlite datasources visible to the current Grafana user.
 - `customSkills`: Optional non-secret skill definitions stored in `jsonData`. Users activate explicit custom skills with `$skill-name`; admins can also configure keyword or regex activation.
 - `openAIAPIKey`: Secret API key stored in `secureJsonData`.
 
@@ -58,7 +60,7 @@ The default chat toolset includes `explore_metrics` as a high-level fallback for
 
 Dashboard instructions are split into repo-local skills under `.agents/skills/<skill-name>/SKILL.md`, using the same default `SKILL.md` directory shape as local agent skill installs. `npm run generate:skills` validates those files and bundles them into `src/pages/Chat/skills/bundledSkills.generated.ts` for the frontend.
 
-The chat agent always has metric discovery tools and `explore_metrics` available. Dashboard guidance activates when the prompt asks for dashboard, panel, Jsonnet, render, or sync work, which also enables the managed dashboard and Jsonnet tool groups for that turn. New bundled skills can be added by creating another `.agents/skills/<name>/SKILL.md`; add optional text resources under `references/`, `templates/`, or `assets/`.
+The chat agent always has metric discovery tools and `explore_metrics` available. Dashboard guidance activates when the prompt asks for dashboard, panel, Jsonnet, render, or sync work, which also enables the managed dashboard and Jsonnet tool groups for that turn. rqlite guidance activates when the prompt asks about rqlite, SQLite, SQL, or database tables. New bundled skills can be added by creating another `.agents/skills/<name>/SKILL.md`; add optional text resources under `references/`, `templates/`, or `assets/`.
 
 Admins can also add small instance-specific custom skills through plugin configuration:
 
@@ -71,7 +73,7 @@ Admins can also add small instance-specific custom skills through plugin configu
     "activation": {
       "explicitOnly": true
     },
-    "toolGroups": ["metrics", "skillResources"],
+    "toolGroups": ["metrics", "rqlite", "skillResources"],
     "resources": [
       {
         "path": "references/team-runbook.md",
@@ -82,7 +84,7 @@ Admins can also add small instance-specific custom skills through plugin configu
 ]
 ```
 
-Custom skills are non-secret frontend configuration and are sent to the configured LLM when active. Supported custom skill tool groups are `metrics`, `dashboardRead`, `jsonnetFiles`, `managedDashboards`, `subagents`, and `skillResources`.
+Custom skills are non-secret frontend configuration and are sent to the configured LLM when active. Supported custom skill tool groups are `metrics`, `rqlite`, `dashboardRead`, `jsonnetFiles`, `managedDashboards`, `subagents`, and `skillResources`.
 
 ## Development
 

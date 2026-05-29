@@ -5,6 +5,7 @@ import type { GrafanaSkill, SkillToolGroup } from './types';
 
 const TOOL_GROUPS_BY_SKILL: Record<string, readonly SkillToolGroup[]> = {
   'grafana-dashboard': ['dashboardRead', 'jsonnetFiles', 'managedDashboards', 'skillResources'],
+  'rqlite-datasource': ['rqlite', 'skillResources'],
 };
 
 export const GRAFANA_SKILLS: readonly GrafanaSkill[] = BUNDLED_GRAFANA_SKILLS.map((skill) => ({

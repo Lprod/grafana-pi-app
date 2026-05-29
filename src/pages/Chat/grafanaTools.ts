@@ -5,6 +5,7 @@ export {
   createSkillTools,
   DEFAULT_JSONNET_FILE_PATH,
   filterAllowedPrometheusDatasourceSettings,
+  filterAllowedRqliteDatasourceSettings,
   getDisallowedDashboardDatasourceUids,
   normalizeJsonnetPath,
 } from './tools';
