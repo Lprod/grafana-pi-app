@@ -1,3 +1,10 @@
+# [2.1.0](https://github.com/elohmeier/grafana-pi-app/compare/v2.0.0...v2.1.0) (2026-05-29)
+
+
+### Features
+
+* add configurable app access ([db4068f](https://github.com/elohmeier/grafana-pi-app/commit/db4068fcfcca259eb056e1aeb0dd5811fc4b2faa))
+
 # [2.0.0](https://github.com/elohmeier/grafana-pi-app/compare/v1.3.0...v2.0.0) (2026-05-29)
 
 
