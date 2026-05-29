@@ -1,3 +1,10 @@
+## [2.2.1](https://github.com/elohmeier/grafana-pi-app/compare/v2.2.0...v2.2.1) (2026-05-29)
+
+
+### Reverts
+
+* Revert "feat: add InfluxDB query support" ([72234b3](https://github.com/elohmeier/grafana-pi-app/commit/72234b352db90cfd197ee296cb2ce27d54b21325))
+
 # [2.2.0](https://github.com/elohmeier/grafana-pi-app/compare/v2.1.0...v2.2.0) (2026-05-29)
 
 
