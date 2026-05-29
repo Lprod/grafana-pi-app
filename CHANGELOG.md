@@ -1,3 +1,12 @@
+# [1.2.0](https://github.com/elohmeier/grafana-pi-app/compare/v1.1.0...v1.2.0) (2026-05-29)
+
+
+### Features
+
+* analysis bench / skills ([cbe2656](https://github.com/elohmeier/grafana-pi-app/commit/cbe265650d484d156b2bc9ff0463fa68934ebce3))
+* icons ([4e56110](https://github.com/elohmeier/grafana-pi-app/commit/4e56110278b48675a1326afa7a665ea5987cc357))
+* rename & tool rendering & export ([7c33103](https://github.com/elohmeier/grafana-pi-app/commit/7c33103fa7f3db82e769d3a577f73f9b11181ca8))
+
 # [1.1.0](https://github.com/elohmeier/grafana-pi-app/compare/v1.0.1...v1.1.0) (2026-05-28)
 
 
