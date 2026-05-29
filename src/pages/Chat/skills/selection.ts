@@ -24,6 +24,12 @@ export function selectGrafanaSkills(
     activeNames.add('grafana-dashboard');
   }
 
+  for (const skill of skills) {
+    if (!activeNames.has(skill.name) && shouldActivateConfiguredSkill(prompt, skill)) {
+      activeNames.add(skill.name);
+    }
+  }
+
   const activeSkills = [...activeNames].map((name) => skillByName.get(name)).filter(isSkill);
   const toolGroups = unionToolGroups(activeSkills, BASE_TOOL_GROUPS);
 
@@ -47,6 +53,30 @@ export function extractSkillReferences(prompt: string): string[] {
 
 function shouldActivateDashboardSkill(prompt: string) {
   return DASHBOARD_INTENT.test(prompt) || DASHBOARD_WRITE_INTENT.test(prompt);
+}
+
+function shouldActivateConfiguredSkill(prompt: string, skill: GrafanaSkill) {
+  const activation = skill.activation;
+
+  if (!activation || activation.explicitOnly) {
+    return false;
+  }
+
+  const lowerPrompt = prompt.toLowerCase();
+
+  if (activation.keywords?.some((keyword) => lowerPrompt.includes(keyword.toLowerCase()))) {
+    return true;
+  }
+
+  if (activation.regex) {
+    try {
+      return new RegExp(activation.regex, 'i').test(prompt);
+    } catch {
+      return false;
+    }
+  }
+
+  return false;
 }
 
 function unionToolGroups(

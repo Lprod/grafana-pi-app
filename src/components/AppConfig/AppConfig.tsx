@@ -1,4 +1,4 @@
-import React, { ChangeEvent, FormEvent, useState } from 'react';
+import React, { ChangeEvent, FormEvent, useMemo, useState } from 'react';
 import {
   Button,
   Field,
@@ -16,6 +16,7 @@ import { css } from '@emotion/css';
 import { testIds } from '../testIds';
 import { lastValueFrom } from 'rxjs';
 import type { PiAppJsonData } from '../../types';
+import { parseCustomSkillsJson, validateCustomSkillsJson } from '../../pages/Chat/skills/configured';
 
 type State = {
   openAIBaseUrl: string;
@@ -24,6 +25,7 @@ type State = {
   openAIAPIKey: string;
   allowedDatasourceUids: string[];
   systemPromptAddendum: string;
+  customSkillsJson: string;
 };
 
 export interface AppConfigProps extends PluginConfigPageProps<AppPluginMeta<PiAppJsonData>> {}
@@ -38,11 +40,16 @@ const AppConfig = ({ plugin }: AppConfigProps) => {
     isOpenAIAPIKeySet: Boolean(jsonData?.isOpenAIAPIKeySet),
     allowedDatasourceUids: Array.isArray(jsonData?.allowedDatasourceUids) ? jsonData.allowedDatasourceUids : [],
     systemPromptAddendum: typeof jsonData?.systemPromptAddendum === 'string' ? jsonData.systemPromptAddendum : '',
+    customSkillsJson: formatCustomSkillsJson(jsonData?.customSkills),
   });
   const datasourceOptions = getPrometheusDatasourceOptions(state.allowedDatasourceUids);
+  const customSkillsError = useMemo(() => validateCustomSkillsJson(state.customSkillsJson), [state.customSkillsJson]);
 
   const isSubmitDisabled = Boolean(
-    !state.openAIBaseUrl || !state.defaultModel || (!state.isOpenAIAPIKeySet && !state.openAIAPIKey)
+    !state.openAIBaseUrl ||
+    !state.defaultModel ||
+    (!state.isOpenAIAPIKeySet && !state.openAIAPIKey) ||
+    customSkillsError
   );
 
   const onResetOpenAIAPIKey = () =>
@@ -87,17 +94,28 @@ const AppConfig = ({ plugin }: AppConfigProps) => {
     });
   };
 
+  const onChangeCustomSkillsJson = (event: ChangeEvent<HTMLTextAreaElement>) => {
+    setState({
+      ...state,
+      customSkillsJson: event.currentTarget.value,
+    });
+  };
+
   const onSubmit = (event: FormEvent) => {
     event.preventDefault();
+    const customSkills = parseCustomSkillsJson(state.customSkillsJson);
+
     updatePluginAndReload(plugin.meta.id, {
       enabled,
       pinned,
       jsonData: {
+        ...jsonData,
         openAIBaseUrl: state.openAIBaseUrl,
         defaultModel: state.defaultModel,
         isOpenAIAPIKeySet: true,
         allowedDatasourceUids: state.allowedDatasourceUids,
         systemPromptAddendum: state.systemPromptAddendum.trim(),
+        customSkills,
       },
       secureJsonData: state.isOpenAIAPIKeySet
         ? undefined
@@ -185,13 +203,32 @@ const AppConfig = ({ plugin }: AppConfigProps) => {
             onChange={onChangeAllowedDatasourceUids}
           />
         </Field>
-
-        <div className={s.marginTop}>
-          <Button type="submit" data-testid={testIds.appConfig.submit} disabled={isSubmitDisabled}>
-            Save LLM settings
-          </Button>
-        </div>
       </FieldSet>
+
+      <FieldSet label="Custom skills" className={s.marginTopXl}>
+        <Field
+          label="Custom skills JSON"
+          description="Optional non-secret skill definitions stored in jsonData. Users activate explicit skills with $skill-name."
+          invalid={Boolean(customSkillsError)}
+          error={customSkillsError}
+        >
+          <TextArea
+            className={s.customSkillsTextArea}
+            data-testid={testIds.appConfig.customSkillsJson}
+            id="custom-skills-json"
+            rows={14}
+            value={state.customSkillsJson}
+            placeholder={CUSTOM_SKILLS_PLACEHOLDER}
+            onChange={onChangeCustomSkillsJson}
+          />
+        </Field>
+      </FieldSet>
+
+      <div className={s.marginTop}>
+        <Button type="submit" data-testid={testIds.appConfig.submit} disabled={isSubmitDisabled}>
+          Save LLM settings
+        </Button>
+      </div>
     </form>
   );
 };
@@ -212,7 +249,38 @@ const getStyles = (theme: GrafanaTheme2) => ({
     max-width: 640px;
     width: 100%;
   `,
+  customSkillsTextArea: css`
+    max-width: 860px;
+    width: 100%;
+    font-family: ${theme.typography.fontFamilyMonospace};
+  `,
 });
+
+const CUSTOM_SKILLS_PLACEHOLDER = `[
+  {
+    "name": "team-runbook",
+    "description": "Use the team incident workflow and dashboard conventions.",
+    "content": "# Team Runbook\\n\\nCheck service SLOs first. Prefer existing dashboards before creating new ones.",
+    "activation": {
+      "explicitOnly": true
+    },
+    "toolGroups": ["metrics", "skillResources"],
+    "resources": [
+      {
+        "path": "references/team-runbook.md",
+        "content": "# Team Runbook\\n\\nEscalate unresolved paging incidents after 15 minutes."
+      }
+    ]
+  }
+]`;
+
+function formatCustomSkillsJson(customSkills: PiAppJsonData['customSkills']) {
+  if (!Array.isArray(customSkills) || customSkills.length === 0) {
+    return '';
+  }
+
+  return JSON.stringify(customSkills, null, 2);
+}
 
 const updatePluginAndReload = async (pluginId: string, data: Partial<PluginMeta<PiAppJsonData>>) => {
   try {

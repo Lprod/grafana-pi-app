@@ -16,7 +16,7 @@ import {
 } from './grafanaTools';
 import { formatAssistantError, type AssistantErrorView } from './llmErrors';
 import { createOpenAICompatibleModel, type PiAppJsonData } from './model';
-import { GRAFANA_SKILLS, renderGrafanaSystemPrompt, selectGrafanaSkills } from './skills';
+import { getGrafanaSkills, renderGrafanaSystemPrompt, selectGrafanaSkills } from './skills';
 import { ContentBlocks, ToolActivityPanel, ToolResultMessageBody, type ToolRunView } from './ToolRenderer';
 
 type ChatSceneObjectState = SceneObjectState;
@@ -77,6 +77,7 @@ function ChatApp() {
   const pluginMeta = usePluginMeta();
   const jsonData = useMemo(() => (pluginMeta?.jsonData ?? {}) as PiAppJsonData, [pluginMeta?.jsonData]);
   const llmModel = useMemo(() => createOpenAICompatibleModel(jsonData), [jsonData]);
+  const skills = useMemo(() => getGrafanaSkills(jsonData), [jsonData]);
   const streamFn = useCallback<StreamFn>(
     (model, context, options) =>
       streamProxy(model, context, {
@@ -115,7 +116,7 @@ function ChatApp() {
   );
   const buildSkillRuntime = useCallback(
     (prompt: string) => {
-      const selection = selectGrafanaSkills(prompt, GRAFANA_SKILLS);
+      const selection = selectGrafanaSkills(prompt, skills);
       const skillTools = createSkillTools(selection.activeSkills);
       const tools = createGrafanaToolsForSkillGroups(
         {
@@ -129,13 +130,13 @@ function ChatApp() {
 
       return {
         systemPrompt: renderGrafanaSystemPrompt({
-          skills: GRAFANA_SKILLS,
+          skills,
           activeSkillNames: selection.activeSkillNames,
         }),
         tools,
       };
     },
-    [jsonData, llmModel, streamFn, virtualJsonnetRuntime]
+    [jsonData, llmModel, skills, streamFn, virtualJsonnetRuntime]
   );
   const [agent, setAgent] = useState<Agent>();
   const agentRef = useRef<Agent>();
@@ -679,7 +680,11 @@ function ChatApp() {
               />
             ) : (
               visibleMessages.map(({ message, isStreaming }, index) => (
-                <MessageView key={messageKey(message, index, isStreaming)} message={message} isStreaming={isStreaming} />
+                <MessageView
+                  key={messageKey(message, index, isStreaming)}
+                  message={message}
+                  isStreaming={isStreaming}
+                />
               ))
             )}
             <ToolActivityPanel runs={activeToolRuns} />
@@ -1206,8 +1211,7 @@ function parseVirtualJsonnetFiles(value: unknown): Record<string, VirtualJsonnet
       version,
       checksum: typeof file.checksum === 'string' ? file.checksum : '',
       lineCount: typeof file.lineCount === 'number' ? file.lineCount : countLines(content),
-      dashboardJsonnetSize:
-        typeof file.dashboardJsonnetSize === 'number' ? file.dashboardJsonnetSize : content.length,
+      dashboardJsonnetSize: typeof file.dashboardJsonnetSize === 'number' ? file.dashboardJsonnetSize : content.length,
       ...(typeof file.updatedAt === 'string' ? { updatedAt: file.updatedAt } : {}),
     };
   }

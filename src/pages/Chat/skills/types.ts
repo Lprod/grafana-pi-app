@@ -23,8 +23,15 @@ export type BundledGrafanaSkill = {
   resources: Record<string, BundledSkillResource>;
 };
 
+export type GrafanaSkillActivation = {
+  keywords?: readonly string[];
+  regex?: string;
+  explicitOnly?: boolean;
+};
+
 export type GrafanaSkill = BundledGrafanaSkill & {
   toolGroups: readonly SkillToolGroup[];
+  activation?: GrafanaSkillActivation;
 };
 
 export type GrafanaSkillSelection = {

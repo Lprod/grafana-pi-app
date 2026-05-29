@@ -6,6 +6,7 @@ export const testIds = {
     defaultModel: 'data-testid ac-default-model',
     systemPromptAddendum: 'data-testid ac-system-prompt-addendum',
     allowedDatasourceUids: 'data-testid ac-allowed-datasource-uids',
+    customSkillsJson: 'data-testid ac-custom-skills-json',
     submit: 'data-testid ac-submit-form',
   },
   chat: {

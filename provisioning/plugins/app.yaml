@@ -11,5 +11,6 @@ apps:
       systemPromptAddendum: ''
       isOpenAIAPIKeySet: true
       allowedDatasourceUids: ['prometheus']
+      customSkills: []
     secureJsonData:
       openAIAPIKey: $__env{OPENAI_API_KEY}

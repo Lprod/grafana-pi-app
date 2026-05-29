@@ -14,6 +14,7 @@ test('should be possible to save app configuration', async ({ appConfigPage, pag
     baseURL: 'https://api.openai.example/v1',
     model: 'gpt-test',
     systemPromptAddendum: 'Prefer concise incident summaries.',
+    customSkillsJson: '[{"name":"team-runbook","description":"Team incident workflow.","content":"# Team Runbook"}]',
   });
   await saveLLMSettings(appConfigPage, page, localLLMSettings);
 });
@@ -21,7 +22,7 @@ test('should be possible to save app configuration', async ({ appConfigPage, pag
 async function saveLLMSettings(
   appConfigPage: AppConfigPage,
   page: Page,
-  settings: { apiKey: string; baseURL: string; model: string; systemPromptAddendum?: string }
+  settings: { apiKey: string; baseURL: string; model: string; systemPromptAddendum?: string; customSkillsJson?: string }
 ) {
   await page
     .getByRole('button', { name: /reset/i })
@@ -36,6 +37,10 @@ async function saveLLMSettings(
   await page.getByRole('textbox', { name: 'System prompt addendum' }).clear();
   if (settings.systemPromptAddendum) {
     await page.getByRole('textbox', { name: 'System prompt addendum' }).fill(settings.systemPromptAddendum);
+  }
+  await page.getByRole('textbox', { name: 'Custom skills JSON' }).clear();
+  if (settings.customSkillsJson) {
+    await page.getByRole('textbox', { name: 'Custom skills JSON' }).fill(settings.customSkillsJson);
   }
 
   const saveResponse = appConfigPage.waitForSettingsResponse();

@@ -20,6 +20,7 @@ Configure the app plugin from Grafana's plugin settings page:
 - `defaultModel`: Central model ID used for all assistant requests, for example `gpt-4.1`.
 - `systemPromptAddendum`: Optional central instructions appended to the built-in system prompt. Do not include secrets because this is stored in `jsonData`.
 - `allowedDatasourceUids`: Optional list of Prometheus datasource UIDs the assistant may discover, query, and reference in uploaded dashboards. Leave empty to allow all Prometheus datasources visible to the current Grafana user.
+- `customSkills`: Optional non-secret skill definitions stored in `jsonData`. Users activate explicit custom skills with `$skill-name`; admins can also configure keyword or regex activation.
 - `openAIAPIKey`: Secret API key stored in `secureJsonData`.
 
 Chat users cannot override the model, system prompt addendum, or datasource allow-list from the assistant page. The backend always uses the centrally configured model and appends the configured system prompt addendum when proxying LLM requests, and Grafana datasource tools enforce the central allow-list before querying.
@@ -57,7 +58,31 @@ The default chat toolset includes `explore_metrics` as a high-level fallback for
 
 Dashboard instructions are split into repo-local skills under `.agents/skills/<skill-name>/SKILL.md`, using the same default `SKILL.md` directory shape as local agent skill installs. `npm run generate:skills` validates those files and bundles them into `src/pages/Chat/skills/bundledSkills.generated.ts` for the frontend.
 
-The chat agent always has metric discovery tools and `explore_metrics` available. Dashboard guidance activates when the prompt asks for dashboard, panel, Jsonnet, render, or sync work, which also enables the managed dashboard and Jsonnet tool groups for that turn. New skills can be added by creating another `.agents/skills/<name>/SKILL.md`; add optional text resources under `references/`, `templates/`, or `assets/`.
+The chat agent always has metric discovery tools and `explore_metrics` available. Dashboard guidance activates when the prompt asks for dashboard, panel, Jsonnet, render, or sync work, which also enables the managed dashboard and Jsonnet tool groups for that turn. New bundled skills can be added by creating another `.agents/skills/<name>/SKILL.md`; add optional text resources under `references/`, `templates/`, or `assets/`.
+
+Admins can also add small instance-specific custom skills through plugin configuration:
+
+```json
+[
+  {
+    "name": "team-runbook",
+    "description": "Use the team incident workflow and dashboard conventions.",
+    "content": "# Team Runbook\n\nCheck service SLOs first. Prefer existing dashboards before creating new ones.",
+    "activation": {
+      "explicitOnly": true
+    },
+    "toolGroups": ["metrics", "skillResources"],
+    "resources": [
+      {
+        "path": "references/team-runbook.md",
+        "content": "# Team Runbook\n\nEscalate unresolved paging incidents after 15 minutes."
+      }
+    ]
+  }
+]
+```
+
+Custom skills are non-secret frontend configuration and are sent to the configured LLM when active. Supported custom skill tool groups are `metrics`, `dashboardRead`, `jsonnetFiles`, `managedDashboards`, `subagents`, and `skillResources`.
 
 ## Development
 
