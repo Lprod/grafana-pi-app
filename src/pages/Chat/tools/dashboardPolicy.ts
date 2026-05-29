@@ -1,9 +1,10 @@
+import { getAllowedPrometheusDatasourceUids } from './metrics';
 import type { GrafanaToolConfig } from './types';
 
 const BUILTIN_DASHBOARD_DATASOURCE_UIDS = new Set(['__expr__', '-- Mixed --', '-- Dashboard --', 'mixed', 'grafana', 'dashboard', '-100']);
 
-export function getDisallowedDashboardDatasourceUids(dashboard: unknown, toolConfig: GrafanaToolConfig): string[] {
-  const allowedUids = new Set((toolConfig.allowedDatasourceUids ?? []).filter(Boolean));
+export function getUnavailableDashboardDatasourceUids(dashboard: unknown, toolConfig: GrafanaToolConfig): string[] {
+  const allowedUids = new Set((getAllowedPrometheusDatasourceUids(toolConfig) ?? []).filter(Boolean));
   if (allowedUids.size === 0) {
     return [];
   }

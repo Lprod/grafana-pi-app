@@ -50,11 +50,15 @@ export function createMetricTools(toolConfig: MetricToolConfig): AgentTool[] {
 
 export function filterAllowedPrometheusDatasourceSettings(
   datasources: DataSourceInstanceSettings[],
-  allowedDatasourceUids?: string[]
+  allowedPrometheusDatasourceUids?: string[]
 ) {
-  const allowedUids = new Set((allowedDatasourceUids ?? []).filter(Boolean));
+  const allowedUids = new Set((allowedPrometheusDatasourceUids ?? []).filter(Boolean));
 
   return datasources.filter((ds) => ds.type === 'prometheus' && (allowedUids.size === 0 || allowedUids.has(ds.uid)));
+}
+
+export function getAllowedPrometheusDatasourceUids(toolConfig: GrafanaToolConfig) {
+  return toolConfig.allowedPrometheusDatasourceUids;
 }
 
 function makeGrafanaGetDatasourcesTool(toolConfig: GrafanaToolConfig): AgentTool {
@@ -370,7 +374,7 @@ async function runPrometheusQuerySummary(
 function getPrometheusDatasourceSettings(toolConfig: GrafanaToolConfig) {
   return filterAllowedPrometheusDatasourceSettings(
     getDataSourceSrv().getList({ metrics: true }),
-    toolConfig.allowedDatasourceUids
+    getAllowedPrometheusDatasourceUids(toolConfig)
   );
 }
 

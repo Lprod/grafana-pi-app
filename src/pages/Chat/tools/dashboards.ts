@@ -2,7 +2,7 @@ import type { AgentTool } from '@earendil-works/pi-agent-core';
 import { config } from '@grafana/runtime';
 import { Type } from 'typebox';
 import { backendFetch } from './client';
-import { getDisallowedDashboardDatasourceUids } from './dashboardPolicy';
+import { getUnavailableDashboardDatasourceUids } from './dashboardPolicy';
 import { textResult, throwIfAborted, truncateText } from './result';
 import type { DashboardSearchResult, DashboardUidParams, GrafanaToolConfig, ListDashboardsParams, ScreenshotParams, UploadDashboardParams } from './types';
 
@@ -33,9 +33,9 @@ function makeGrafanaUploadDashboardTool(toolConfig: GrafanaToolConfig): AgentToo
       if (!dashboard.title) {
         throw new Error('Dashboard JSON must include a title');
       }
-      const disallowedDatasourceUids = getDisallowedDashboardDatasourceUids(dashboard, toolConfig);
-      if (disallowedDatasourceUids.length > 0) {
-        throw new Error(`Dashboard references datasource UIDs not available to the assistant: ${disallowedDatasourceUids.join(', ')}`);
+      const unavailableDatasourceUids = getUnavailableDashboardDatasourceUids(dashboard, toolConfig);
+      if (unavailableDatasourceUids.length > 0) {
+        throw new Error(`Dashboard references datasource UIDs not available to the assistant: ${unavailableDatasourceUids.join(', ')}`);
       }
 
       dashboard.uid = normalizeDashboardUid(dashboard.uid, String(dashboard.title));

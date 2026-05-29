@@ -24,7 +24,7 @@ export type PiAppJsonData = {
   openAIBaseUrl?: string;
   defaultModel?: string;
   isOpenAIAPIKeySet?: boolean;
-  allowedDatasourceUids?: string[];
+  allowedPrometheusDatasourceUids?: string[];
   allowedRqliteDatasourceUids?: string[];
   systemPromptAddendum?: string;
   customSkills?: PiAppCustomSkill[];

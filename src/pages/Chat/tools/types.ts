@@ -4,7 +4,7 @@ import type { DataSourceApi, DataSourceInstanceSettings } from '@grafana/data';
 import type { PiAppJsonData } from '../../../types';
 import type { SkillToolGroup } from '../skills/types';
 
-export type GrafanaToolConfig = Pick<PiAppJsonData, 'allowedDatasourceUids' | 'allowedRqliteDatasourceUids'>;
+export type GrafanaToolConfig = Pick<PiAppJsonData, 'allowedPrometheusDatasourceUids' | 'allowedRqliteDatasourceUids'>;
 
 export type GrafanaToolRuntime = {
   model: Model<any>;

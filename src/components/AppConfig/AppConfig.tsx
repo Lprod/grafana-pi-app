@@ -23,7 +23,7 @@ type State = {
   defaultModel: string;
   isOpenAIAPIKeySet: boolean;
   openAIAPIKey: string;
-  allowedDatasourceUids: string[];
+  allowedPrometheusDatasourceUids: string[];
   allowedRqliteDatasourceUids: string[];
   systemPromptAddendum: string;
   customSkillsJson: string;
@@ -39,14 +39,16 @@ const AppConfig = ({ plugin }: AppConfigProps) => {
     defaultModel: jsonData?.defaultModel || 'gpt-4.1',
     openAIAPIKey: '',
     isOpenAIAPIKeySet: Boolean(jsonData?.isOpenAIAPIKeySet),
-    allowedDatasourceUids: Array.isArray(jsonData?.allowedDatasourceUids) ? jsonData.allowedDatasourceUids : [],
+    allowedPrometheusDatasourceUids: Array.isArray(jsonData?.allowedPrometheusDatasourceUids)
+      ? jsonData.allowedPrometheusDatasourceUids
+      : [],
     allowedRqliteDatasourceUids: Array.isArray(jsonData?.allowedRqliteDatasourceUids)
       ? jsonData.allowedRqliteDatasourceUids
       : [],
     systemPromptAddendum: typeof jsonData?.systemPromptAddendum === 'string' ? jsonData.systemPromptAddendum : '',
     customSkillsJson: formatCustomSkillsJson(jsonData?.customSkills),
   });
-  const datasourceOptions = getPrometheusDatasourceOptions(state.allowedDatasourceUids);
+  const datasourceOptions = getPrometheusDatasourceOptions(state.allowedPrometheusDatasourceUids);
   const rqliteDatasourceOptions = getRqliteDatasourceOptions(state.allowedRqliteDatasourceUids);
   const customSkillsError = useMemo(() => validateCustomSkillsJson(state.customSkillsJson), [state.customSkillsJson]);
 
@@ -88,7 +90,7 @@ const AppConfig = ({ plugin }: AppConfigProps) => {
   const onChangeAllowedDatasourceUids = (options: Array<ComboboxOption<string>>) => {
     setState({
       ...state,
-      allowedDatasourceUids: options.map((option) => option.value),
+      allowedPrometheusDatasourceUids: options.map((option) => option.value),
     });
   };
 
@@ -121,11 +123,10 @@ const AppConfig = ({ plugin }: AppConfigProps) => {
       enabled,
       pinned,
       jsonData: {
-        ...jsonData,
         openAIBaseUrl: state.openAIBaseUrl,
         defaultModel: state.defaultModel,
         isOpenAIAPIKeySet: true,
-        allowedDatasourceUids: state.allowedDatasourceUids,
+        allowedPrometheusDatasourceUids: state.allowedPrometheusDatasourceUids,
         allowedRqliteDatasourceUids: state.allowedRqliteDatasourceUids,
         systemPromptAddendum: state.systemPromptAddendum.trim(),
         customSkills,
@@ -207,10 +208,10 @@ const AppConfig = ({ plugin }: AppConfigProps) => {
         >
           <MultiCombobox
             width={60}
-            id="allowed-datasource-uids"
-            data-testid={testIds.appConfig.allowedDatasourceUids}
+            id="allowed-prometheus-datasource-uids"
+            data-testid={testIds.appConfig.allowedPrometheusDatasourceUids}
             options={datasourceOptions}
-            value={state.allowedDatasourceUids}
+            value={state.allowedPrometheusDatasourceUids}
             placeholder="All visible Prometheus datasources"
             isClearable
             onChange={onChangeAllowedDatasourceUids}

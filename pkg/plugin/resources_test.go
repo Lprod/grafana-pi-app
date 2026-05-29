@@ -223,7 +223,7 @@ func TestOpenAIRequestKeepsUserAndToolContentNonEmpty(t *testing.T) {
 }
 
 func TestManagedDashboardRenderUsesVendoredJsonnetAndManagerMetadata(t *testing.T) {
-	jsonData, _ := json.Marshal(appSettings{AllowedDatasourceUIDs: []string{"prom-main"}})
+	jsonData, _ := json.Marshal(appSettings{AllowedPrometheusDatasourceUIDs: []string{"prom-main"}})
 	inst, err := NewApp(context.Background(), backend.AppInstanceSettings{JSONData: jsonData})
 	if err != nil {
 		t.Fatalf("new app: %s", err)
@@ -321,7 +321,7 @@ g.dashboard.new('API Service RED')
 }
 
 func TestManagedDashboardRenderStoresModelAuthoredJsonnet(t *testing.T) {
-	jsonData, _ := json.Marshal(appSettings{AllowedDatasourceUIDs: []string{"prom-main"}})
+	jsonData, _ := json.Marshal(appSettings{AllowedPrometheusDatasourceUIDs: []string{"prom-main"}})
 	inst, err := NewApp(context.Background(), backend.AppInstanceSettings{JSONData: jsonData})
 	if err != nil {
 		t.Fatalf("new app: %s", err)
@@ -562,7 +562,7 @@ func TestVirtualJsonnetFileEditRejectsInvalidJsonnet(t *testing.T) {
 }
 
 func TestVirtualJsonnetFileRepairGenericGrafonnetDashboard(t *testing.T) {
-	jsonData, _ := json.Marshal(appSettings{AllowedDatasourceUIDs: []string{"prometheus"}})
+	jsonData, _ := json.Marshal(appSettings{AllowedPrometheusDatasourceUIDs: []string{"prometheus"}})
 	inst, err := NewApp(context.Background(), backend.AppInstanceSettings{JSONData: jsonData})
 	if err != nil {
 		t.Fatalf("new app: %s", err)
@@ -675,7 +675,7 @@ g.dashboard.new(
 }
 
 func TestVirtualJsonnetFileRepairDashboardWithPanelsMixinAndLocalPanels(t *testing.T) {
-	jsonData, _ := json.Marshal(appSettings{AllowedDatasourceUIDs: []string{"prometheus"}})
+	jsonData, _ := json.Marshal(appSettings{AllowedPrometheusDatasourceUIDs: []string{"prometheus"}})
 	inst, err := NewApp(context.Background(), backend.AppInstanceSettings{JSONData: jsonData})
 	if err != nil {
 		t.Fatalf("new app: %s", err)
@@ -767,7 +767,7 @@ g.dashboard.new(
 }
 
 func TestManagedDashboardRenderAutoRepairsVirtualJsonnetFile(t *testing.T) {
-	jsonData, _ := json.Marshal(appSettings{AllowedDatasourceUIDs: []string{"prometheus"}})
+	jsonData, _ := json.Marshal(appSettings{AllowedPrometheusDatasourceUIDs: []string{"prometheus"}})
 	inst, err := NewApp(context.Background(), backend.AppInstanceSettings{JSONData: jsonData})
 	if err != nil {
 		t.Fatalf("new app: %s", err)
@@ -891,7 +891,7 @@ func TestManagedDashboardRenderFromVirtualJsonnetFile(t *testing.T) {
 }
 
 func TestManagedDashboardRenderRejectsDisallowedDatasource(t *testing.T) {
-	jsonData, _ := json.Marshal(appSettings{AllowedDatasourceUIDs: []string{"prom-main"}})
+	jsonData, _ := json.Marshal(appSettings{AllowedPrometheusDatasourceUIDs: []string{"prom-main"}})
 	inst, err := NewApp(context.Background(), backend.AppInstanceSettings{JSONData: jsonData})
 	if err != nil {
 		t.Fatalf("new app: %s", err)
@@ -995,7 +995,7 @@ func TestManagedDashboardSourceReturnsStoredJsonnet(t *testing.T) {
 }
 
 func TestManagedDashboardDatasourceAllowListRejectsVariables(t *testing.T) {
-	jsonData, _ := json.Marshal(appSettings{AllowedDatasourceUIDs: []string{"prom-main"}})
+	jsonData, _ := json.Marshal(appSettings{AllowedPrometheusDatasourceUIDs: []string{"prom-main"}})
 	inst, err := NewApp(context.Background(), backend.AppInstanceSettings{JSONData: jsonData})
 	if err != nil {
 		t.Fatalf("new app: %s", err)

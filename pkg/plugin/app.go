@@ -31,11 +31,11 @@ type App struct {
 }
 
 type appSettings struct {
-	OpenAIBaseURL         string   `json:"openAIBaseUrl"`
-	DefaultModel          string   `json:"defaultModel"`
-	AllowedDatasourceUIDs []string `json:"allowedDatasourceUids"`
-	SystemPromptAddendum  string   `json:"systemPromptAddendum"`
-	OpenAIAPIKey          string
+	OpenAIBaseURL                   string   `json:"openAIBaseUrl"`
+	DefaultModel                    string   `json:"defaultModel"`
+	AllowedPrometheusDatasourceUIDs []string `json:"allowedPrometheusDatasourceUids"`
+	SystemPromptAddendum            string   `json:"systemPromptAddendum"`
+	OpenAIAPIKey                    string
 }
 
 // NewApp creates a new example *App instance.

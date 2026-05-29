@@ -6,7 +6,7 @@ export {
   DEFAULT_JSONNET_FILE_PATH,
   filterAllowedPrometheusDatasourceSettings,
   filterAllowedRqliteDatasourceSettings,
-  getDisallowedDashboardDatasourceUids,
+  getUnavailableDashboardDatasourceUids,
   normalizeJsonnetPath,
 } from './tools';
 export type {

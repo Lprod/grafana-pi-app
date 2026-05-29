@@ -8,7 +8,7 @@ import { createRqliteTools, filterAllowedRqliteDatasourceSettings } from './rqli
 import { createSubagentTools } from './subagents';
 import type { CreateGrafanaToolsOptions, GrafanaToolRegistry, SkillToolGroup } from './types';
 
-export { getDisallowedDashboardDatasourceUids } from './dashboardPolicy';
+export { getUnavailableDashboardDatasourceUids } from './dashboardPolicy';
 export { DEFAULT_JSONNET_FILE_PATH, normalizeJsonnetPath } from './jsonnetFiles';
 export { filterAllowedPrometheusDatasourceSettings, filterAllowedRqliteDatasourceSettings };
 export { createSkillTools } from './skills';

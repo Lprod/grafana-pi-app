@@ -510,7 +510,7 @@ func (a *App) disallowedDatasourceUIDs(dashboard any) []string {
 
 func (a *App) allowedDatasourceSet() map[string]bool {
 	result := map[string]bool{}
-	for _, uid := range a.settings.AllowedDatasourceUIDs {
+	for _, uid := range a.settings.AllowedPrometheusDatasourceUIDs {
 		uid = strings.TrimSpace(uid)
 		if uid != "" {
 			result[uid] = true

@@ -20,7 +20,7 @@ Configure the app plugin from Grafana's plugin settings page:
 - `openAIBaseUrl`: OpenAI-compatible API base URL, for example `https://api.openai.com/v1`.
 - `defaultModel`: Central model ID used for all assistant requests, for example `gpt-4.1`.
 - `systemPromptAddendum`: Optional central instructions appended to the built-in system prompt. Do not include secrets because this is stored in `jsonData`.
-- `allowedDatasourceUids`: Optional list of Prometheus datasource UIDs the assistant may discover, query, and reference in uploaded dashboards. Leave empty to allow all Prometheus datasources visible to the current Grafana user.
+- `allowedPrometheusDatasourceUids`: Optional list of Prometheus datasource UIDs the assistant may discover, query, and reference in uploaded dashboards. Leave empty to allow all Prometheus datasources visible to the current Grafana user.
 - `allowedRqliteDatasourceUids`: Optional list of rqlite datasource UIDs the assistant may discover and query. Leave empty to allow all rqlite datasources visible to the current Grafana user.
 - `customSkills`: Optional non-secret skill definitions stored in `jsonData`. Users activate explicit custom skills with `$skill-name`; admins can also configure keyword or regex activation.
 - `openAIAPIKey`: Secret API key stored in `secureJsonData`.

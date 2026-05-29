@@ -42,7 +42,7 @@ import {
   createSkillTools,
   filterAllowedPrometheusDatasourceSettings,
   filterAllowedRqliteDatasourceSettings,
-  getDisallowedDashboardDatasourceUids,
+  getUnavailableDashboardDatasourceUids,
   type VirtualJsonnetFileSnapshot,
 } from './grafanaTools';
 import { GRAFANA_SKILLS } from './skills';
@@ -76,7 +76,7 @@ describe('grafana datasource tool policy', () => {
   });
 
   it('filters datasource discovery to configured UIDs', async () => {
-    const tool = getTool(createGrafanaTools({ allowedDatasourceUids: ['prom-b'] }), 'list_datasources');
+    const tool = getTool(createGrafanaTools({ allowedPrometheusDatasourceUids: ['prom-b'] }), 'list_datasources');
 
     const result = await tool.execute('call-1', {}, undefined);
 
@@ -97,7 +97,7 @@ describe('grafana datasource tool policy', () => {
       getResource: jest.fn().mockResolvedValue({ data: ['up'] }),
     };
     mockDataSourceSrv.get.mockResolvedValue(dataSource);
-    const tool = getTool(createGrafanaTools({ allowedDatasourceUids: ['prom-b'] }), 'list_metrics');
+    const tool = getTool(createGrafanaTools({ allowedPrometheusDatasourceUids: ['prom-b'] }), 'list_metrics');
 
     const result = await tool.execute('call-1', {}, undefined);
 
@@ -117,7 +117,7 @@ describe('grafana datasource tool policy', () => {
       }),
     };
     mockDataSourceSrv.get.mockResolvedValue(dataSource);
-    const tool = getTool(createGrafanaTools({ allowedDatasourceUids: ['prom-b'] }), 'inspect_metric_series');
+    const tool = getTool(createGrafanaTools({ allowedPrometheusDatasourceUids: ['prom-b'] }), 'inspect_metric_series');
 
     const result = await tool.execute('call-1', { match: 'http_requests_total', limit: 1 }, undefined);
     const body = JSON.parse(result.content[0].text);
@@ -136,7 +136,7 @@ describe('grafana datasource tool policy', () => {
       query: jest.fn().mockResolvedValue({ state: 'Done', data: [] }),
     };
     mockDataSourceSrv.get.mockResolvedValue(dataSource);
-    const tool = getTool(createGrafanaTools({ allowedDatasourceUids: ['prom-b'] }), 'query_prometheus');
+    const tool = getTool(createGrafanaTools({ allowedPrometheusDatasourceUids: ['prom-b'] }), 'query_prometheus');
 
     const result = await tool.execute(
       'call-1',
@@ -164,7 +164,7 @@ describe('grafana datasource tool policy', () => {
       query: jest.fn().mockResolvedValue({ state: 'Done', data: [frame] }),
     };
     mockDataSourceSrv.get.mockResolvedValue(dataSource);
-    const tool = getTool(createGrafanaTools({ allowedDatasourceUids: ['prom-b'] }), 'query_prometheus');
+    const tool = getTool(createGrafanaTools({ allowedPrometheusDatasourceUids: ['prom-b'] }), 'query_prometheus');
 
     const result = await tool.execute(
       'call-1',
@@ -215,7 +215,7 @@ describe('grafana datasource tool policy', () => {
       query: jest.fn().mockResolvedValue({ state: 'Done', data: [frame] }),
     };
     mockDataSourceSrv.get.mockResolvedValue(dataSource);
-    const tool = getTool(createGrafanaTools({ allowedDatasourceUids: ['prom-b'] }), 'query_prometheus');
+    const tool = getTool(createGrafanaTools({ allowedPrometheusDatasourceUids: ['prom-b'] }), 'query_prometheus');
 
     const result = await tool.execute(
       'call-1',
@@ -243,7 +243,7 @@ describe('grafana datasource tool policy', () => {
   });
 
   it('rejects an explicit datasource UID outside the allow-list', async () => {
-    const tool = getTool(createGrafanaTools({ allowedDatasourceUids: ['prom-b'] }), 'list_metrics');
+    const tool = getTool(createGrafanaTools({ allowedPrometheusDatasourceUids: ['prom-b'] }), 'list_metrics');
 
     await expect(tool.execute('call-1', { datasourceUid: 'prom-a' }, undefined)).rejects.toThrow(
       'Datasource is not available to the assistant: prom-a'
@@ -361,11 +361,11 @@ describe('grafana datasource tool policy', () => {
       ],
     };
     const uploadTool = getTool(
-      createGrafanaTools({ allowedDatasourceUids: ['prom-a'], includeAdHocDashboardTools: true }),
+      createGrafanaTools({ allowedPrometheusDatasourceUids: ['prom-a'], includeAdHocDashboardTools: true }),
       'upload_dashboard'
     );
 
-    expect(getDisallowedDashboardDatasourceUids(dashboard, { allowedDatasourceUids: ['prom-a'] })).toEqual([
+    expect(getUnavailableDashboardDatasourceUids(dashboard, { allowedPrometheusDatasourceUids: ['prom-a'] })).toEqual([
       '$datasource',
       'prom-b',
     ]);
@@ -386,7 +386,7 @@ describe('grafana datasource tool policy', () => {
       })
     );
     (getBackendSrv as jest.Mock).mockReturnValue({ fetch });
-    const tool = getTool(createGrafanaTools({ allowedDatasourceUids: ['prom-a'] }), 'sync_dashboard');
+    const tool = getTool(createGrafanaTools({ allowedPrometheusDatasourceUids: ['prom-a'] }), 'sync_dashboard');
     const source = "{ title: 'Direct Jsonnet', uid: 'direct-jsonnet', panels: [] }";
 
     const result = await tool.execute('call-1', { dashboard_jsonnet: source }, undefined);
@@ -712,7 +712,7 @@ describe('grafana datasource tool policy', () => {
       }))
     );
     (getBackendSrv as jest.Mock).mockReturnValue({ fetch });
-    const tool = getTool(createGrafanaTools({ allowedDatasourceUids: ['prom-a'] }), 'sync_dashboard');
+    const tool = getTool(createGrafanaTools({ allowedPrometheusDatasourceUids: ['prom-a'] }), 'sync_dashboard');
 
     await expect(tool.execute('call-1', { dashboard_jsonnet: 'let textPanel() = {}' }, undefined)).rejects.toThrow(
       'Grafana request failed (400 Bad Request) while calling POST /api/plugins/g42-pi-app/resources/managed-dashboards/sync: jsonnet compilation failed: dashboard.jsonnet:3:5-14 Did not expect: (IDENTIFIER, "textPanel")'
