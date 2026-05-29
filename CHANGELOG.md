@@ -1,3 +1,11 @@
+# [1.3.0](https://github.com/elohmeier/grafana-pi-app/compare/v1.2.0...v1.3.0) (2026-05-29)
+
+
+### Features
+
+* **config:** add system prompt addendum ([30e07fb](https://github.com/elohmeier/grafana-pi-app/commit/30e07fbcddad06eca7e952343a0bfeeaf87eb2e4))
+* **skills:** add configurable custom skills ([1b76806](https://github.com/elohmeier/grafana-pi-app/commit/1b76806be3532575b42b1a3ab475f2ccbab66c74))
+
 # [1.2.0](https://github.com/elohmeier/grafana-pi-app/compare/v1.1.0...v1.2.0) (2026-05-29)
 
 
