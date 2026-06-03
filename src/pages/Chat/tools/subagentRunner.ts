@@ -1,4 +1,4 @@
-import type { AgentEvent, AgentMessage, AgentTool } from '@earendil-works/pi-agent-core';
+import type { AgentEvent, AgentMessage, AgentTool, AgentToolResult } from '@earendil-works/pi-agent-core';
 import { textResult, truncateText, type TextToolResult } from './result';
 import type { GrafanaToolRuntime } from './types';
 
@@ -10,6 +10,8 @@ export type SubagentToolCall = {
   name: string;
   args: unknown;
   status: SubagentRunStatus;
+  partialResult?: AgentToolResult<any>;
+  result?: AgentToolResult<any>;
   text?: string;
   isError?: boolean;
 };
@@ -172,6 +174,7 @@ function handleChildEvent(event: AgentEvent, toolCalls: Map<string, SubagentTool
       name: event.toolName,
       args: event.args,
       status: 'running',
+      partialResult: event.partialResult,
       text: getContentText(event.partialResult?.content),
       isError: false,
     });
@@ -186,6 +189,7 @@ function handleChildEvent(event: AgentEvent, toolCalls: Map<string, SubagentTool
       name: event.toolName,
       args: existing?.args,
       status: event.isError ? 'failed' : 'completed',
+      result: event.result,
       text: getContentText(event.result?.content),
       isError: event.isError,
     });

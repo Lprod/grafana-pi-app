@@ -381,6 +381,134 @@ describe('ToolRenderer', () => {
     expect(screen.getByTestId('angle-down')).toBeInTheDocument();
   });
 
+  it('renders nested explore_metrics Prometheus results with the structured renderer', () => {
+    const rangeQuery = 'rate(http_requests_total[5m])';
+    const instantQuery = 'up';
+    const batchResult = {
+      datasourceUid: 'prometheus',
+      queryCount: 2,
+      truncatedQueries: false,
+      results: [
+        {
+          datasourceUid: 'prometheus',
+          query: rangeQuery,
+          queryType: 'range',
+          interval: '30s',
+          range: {
+            from: '2026-05-28T10:00:00.000Z',
+            to: '2026-05-28T11:00:00.000Z',
+            raw: { from: 'now-1h', to: 'now' },
+          },
+          frameCount: 1,
+          totalSeries: 1,
+          truncatedSeries: false,
+          notices: [],
+          executedQueryStrings: [],
+          series: [
+            {
+              name: 'http_requests_total',
+              labels: { job: 'api' },
+              points: 120,
+              nonNullPoints: 120,
+              nullPoints: 0,
+              last: { value: 2 },
+            },
+          ],
+        },
+        {
+          datasourceUid: 'prometheus',
+          query: instantQuery,
+          queryType: 'instant',
+          interval: '1m',
+          frameCount: 1,
+          totalSeries: 1,
+          truncatedSeries: false,
+          notices: [],
+          executedQueryStrings: [],
+          series: [
+            {
+              name: 'up{job="api"}',
+              labels: { job: 'api' },
+              points: 1,
+              nonNullPoints: 1,
+              nullPoints: 0,
+              last: { value: 1 },
+            },
+          ],
+        },
+      ],
+    };
+    const details = {
+      type: 'subagent',
+      agent: 'metrics',
+      status: 'completed',
+      task: 'Validate PromQL.',
+      toolNames: ['query_prometheus'],
+      toolCalls: [
+        {
+          id: 'tool-1',
+          name: 'query_prometheus',
+          args: {
+            datasourceUid: 'prometheus',
+            queries: [
+              { query: rangeQuery, type: 'range', start: 'now-1h', end: 'now' },
+              { query: instantQuery, type: 'instant' },
+            ],
+          },
+          status: 'completed',
+          text: JSON.stringify(batchResult, null, 2),
+        },
+      ],
+      usage: {
+        turns: 1,
+        input: 10,
+        output: 4,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 14,
+        cost: 0,
+      },
+      finalOutput: 'PromQL validated.',
+    };
+
+    const { container } = render(
+      <ToolResultMessageBody
+        toolName="explore_metrics"
+        content={[{ type: 'text', text: 'PromQL validated.' }]}
+        details={details}
+      />
+    );
+
+    expect(screen.queryByTestId('prometheus-timeseries-panel')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByText('query_prometheus'));
+
+    expect(container.textContent).toContain('2 of 2 Prometheus queries summarized');
+    expect(container.textContent).toContain('Query 1');
+    expect(container.textContent).toContain(rangeQuery);
+    expect(container.textContent).toContain('range | 1 series | 30s');
+    expect(screen.getByTestId('prometheus-timeseries-panel')).toBeInTheDocument();
+    expect(container.textContent).not.toContain('"queryCount"');
+  });
+
+  it('renders failed sync_dashboard results as error text instead of a successful action card', () => {
+    const errorText =
+      'Grafana request failed (502 Bad Gateway) while calling POST api/plugins/g42-pi-app/resources/managed-dashboards/sync: PluginAppClientSecret not set in config';
+
+    const { container } = render(
+      <ToolResultMessageBody
+        toolName="sync_dashboard"
+        content={[{ type: 'text', text: errorText }]}
+        details={{}}
+        isError
+      />
+    );
+
+    expect(container.textContent).toContain(errorText);
+    expect(container.textContent).toContain('failed');
+    expect(container.textContent).not.toContain('Managed dashboard synced');
+  });
+
   it('renders a time series panel for range query visualization details', () => {
     const query = 'rate(http_requests_total[5m])';
     const content = [

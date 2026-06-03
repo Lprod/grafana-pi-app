@@ -425,6 +425,34 @@ func TestOpenAIRequestKeepsUserAndToolContentNonEmpty(t *testing.T) {
 	}
 }
 
+func TestOpenAIRequestPrefixesFailedToolResults(t *testing.T) {
+	app := App{settings: appSettings{DefaultModel: "gpt-default"}}
+
+	payload := app.openAIRequest(proxyStreamRequest{
+		Context: proxyContext{
+			Messages: []proxyMessage{
+				{
+					Role:       "toolResult",
+					ToolCallID: "call_1",
+					ToolName:   "sync_dashboard",
+					Content: json.RawMessage(
+						`[{"type":"text","text":"Grafana request failed (502 Bad Gateway): PluginAppClientSecret not set in config"}]`,
+					),
+					IsError: true,
+				},
+			},
+		},
+	})
+
+	if len(payload.Messages) != 1 {
+		t.Fatalf("expected 1 message, got %d", len(payload.Messages))
+	}
+	expected := "TOOL ERROR [sync_dashboard]: Grafana request failed (502 Bad Gateway): PluginAppClientSecret not set in config"
+	if payload.Messages[0].Content != expected {
+		t.Fatalf("unexpected failed tool content:\nwant: %q\n got: %q", expected, payload.Messages[0].Content)
+	}
+}
+
 func TestManagedDashboardRenderUsesVendoredJsonnetAndManagerMetadata(t *testing.T) {
 	jsonData, _ := json.Marshal(appSettings{AllowedPrometheusDatasourceUIDs: []string{"prom-main"}})
 	inst, err := NewApp(context.Background(), backend.AppInstanceSettings{JSONData: jsonData})

@@ -38,6 +38,7 @@ type proxyMessage struct {
 	Content    json.RawMessage `json:"content"`
 	ToolCallID string          `json:"toolCallId,omitempty"`
 	ToolName   string          `json:"toolName,omitempty"`
+	IsError    bool            `json:"isError,omitempty"`
 }
 
 type proxyTool struct {
@@ -415,11 +416,23 @@ func convertMessage(message proxyMessage) openAIMessage {
 			Role:       "tool",
 			ToolCallID: message.ToolCallID,
 			Name:       message.ToolName,
-			Content:    nonEmptyContent(message.Content, "(empty tool result)"),
+			Content:    toolResultContent(message),
 		}
 	default:
 		return openAIMessage{}
 	}
+}
+
+func toolResultContent(message proxyMessage) string {
+	text := nonEmptyContent(message.Content, "(empty tool result)")
+	if !message.IsError {
+		return text
+	}
+	name := strings.TrimSpace(message.ToolName)
+	if name == "" {
+		name = "tool"
+	}
+	return fmt.Sprintf("TOOL ERROR [%s]: %s", name, text)
 }
 
 func nonEmptyContent(raw json.RawMessage, fallback string) string {

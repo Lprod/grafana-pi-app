@@ -105,7 +105,7 @@ export function ToolResultMessageBody({
 }) {
   const styles = useStyles2(getToolStyles);
   const subagentDetails = asSubagentDetails(details);
-  const structuredResult = renderStructuredToolResult(toolName, details, content);
+  const structuredResult = isError ? undefined : renderStructuredToolResult(toolName, details, content);
 
   if (subagentDetails) {
     return (
@@ -898,16 +898,55 @@ function SubagentDetailsView({ details, compact }: { details: SubagentRunDetails
 
 function SubagentToolCallRow({ call }: { call: SubagentToolCall }) {
   const styles = useStyles2(getToolStyles);
+  const [isOpen, setIsOpen] = useState(false);
+  const toolResult = call.result ?? call.partialResult;
+  const resultContent = toolResult?.content ?? contentFromLegacyToolText(call.text);
+  const resultDetails = toolResult?.details;
+  const isStreaming = call.status === 'running';
+
   return (
-    <details className={cx(styles.toolStep, call.status === 'failed' && styles.toolStepError)}>
-      <summary>
+    <details
+      className={cx(styles.toolStep, call.status === 'failed' && styles.toolStepError)}
+      open={isOpen}
+    >
+      <summary
+        aria-expanded={isOpen}
+        onClick={(event) => {
+          event.preventDefault();
+          setIsOpen((open) => !open);
+        }}
+      >
         <span>{call.status === 'running' ? 'Running' : call.status === 'failed' ? 'Failed' : 'Done'}</span>
         <strong>{call.name}</strong>
       </summary>
-      <pre>{formatJson(call.args)}</pre>
-      {call.text && <div className={styles.toolStepText}>{call.text}</div>}
+      {isOpen && (
+        <div className={styles.toolStepBody}>
+          {renderStructuredToolCall(call.name, call.args, undefined, isStreaming) ?? (
+            <pre className={styles.toolCallJson}>{formatJson(call.args)}</pre>
+          )}
+          {resultContent && (
+            <div className={cx(styles.toolStepResult, call.isError && styles.toolStepResultError)}>
+              {renderStructuredToolResult(call.name, resultDetails, resultContent) ?? (
+                <>
+                  <ContentBlocks content={resultContent} isStreaming={isStreaming} />
+                  {hasDetails(resultDetails) && (
+                    <details className={styles.collapsible}>
+                      <summary>Details</summary>
+                      <pre>{formatJson(resultDetails)}</pre>
+                    </details>
+                  )}
+                </>
+              )}
+            </div>
+          )}
+        </div>
+      )}
     </details>
   );
+}
+
+function contentFromLegacyToolText(text: string | undefined) {
+  return text ? [{ type: 'text', text }] : undefined;
 }
 
 function renderStructuredToolResult(
@@ -940,7 +979,10 @@ function renderStructuredToolResult(
     return (
       <PrometheusQueryResultView
         result={prometheusQuery}
-        visualization={asPrometheusTimeseriesVisualization(toolName, details)}
+        visualization={
+          asPrometheusTimeseriesVisualization(toolName, details) ??
+          prometheusTimeseriesVisualizationFromSummary(prometheusQuery)
+        }
       />
     );
   }
@@ -2662,8 +2704,11 @@ function asDashboardAction(toolName: string | undefined, details: unknown): Dash
 
   if (toolName === 'sync_dashboard' || toolName === 'grafana_sync_managed_dashboard') {
     const status = stringField(details, 'status');
+    if (!status) {
+      return undefined;
+    }
     return {
-      title: `Managed dashboard ${status ?? 'synced'}`,
+      title: `Managed dashboard ${status}`,
       status,
       uid: stringField(details, 'uid'),
       url: stringField(details, 'url'),
@@ -3498,6 +3543,18 @@ const getToolStyles = (theme: GrafanaTheme2) => ({
   }),
   toolStepError: css({
     borderLeftColor: theme.colors.error.border,
+  }),
+  toolStepBody: css({
+    display: 'grid',
+    gap: theme.spacing(1),
+    minWidth: 0,
+    marginTop: theme.spacing(1),
+  }),
+  toolStepResult: css({
+    minWidth: 0,
+  }),
+  toolStepResultError: css({
+    color: theme.colors.error.text,
   }),
   toolStepText: css({
     marginTop: theme.spacing(1),
