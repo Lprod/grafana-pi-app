@@ -1,3 +1,10 @@
+## [2.2.2](https://github.com/elohmeier/grafana-pi-app/compare/v2.2.1...v2.2.2) (2026-06-03)
+
+
+### Bug Fixes
+
+* improve tool renderer & error handling ([3578bdd](https://github.com/elohmeier/grafana-pi-app/commit/3578bdd4fcdae15fc10b1d466dcbd01c4ed47bc8))
+
 ## [2.2.1](https://github.com/elohmeier/grafana-pi-app/compare/v2.2.0...v2.2.1) (2026-05-29)
 
 
