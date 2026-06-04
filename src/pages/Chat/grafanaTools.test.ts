@@ -31,6 +31,30 @@ jest.mock('typebox', () => ({
   },
 }));
 
+jest.mock('./tools/subagentRunner', () => ({
+  runGrafanaSubagent: jest.fn(async (options) => ({
+    content: [{ type: 'text', text: 'mock subagent' }],
+    details: {
+      type: 'subagent',
+      agent: options.kind,
+      status: 'completed',
+      task: options.task,
+      toolNames: options.tools.map((tool: AgentTool) => tool.name),
+      toolCalls: [],
+      usage: {
+        turns: 0,
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        cost: 0,
+      },
+      finalOutput: 'mock subagent',
+    },
+  })),
+}));
+
 import type { AgentTool } from '@earendil-works/pi-agent-core';
 import type { DataFrame, DataSourceInstanceSettings } from '@grafana/data';
 import { getBackendSrv } from '@grafana/runtime';
@@ -46,6 +70,7 @@ import {
   type VirtualJsonnetFileSnapshot,
 } from './grafanaTools';
 import { GRAFANA_SKILLS } from './skills';
+import { runGrafanaSubagent } from './tools/subagentRunner';
 
 const datasourceSettings = [
   { name: 'Prometheus A', uid: 'prom-a', type: 'prometheus', isDefault: true },
@@ -578,6 +603,62 @@ describe('grafana datasource tool policy', () => {
     expect(fetch).not.toHaveBeenCalled();
   });
 
+  it('normalizes local dashboard wrapper drafts before writing Jsonnet', async () => {
+    const runtime = createVirtualJsonnetRuntime('session-normalize');
+    const source = `local dashboard = {
+  title: 'HTTP Request Rate & Errors',
+  uid: 'http-request-rate-errors',
+  panels: [
+    {
+      title: 'Request rate',
+      type: 'timeseries',
+      targets: [{ expr: 'sum(rate(http_requests_total[5m]))' }],
+    },
+  ],
+}
+
+{ dashboard: dashboard }`;
+    const normalized = `{
+  title: 'HTTP Request Rate & Errors',
+  uid: 'http-request-rate-errors',
+  panels: [
+    {
+      title: 'Request rate',
+      type: 'timeseries',
+      targets: [{ expr: 'sum(rate(http_requests_total[5m]))' }],
+    },
+  ],
+}
+`;
+    const fetch = jest.fn().mockReturnValue(
+      of({
+        data: {
+          path: 'dashboard.jsonnet',
+          version: 1,
+          checksum: 'sha256:normalized',
+          lineCount: 10,
+          dashboardJsonnetSize: normalized.length,
+          dashboard_jsonnet: normalized,
+        },
+      })
+    );
+    (getBackendSrv as jest.Mock).mockReturnValue({ fetch });
+    const tool = getTool(createGrafanaTools({ virtualJsonnetFiles: runtime }), 'write_jsonnet');
+
+    await tool.execute('call-1', { content: source }, undefined);
+
+    expect(fetch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: {
+          sessionId: 'session-normalize',
+          path: 'dashboard.jsonnet',
+          content: normalized,
+        },
+      })
+    );
+    expect(runtime.getFile('dashboard.jsonnet')?.content).toBe(normalized);
+  });
+
   it('repairs a session virtual Jsonnet file without returning full source to the model', async () => {
     const runtime = createVirtualJsonnetRuntime('session-fix');
     const source = "g.dashboard.new(title='Bad', uid='bad', panels=[])";
@@ -803,7 +884,7 @@ describe('grafana datasource tool policy', () => {
     );
   });
 
-  it('keeps metrics exploration available and does not expose Jsonnet exploration', () => {
+  it('keeps specialist subagents available and does not expose Jsonnet exploration', () => {
     expect(createGrafanaToolRegistry().subagents).toEqual([]);
 
     const defaultRegistry = createGrafanaToolRegistry({
@@ -813,8 +894,10 @@ describe('grafana datasource tool policy', () => {
         thinkingLevel: 'off',
       },
     });
-    expect(defaultRegistry.subagents.map((tool) => tool.name)).toEqual(['explore_metrics']);
-    expect(defaultRegistry.all.map((tool) => tool.name)).toEqual(expect.arrayContaining(['explore_metrics']));
+    expect(defaultRegistry.subagents.map((tool) => tool.name)).toEqual(['explore_metrics', 'design_dashboard']);
+    expect(defaultRegistry.all.map((tool) => tool.name)).toEqual(
+      expect.arrayContaining(['explore_metrics', 'design_dashboard'])
+    );
     expect(defaultRegistry.all.map((tool) => tool.name)).not.toContain('explore_jsonnet');
   });
 
@@ -838,6 +921,7 @@ describe('grafana datasource tool policy', () => {
     expect(names).toContain('bootstrap_dashboard_context');
     expect(names).toContain('screenshot_dashboard');
     expect(names).toContain('explore_metrics');
+    expect(names).toContain('design_dashboard');
     expect(names).not.toContain('query_prometheus_raw');
     expect(names).not.toContain('upload_dashboard');
     expect(names).not.toContain('delete_dashboard');
@@ -868,6 +952,7 @@ describe('grafana datasource tool policy', () => {
     expect(names).toContain('bootstrap_dashboard_context');
     expect(names).toContain('search_grafonnet');
     expect(names).toContain('explore_metrics');
+    expect(names).toContain('design_dashboard');
     expect(names).not.toContain('explore_jsonnet');
   });
 
@@ -1022,7 +1107,7 @@ describe('grafana datasource tool policy', () => {
     expect(result.details.warnings).toEqual(['instance: datasource prom-a is outside the assistant allow-list']);
   });
 
-  it('exposes a narrower metrics-only toolset for skill-selected turns', () => {
+  it('exposes narrow read-only subagent tools for skill-selected turns', () => {
     const names = createGrafanaToolsForSkillGroups(
       {
         runtime: {
@@ -1037,6 +1122,7 @@ describe('grafana datasource tool policy', () => {
     expect(names).toContain('list_datasources');
     expect(names).toContain('query_prometheus');
     expect(names).toContain('explore_metrics');
+    expect(names).toContain('design_dashboard');
     expect(names).not.toContain('write_jsonnet');
     expect(names).not.toContain('render_dashboard');
     expect(names).not.toContain('sync_dashboard');
@@ -1069,8 +1155,63 @@ describe('grafana datasource tool policy', () => {
     expect(names).toContain('get_dashboard_source');
     expect(names).toContain('get_dashboard');
     expect(names).toContain('screenshot_dashboard');
+    expect(names).toContain('design_dashboard');
     expect(names).not.toContain('upload_dashboard');
     expect(names).not.toContain('delete_dashboard');
+  });
+
+  it('runs the dashboard designer with read-only child tools', async () => {
+    const registry = createGrafanaToolRegistry({
+      skillTools: createSkillTools(GRAFANA_SKILLS),
+      runtime: {
+        model: {} as any,
+        streamFn: jest.fn() as any,
+        thinkingLevel: 'off',
+      },
+    });
+    const tool = getTool(registry.subagents, 'design_dashboard');
+
+    const result = await tool.execute(
+      'call-1',
+      {
+        task: 'Design an HTTP request dashboard',
+        datasourceUid: 'prom-b',
+        existingDashboardUid: 'http-current',
+        intent: 'update',
+      },
+      undefined
+    );
+    const call = jest.mocked(runGrafanaSubagent).mock.calls.at(-1)?.[0];
+    const childToolNames = call?.tools.map((childTool) => childTool.name) ?? [];
+
+    expect(call).toMatchObject({
+      kind: 'dashboard-design',
+      task: expect.stringContaining('Design an HTTP request dashboard'),
+    });
+    expect(call?.task).toContain('Prefer datasource UID: prom-b.');
+    expect(call?.task).toContain('Inspect existing dashboard UID: http-current.');
+    expect(result.details).toMatchObject({ agent: 'dashboard-design', status: 'completed' });
+    expect(childToolNames).toEqual(
+      expect.arrayContaining([
+        'list_datasources',
+        'list_metrics',
+        'inspect_metric_series',
+        'query_prometheus',
+        'get_dashboard',
+        'list_dashboards',
+        'bootstrap_dashboard_context',
+        'screenshot_dashboard',
+        'read_skill_resource',
+      ])
+    );
+    expect(childToolNames).not.toContain('write_jsonnet');
+    expect(childToolNames).not.toContain('edit_jsonnet');
+    expect(childToolNames).not.toContain('fix_jsonnet');
+    expect(childToolNames).not.toContain('render_dashboard');
+    expect(childToolNames).not.toContain('sync_dashboard');
+    expect(childToolNames).not.toContain('upload_dashboard');
+    expect(childToolNames).not.toContain('delete_dashboard');
+    expect(childToolNames).not.toContain('design_dashboard');
   });
 
   it('reads bundled skill resources through an explicit tool', async () => {

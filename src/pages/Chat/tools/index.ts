@@ -32,6 +32,7 @@ export function createGrafanaToolRegistry(options: CreateGrafanaToolsOptions = {
   const metrics = createMetricTools(options);
   const rqlite = createRqliteTools(options);
   const dashboards = createDashboardTools(options, options.includeAdHocDashboardTools);
+  const dashboardReadTools = createDashboardTools(options, false);
   const jsonnetFiles = createJsonnetFileTools(options);
   const managedDashboards = createManagedDashboardTools(options);
   const investigation = createInvestigationTools(options.investigationReport);
@@ -42,6 +43,8 @@ export function createGrafanaToolRegistry(options: CreateGrafanaToolsOptions = {
     ? createSubagentTools({
         runtime: options.runtime,
         metricsTools: metrics,
+        dashboardReadTools,
+        skillTools: skills,
         includeMetrics: options.includeMetricsSubagentTool !== false,
       })
     : [];

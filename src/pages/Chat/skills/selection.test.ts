@@ -53,6 +53,7 @@ describe('Grafana skill selection', () => {
 
     expect(prompt).toContain('## Available Skills');
     expect(prompt).toContain('### grafana-dashboard');
+    expect(prompt).toContain('design_dashboard');
     expect(prompt).toContain('references/dashboard-jsonnet-workflow.md');
     expect(prompt).not.toContain('### grafana-metrics');
     expect(prompt).not.toContain('references/promql-patterns.md');

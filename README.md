@@ -56,7 +56,7 @@ The default chat toolset does not expose raw dashboard JSON upload/delete tools,
 
 ## Subagents
 
-The default chat toolset includes `explore_metrics` as a high-level fallback for broad metric and PromQL reconnaissance. It starts a nested agent with a narrow tool allow-list: the metrics subagent can only discover datasources, inspect Prometheus metadata, and validate PromQL. Dashboard write tools stay available only to the parent assistant.
+The default chat toolset includes `explore_metrics` as a high-level fallback for broad metric and PromQL reconnaissance and `design_dashboard` as a design-only dashboard specialist. Both start nested agents with narrow tool allow-lists: the metrics subagent can only discover datasources, inspect Prometheus metadata, and validate PromQL; the dashboard designer can inspect metrics and dashboards but cannot write, render managed dashboard previews, sync, upload, delete, or otherwise persist dashboard artifacts. Dashboard write tools stay available only to the parent assistant.
 
 ## Skills
 

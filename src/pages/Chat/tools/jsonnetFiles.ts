@@ -95,15 +95,16 @@ function makeWriteJsonnetFileTool(runtime: VirtualJsonnetFileRuntime | undefined
         );
       }
       throwIfAborted(signal);
+      const content = normalizeDashboardJsonnetDraft(args.content);
       const result = await pluginResourceFetch<JsonnetFileBackendResponse>('/managed-dashboards/jsonnet-files/write', {
         method: 'POST',
         data: {
           sessionId: requireSessionId(runtime),
           path,
-          content: args.content,
+          content,
         },
       });
-      const snapshot = snapshotFromResponse(result, args.content);
+      const snapshot = snapshotFromResponse(result, content);
       runtime?.setFile(snapshot, { hydrated: true });
       return textResult(
         JSON.stringify(publicJsonnetFileResult(result, 'written'), null, 2),
@@ -274,4 +275,109 @@ function applyLineEdits(content: string, edits: JsonnetLineEdit[]) {
   }
   const next = normalizedLines.join('\n');
   return trailingNewline && next ? `${next}\n` : next;
+}
+
+function normalizeDashboardJsonnetDraft(content: string) {
+  const source = content.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+  const match = /^\s*local\s+([A-Za-z_][A-Za-z0-9_]*)\s*=\s*/.exec(source);
+  if (!match) {
+    return source;
+  }
+
+  const bindingName = match[1];
+  const objectStart = skipWhitespace(source, match[0].length);
+  if (source[objectStart] !== '{') {
+    return source;
+  }
+
+  const objectEnd = findMatchingJsonnetBrace(source, objectStart);
+  if (objectEnd < 0) {
+    return source;
+  }
+
+  const assignedObject = source.slice(objectStart, objectEnd + 1);
+  const suffix = source.slice(objectEnd + 1).trim();
+  const wrapper = new RegExp(`^;?\\s*\\{\\s*dashboard\\s*:\\s*${escapeRegExp(bindingName)}\\s*,?\\s*\\}\\s*$`);
+  const direct = new RegExp(`^;?\\s*${escapeRegExp(bindingName)}\\s*$`);
+  if (!wrapper.test(suffix) && !direct.test(suffix)) {
+    return source;
+  }
+
+  return assignedObject.endsWith('\n') ? assignedObject : `${assignedObject}\n`;
+}
+
+function skipWhitespace(source: string, start: number) {
+  let index = start;
+  while (index < source.length && /\s/.test(source[index])) {
+    index++;
+  }
+  return index;
+}
+
+function findMatchingJsonnetBrace(source: string, start: number) {
+  let depth = 0;
+  let quote: '"' | "'" | undefined;
+  let inLineComment = false;
+  let inBlockComment = false;
+  let escape = false;
+
+  for (let index = start; index < source.length; index++) {
+    const char = source[index];
+    const next = source[index + 1];
+
+    if (inLineComment) {
+      if (char === '\n') {
+        inLineComment = false;
+      }
+      continue;
+    }
+    if (inBlockComment) {
+      if (char === '*' && next === '/') {
+        inBlockComment = false;
+        index++;
+      }
+      continue;
+    }
+    if (quote) {
+      if (escape) {
+        escape = false;
+      } else if (char === '\\') {
+        escape = true;
+      } else if (char === quote) {
+        quote = undefined;
+      }
+      continue;
+    }
+
+    if (char === '/' && next === '/') {
+      inLineComment = true;
+      index++;
+      continue;
+    }
+    if (char === '/' && next === '*') {
+      inBlockComment = true;
+      index++;
+      continue;
+    }
+    if (char === '"' || char === "'") {
+      quote = char;
+      continue;
+    }
+    if (char === '{') {
+      depth++;
+      continue;
+    }
+    if (char === '}') {
+      depth--;
+      if (depth === 0) {
+        return index;
+      }
+    }
+  }
+
+  return -1;
+}
+
+function escapeRegExp(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }

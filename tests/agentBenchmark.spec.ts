@@ -50,22 +50,40 @@ type BenchmarkUsage = {
   cost: number;
 };
 
+type LiveBenchmarkState = {
+  toolStarts: Map<string, BenchmarkEvent>;
+  toolUpdates: Map<string, string>;
+};
+
 test.describe.configure({ mode: 'serial' });
 test.setTimeout(readPositiveInteger(process.env.BENCH_TEST_TIMEOUT_MS, DEFAULT_TIMEOUT_MS + 60_000));
 
 test.describe('agent benchmark', () => {
   test('creates an HTTP request rate and errors dashboard', async ({ gotoPage, page }, testInfo) => {
     const timeoutMs = readPositiveInteger(process.env.BENCH_TIMEOUT_MS, DEFAULT_TIMEOUT_MS);
+    const liveState: LiveBenchmarkState = {
+      toolStarts: new Map(),
+      toolUpdates: new Map(),
+    };
+
+    await page.exposeFunction('__PI_AGENT_BENCHMARK_STREAM_EVENT__', (event: BenchmarkEvent) => {
+      const line = formatLiveBenchmarkEvent(event, liveState);
+      if (line) {
+        console.log(line);
+      }
+    });
 
     await page.addInitScript(() => {
       const benchmarkWindow = window as typeof window & {
         __PI_AGENT_BENCHMARK_EVENTS__?: unknown[];
         __PI_AGENT_BENCHMARK_RECORD_EVENT__?: (event: unknown) => void;
+        __PI_AGENT_BENCHMARK_STREAM_EVENT__?: (event: unknown) => Promise<void>;
       };
 
       benchmarkWindow.__PI_AGENT_BENCHMARK_EVENTS__ = [];
       benchmarkWindow.__PI_AGENT_BENCHMARK_RECORD_EVENT__ = (event: unknown) => {
         benchmarkWindow.__PI_AGENT_BENCHMARK_EVENTS__?.push(event);
+        void benchmarkWindow.__PI_AGENT_BENCHMARK_STREAM_EVENT__?.(event);
       };
     });
 
@@ -134,6 +152,65 @@ async function readBenchmarkEvents(page: Page): Promise<BenchmarkEvent[]> {
     const benchmarkWindow = window as typeof window & { __PI_AGENT_BENCHMARK_EVENTS__?: BenchmarkEvent[] };
     return benchmarkWindow.__PI_AGENT_BENCHMARK_EVENTS__ ?? [];
   });
+}
+
+function formatLiveBenchmarkEvent(event: BenchmarkEvent, state: LiveBenchmarkState) {
+  if (event.type === 'tool_execution_start' && event.toolCallId && event.toolName) {
+    state.toolStarts.set(event.toolCallId, event);
+    return `[agent-benchmark:live] tool_start ${event.toolName} args=${summarizeJson(event.args)}`;
+  }
+
+  if (event.type === 'tool_execution_update' && event.toolCallId && event.toolName) {
+    const nestedCalls = extractSubagentToolCallCount(event.partialResult);
+    const resultText = truncateOneLine(extractResultText(event.partialResult) ?? '', 240);
+    if (nestedCalls === undefined && !resultText) {
+      return undefined;
+    }
+
+    const updateKey = `${nestedCalls ?? ''}|${resultText}`;
+    if (state.toolUpdates.get(event.toolCallId) === updateKey) {
+      return undefined;
+    }
+    state.toolUpdates.set(event.toolCallId, updateKey);
+
+    const parts = [`[agent-benchmark:live] tool_update ${event.toolName}`];
+    if (nestedCalls !== undefined) {
+      parts.push(`nested=${nestedCalls}`);
+    }
+    if (resultText) {
+      parts.push(`text=${resultText}`);
+    }
+    return parts.join(' ');
+  }
+
+  if (event.type === 'tool_execution_end' && event.toolCallId && event.toolName) {
+    const start = state.toolStarts.get(event.toolCallId);
+    const duration = start ? formatDuration(event.timestamp - start.timestamp) : 'unknown';
+    const status = event.isError ? 'failed' : 'completed';
+    const nestedCalls = extractSubagentToolCallCount(event.result);
+    const resultText = truncateOneLine(extractResultText(event.result) ?? '', event.isError ? 600 : 240);
+    const parts = [`[agent-benchmark:live] tool_end ${event.toolName} ${status} duration=${duration}`];
+    if (nestedCalls !== undefined) {
+      parts.push(`nested=${nestedCalls}`);
+    }
+    if (resultText) {
+      parts.push(event.isError ? `error=${resultText}` : `text=${resultText}`);
+    }
+    return parts.join(' ');
+  }
+
+  if (event.type === 'message_end' && event.message?.role === 'assistant') {
+    const error = event.message.errorMessage;
+    if (typeof error === 'string' && error) {
+      return `[agent-benchmark:live] assistant_error ${truncateOneLine(error, 600)}`;
+    }
+  }
+
+  if (event.type === 'agent_end') {
+    return '[agent-benchmark:live] agent_end';
+  }
+
+  return undefined;
 }
 
 function formatBenchmarkReport(
@@ -303,6 +380,13 @@ function findFinalAssistantError(events: BenchmarkEvent[]) {
 }
 
 function findDashboardQualityError(events: BenchmarkEvent[]) {
+  const designed = [...events]
+    .reverse()
+    .find((event) => event.type === 'tool_execution_end' && event.toolName === 'design_dashboard' && !event.isError);
+  if (!designed) {
+    return 'design_dashboard did not complete successfully';
+  }
+
   const synced = [...events]
     .reverse()
     .find((event) => event.type === 'tool_execution_end' && event.toolName === 'sync_dashboard' && !event.isError);
@@ -397,6 +481,11 @@ function formatDuration(ms: number) {
     return `${ms}ms`;
   }
   return `${(ms / 1000).toFixed(1)}s`;
+}
+
+function truncateOneLine(value: string, maxLength: number) {
+  const oneLine = value.replace(/\s+/g, ' ').trim();
+  return oneLine.length > maxLength ? `${oneLine.slice(0, maxLength)}...` : oneLine;
 }
 
 function summarizeJson(value: unknown) {

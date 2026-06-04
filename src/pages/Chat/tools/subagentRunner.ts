@@ -2,7 +2,7 @@ import type { AgentEvent, AgentMessage, AgentTool, AgentToolResult } from '@eare
 import { textResult, truncateText, type TextToolResult } from './result';
 import type { GrafanaToolRuntime } from './types';
 
-export type SubagentKind = 'metrics' | 'jsonnet';
+export type SubagentKind = 'metrics' | 'dashboard-design' | 'jsonnet';
 export type SubagentRunStatus = 'running' | 'completed' | 'failed';
 
 export type SubagentToolCall = {
@@ -248,7 +248,7 @@ function subagentStatusText(
   finalOutput: string,
   error?: string
 ) {
-  const label = kind === 'metrics' ? 'Metrics explorer' : 'Jsonnet explorer';
+  const label = subagentLabel(kind);
   if (status === 'failed') {
     return `${label} failed${error ? `: ${error}` : ''}`;
   }
@@ -259,6 +259,17 @@ function subagentStatusText(
     return `${label} drafting:\n${truncateText(finalOutput, 1200)}`;
   }
   return `${label} running. ${toolCallCount} tool call${toolCallCount === 1 ? '' : 's'} so far.`;
+}
+
+function subagentLabel(kind: SubagentKind) {
+  switch (kind) {
+    case 'metrics':
+      return 'Metrics explorer';
+    case 'dashboard-design':
+      return 'Dashboard designer';
+    case 'jsonnet':
+      return 'Jsonnet explorer';
+  }
 }
 
 function zeroUsage(): SubagentUsage {
