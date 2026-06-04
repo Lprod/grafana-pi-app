@@ -1,0 +1,24 @@
+---
+name: investigation
+description: Run evidence-based Prometheus investigations and maintain a structured investigation report.
+---
+
+# Investigation Skill
+
+Use this skill when the user asks to investigate, diagnose, explain why something is happening, find root cause, or analyze an incident, outage, failure, latency spike, error spike, or degradation.
+
+## Workflow
+
+1. Define the scope: affected service, host, route, symptom, datasource UID, and time range when available.
+2. Use `update_report` early to create a report with the initial scope and open hypotheses.
+3. Gather evidence with metric discovery and PromQL validation. Prefer `explore_metrics` for broad reconnaissance.
+4. Update the report after each material finding. Add evidence only when it came from a tool result or user-provided context.
+5. Keep hypotheses separate from evidence. Move invalidated ideas to ruled-out causes.
+6. End with current finding, confidence, remaining gaps, and next checks or remediation.
+
+## Report Rules
+
+- Use `update_report` JSON Pointer paths such as `/scope/-`, `/evidence/-`, `/hypotheses/-`, `/ruledOut/-`, `/nextSteps/-`, and `/remediation/-`.
+- Use `/status` with `complete` only when the investigation has a defensible answer or a clear handoff state.
+- Do not invent dashboard, datasource, metric, label, or host names. Use only values returned by tools or provided by the user.
+- If evidence is insufficient, state what was checked and what remains unknown.

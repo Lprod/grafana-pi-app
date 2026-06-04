@@ -5,6 +5,7 @@ import type { GrafanaSkill, SkillToolGroup } from './types';
 
 const TOOL_GROUPS_BY_SKILL: Record<string, readonly SkillToolGroup[]> = {
   'grafana-dashboard': ['dashboardRead', 'jsonnetFiles', 'managedDashboards', 'skillResources'],
+  investigation: ['metrics', 'subagents', 'investigation', 'skillResources'],
   'rqlite-datasource': ['rqlite', 'skillResources'],
 };
 

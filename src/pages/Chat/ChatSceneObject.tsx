@@ -1,6 +1,13 @@
 import React, { FormEvent, memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { css, cx } from '@emotion/css';
-import { Agent, type AgentEvent, type AgentMessage, type StreamFn, streamProxy } from '@earendil-works/pi-agent-core';
+import {
+  Agent,
+  type AgentEvent,
+  type AgentMessage,
+  type BeforeToolCallResult,
+  type StreamFn,
+  streamProxy,
+} from '@earendil-works/pi-agent-core';
 import type { Message } from '@earendil-works/pi-ai';
 import { SceneComponentProps, SceneObjectBase, SceneObjectState } from '@grafana/scenes';
 import { Alert, Badge, Button, EmptyState, FilterInput, Icon, Modal, Spinner, TextArea, useStyles2 } from '@grafana/ui';
@@ -15,6 +22,7 @@ import {
   buildDashboardBootstrapDigest,
   normalizeJsonnetPath,
   type DashboardBootstrapDigest,
+  type InvestigationReport,
   type VirtualJsonnetFileSnapshot,
 } from './grafanaTools';
 import { formatAssistantError, type AssistantErrorView } from './llmErrors';
@@ -36,6 +44,7 @@ type StoredSession = SessionIndexItem & {
   messages: AgentMessage[];
   modelId?: string;
   virtualJsonnetFiles?: Record<string, VirtualJsonnetFileSnapshot>;
+  investigationReport?: InvestigationReport;
 };
 
 type ToolRunState = Record<string, ToolRunView>;
@@ -58,6 +67,15 @@ type DashboardPickerItem = PendingBootstrapDashboard & {
   url?: string;
 };
 
+type ToolConfirmationView = {
+  id: string;
+  toolName: string;
+  title: string;
+  description: string;
+  fields: Array<{ label: string; value: string }>;
+  args: unknown;
+};
+
 declare module '@earendil-works/pi-agent-core' {
   interface CustomAgentMessages {
     bootstrapUser: BootstrapUserMessage;
@@ -68,6 +86,7 @@ const SESSION_INDEX_KEY = 'sessions:index';
 const CHAT_SESSION_EXPORT_KIND = 'g42-pi-app.chat-session';
 const LEGACY_CHAT_SESSION_EXPORT_KINDS = ['grafana-pi-app.chat-session'];
 const CHAT_SESSION_EXPORT_SCHEMA_VERSION = 1;
+const PERSISTENT_WRITE_TOOLS = new Set(['sync_dashboard', 'upload_dashboard', 'delete_dashboard']);
 const sessionKey = (id: string) => `sessions:${id}`;
 
 type ChatSessionExport = {
@@ -119,6 +138,8 @@ function ChatApp() {
   const sessionIdRef = useRef<string>();
   const virtualJsonnetFilesRef = useRef<Record<string, VirtualJsonnetFileSnapshot>>({});
   const virtualJsonnetHydratedRef = useRef<Record<string, number>>({});
+  const investigationReportRef = useRef<InvestigationReport>();
+  const [investigationReport, setInvestigationReport] = useState<InvestigationReport>();
   const setVirtualJsonnetFile = useCallback((file: VirtualJsonnetFileSnapshot, options?: { hydrated?: boolean }) => {
     const path = normalizeJsonnetPath(file.path);
     const snapshot = { ...file, path };
@@ -129,6 +150,10 @@ function ChatApp() {
     if (options?.hydrated) {
       virtualJsonnetHydratedRef.current[path] = file.version;
     }
+  }, []);
+  const setInvestigationReportSnapshot = useCallback((report: InvestigationReport) => {
+    investigationReportRef.current = report;
+    setInvestigationReport(report);
   }, []);
   const virtualJsonnetRuntime = useMemo(
     () => ({
@@ -143,6 +168,13 @@ function ChatApp() {
     }),
     [setVirtualJsonnetFile]
   );
+  const investigationReportRuntime = useMemo(
+    () => ({
+      getReport: () => investigationReportRef.current,
+      setReport: setInvestigationReportSnapshot,
+    }),
+    [setInvestigationReportSnapshot]
+  );
   const buildSkillRuntime = useCallback(
     (prompt: string) => {
       const selection = selectGrafanaSkills(prompt, skills);
@@ -152,6 +184,7 @@ function ChatApp() {
           ...jsonData,
           runtime: { model: llmModel, streamFn, thinkingLevel },
           virtualJsonnetFiles: virtualJsonnetRuntime,
+          investigationReport: investigationReportRuntime,
           skillTools,
         },
         selection.toolGroups
@@ -165,7 +198,7 @@ function ChatApp() {
         tools,
       };
     },
-    [jsonData, llmModel, skills, streamFn, thinkingLevel, virtualJsonnetRuntime]
+    [investigationReportRuntime, jsonData, llmModel, skills, streamFn, thinkingLevel, virtualJsonnetRuntime]
   );
   const [agent, setAgent] = useState<Agent>();
   const agentRef = useRef<Agent>();
@@ -174,6 +207,7 @@ function ChatApp() {
   const [pendingBootstrap, setPendingBootstrap] = useState<PendingBootstrapDashboard>();
   const [isBootstrapPickerOpen, setIsBootstrapPickerOpen] = useState(false);
   const [isPreparingBootstrap, setIsPreparingBootstrap] = useState(false);
+  const [pendingToolConfirmation, setPendingToolConfirmation] = useState<ToolConfirmationView>();
   const [sessions, setSessions] = useState<SessionIndexItem[]>([]);
   const [currentSessionId, setCurrentSessionId] = useState<string>();
   const [currentTitle, setCurrentTitle] = useState('New chat');
@@ -188,7 +222,63 @@ function ChatApp() {
   const autoScrollRef = useRef(true);
   const lastScrollTopRef = useRef(0);
   const touchStartYRef = useRef<number>();
+  const toolConfirmationResolverRef = useRef<(approved: boolean) => void>();
   const [isAutoScrollPaused, setIsAutoScrollPaused] = useState(false);
+
+  const settleToolConfirmation = useCallback((approved: boolean) => {
+    const resolve = toolConfirmationResolverRef.current;
+    toolConfirmationResolverRef.current = undefined;
+    setPendingToolConfirmation(undefined);
+    resolve?.(approved);
+  }, []);
+
+  const requestToolConfirmation = useCallback(
+    (toolName: string, args: unknown, signal?: AbortSignal): Promise<BeforeToolCallResult | undefined> => {
+      const confirmation = buildToolConfirmation(toolName, args);
+      if (!confirmation) {
+        return Promise.resolve(undefined);
+      }
+
+      if (toolConfirmationResolverRef.current) {
+        return Promise.resolve({
+          block: true,
+          reason: `Persistent Grafana write tool ${toolName} was blocked because another approval is pending.`,
+        });
+      }
+
+      return new Promise((resolve) => {
+        let settled = false;
+        const finish = (approved: boolean) => {
+          if (settled) {
+            return;
+          }
+          settled = true;
+          signal?.removeEventListener('abort', handleAbort);
+          toolConfirmationResolverRef.current = undefined;
+          setPendingToolConfirmation(undefined);
+          resolve(
+            approved
+              ? undefined
+              : {
+                  block: true,
+                  reason: `User denied persistent Grafana write tool ${toolName}.`,
+                }
+          );
+        };
+        const handleAbort = () => finish(false);
+
+        toolConfirmationResolverRef.current = finish;
+        setPendingToolConfirmation(confirmation);
+
+        if (signal?.aborted) {
+          finish(false);
+        } else {
+          signal?.addEventListener('abort', handleAbort, { once: true });
+        }
+      });
+    },
+    []
+  );
 
   const persistIndex = useCallback(
     async (next: SessionIndexItem[]) => {
@@ -217,6 +307,7 @@ function ChatApp() {
         messages,
         modelId: llmModel.id,
         virtualJsonnetFiles: virtualJsonnetFilesRef.current,
+        investigationReport: investigationReportRef.current,
       };
       const next = [indexItem, ...sessionsRef.current.filter((session) => session.id !== id)].slice(0, 50);
 
@@ -240,6 +331,7 @@ function ChatApp() {
         },
         convertToLlm: convertChatMessagesToLlm,
         streamFn,
+        beforeToolCall: async ({ toolCall, args }, signal) => requestToolConfirmation(toolCall.name, args, signal),
       });
 
       unsubscribeRef.current = nextAgent.subscribe((event) => {
@@ -263,7 +355,16 @@ function ChatApp() {
       flushRevision();
       return nextAgent;
     },
-    [buildSkillRuntime, flushRevision, llmModel, saveSession, scheduleRevision, streamFn, thinkingLevel]
+    [
+      buildSkillRuntime,
+      flushRevision,
+      llmModel,
+      requestToolConfirmation,
+      saveSession,
+      scheduleRevision,
+      streamFn,
+      thinkingLevel,
+    ]
   );
 
   const startNewSession = useCallback(() => {
@@ -272,6 +373,7 @@ function ChatApp() {
     titleRef.current = 'New chat';
     virtualJsonnetFilesRef.current = {};
     virtualJsonnetHydratedRef.current = {};
+    investigationReportRef.current = undefined;
     autoScrollRef.current = true;
     setIsAutoScrollPaused(false);
     setCurrentSessionId(id);
@@ -279,10 +381,12 @@ function ChatApp() {
     setError(undefined);
     setToolRuns({});
     setPendingBootstrap(undefined);
+    setInvestigationReport(undefined);
+    settleToolConfirmation(false);
     setIsBootstrapPickerOpen(false);
     setIsPreparingBootstrap(false);
     buildAgent([]);
-  }, [buildAgent]);
+  }, [buildAgent, settleToolConfirmation]);
 
   const startNewSessionRef = useRef(startNewSession);
 
@@ -318,6 +422,8 @@ function ChatApp() {
 
     return () => {
       mounted = false;
+      toolConfirmationResolverRef.current?.(false);
+      toolConfirmationResolverRef.current = undefined;
       unsubscribeRef.current?.();
     };
   }, []);
@@ -509,12 +615,15 @@ function ChatApp() {
     titleRef.current = stored.title;
     virtualJsonnetFilesRef.current = stored.virtualJsonnetFiles ?? {};
     virtualJsonnetHydratedRef.current = {};
+    investigationReportRef.current = stored.investigationReport;
     keepAutoScrollEnabled();
     setCurrentSessionId(id);
     setCurrentTitle(stored.title);
     setError(undefined);
     setToolRuns({});
     setPendingBootstrap(undefined);
+    setInvestigationReport(stored.investigationReport);
+    settleToolConfirmation(false);
     setIsBootstrapPickerOpen(false);
     setIsPreparingBootstrap(false);
     buildAgent(stored.messages);
@@ -560,6 +669,7 @@ function ChatApp() {
           modelId: llmModel.id,
           messages,
           virtualJsonnetFiles: virtualJsonnetFilesRef.current,
+          investigationReport: investigationReportRef.current,
         },
       };
 
@@ -604,12 +714,15 @@ function ChatApp() {
         titleRef.current = title;
         virtualJsonnetFilesRef.current = imported.virtualJsonnetFiles ?? {};
         virtualJsonnetHydratedRef.current = {};
+        investigationReportRef.current = imported.investigationReport;
         keepAutoScrollEnabled();
         setCurrentSessionId(id);
         setCurrentTitle(title);
         setError(undefined);
         setToolRuns({});
         setPendingBootstrap(undefined);
+        setInvestigationReport(imported.investigationReport);
+        settleToolConfirmation(false);
         setIsBootstrapPickerOpen(false);
         setIsPreparingBootstrap(false);
         buildAgent(imported.messages);
@@ -619,7 +732,7 @@ function ChatApp() {
         setError(`Could not import chat session: ${message}`);
       }
     },
-    [buildAgent, isPreparingBootstrap, keepAutoScrollEnabled, saveSession]
+    [buildAgent, isPreparingBootstrap, keepAutoScrollEnabled, saveSession, settleToolConfirmation]
   );
 
   const visibleMessages = agent
@@ -640,6 +753,11 @@ function ChatApp() {
         isOpen={isBootstrapPickerOpen}
         onDismiss={() => setIsBootstrapPickerOpen(false)}
         onSelect={handleBootstrapSelected}
+      />
+      <ToolConfirmationModal
+        confirmation={pendingToolConfirmation}
+        onApprove={() => settleToolConfirmation(true)}
+        onDeny={() => settleToolConfirmation(false)}
       />
       <aside className={styles.sidebar}>
         <div className={styles.sidebarHeader}>
@@ -747,7 +865,7 @@ function ChatApp() {
           </Alert>
         )}
 
-        <div className={styles.messagesFrame}>
+        <div className={cx(styles.messagesFrame, investigationReport && styles.messagesFrameWithReport)}>
           <section
             aria-label="Chat messages"
             className={styles.messages}
@@ -786,6 +904,7 @@ function ChatApp() {
               </div>
             )}
           </section>
+          {investigationReport && <InvestigationReportPanel report={investigationReport} />}
           {isAutoScrollPaused && visibleMessages.length > 0 && (
             <Button
               className={styles.jumpToLatest}
@@ -904,12 +1023,23 @@ function BootstrapDashboardPicker({
   const [isLoading, setIsLoading] = useState(false);
   const [pickerError, setPickerError] = useState<string>();
 
-  useEffect(() => {
-    if (!isOpen) {
-      setQuery('');
-      setPickerError(undefined);
-    }
-  }, [isOpen]);
+  const resetPicker = useCallback(() => {
+    setQuery('');
+    setPickerError(undefined);
+  }, []);
+
+  const dismissPicker = useCallback(() => {
+    resetPicker();
+    onDismiss();
+  }, [onDismiss, resetPicker]);
+
+  const selectDashboard = useCallback(
+    (dashboard: PendingBootstrapDashboard) => {
+      resetPicker();
+      onSelect(dashboard);
+    },
+    [onSelect, resetPicker]
+  );
 
   useEffect(() => {
     if (!isOpen) {
@@ -970,7 +1100,7 @@ function BootstrapDashboardPicker({
       title="Bootstrap from dashboard"
       isOpen={isOpen}
       closeOnEscape
-      onDismiss={onDismiss}
+      onDismiss={dismissPicker}
       className={styles.bootstrapModal}
       contentClassName={styles.bootstrapModalContent}
     >
@@ -1000,7 +1130,7 @@ function BootstrapDashboardPicker({
                     className={styles.bootstrapDashboardRow}
                     key={dashboard.uid}
                     type="button"
-                    onClick={() => onSelect(dashboard)}
+                    onClick={() => selectDashboard(dashboard)}
                   >
                     <span className={styles.bootstrapDashboardTitle}>{dashboard.title}</span>
                     <span className={styles.bootstrapDashboardUid}>{dashboard.uid}</span>
@@ -1011,6 +1141,121 @@ function BootstrapDashboardPicker({
         </div>
       </div>
     </Modal>
+  );
+}
+
+function ToolConfirmationModal({
+  confirmation,
+  onApprove,
+  onDeny,
+}: {
+  confirmation?: ToolConfirmationView;
+  onApprove: () => void;
+  onDeny: () => void;
+}) {
+  const styles = useStyles2(getStyles);
+  const args = useMemo(() => formatConfirmationArgs(confirmation?.args), [confirmation?.args]);
+
+  return (
+    <Modal
+      title={confirmation?.title ?? 'Approve Grafana write'}
+      isOpen={Boolean(confirmation)}
+      closeOnEscape
+      onDismiss={onDeny}
+      className={styles.toolConfirmationModal}
+      contentClassName={styles.toolConfirmationModalContent}
+    >
+      {confirmation && (
+        <div className={styles.toolConfirmation} data-testid={testIds.chat.toolConfirmation}>
+          <Alert severity="warning" title="Persistent Grafana write">
+            {confirmation.description}
+          </Alert>
+          <dl className={styles.toolConfirmationFields}>
+            <div className={styles.toolConfirmationField}>
+              <dt>Tool</dt>
+              <dd>{confirmation.toolName}</dd>
+            </div>
+            {confirmation.fields.map((field) => (
+              <div className={styles.toolConfirmationField} key={`${field.label}:${field.value}`}>
+                <dt>{field.label}</dt>
+                <dd>{field.value}</dd>
+              </div>
+            ))}
+          </dl>
+          <details className={styles.toolConfirmationDetails}>
+            <summary>Tool arguments</summary>
+            <pre>{args}</pre>
+          </details>
+          <div className={styles.toolConfirmationActions}>
+            <Button
+              data-testid={testIds.chat.toolConfirmationDeny}
+              icon="times"
+              type="button"
+              variant="secondary"
+              onClick={onDeny}
+            >
+              Deny
+            </Button>
+            <Button
+              data-testid={testIds.chat.toolConfirmationApprove}
+              icon="check"
+              type="button"
+              variant="primary"
+              onClick={onApprove}
+            >
+              Approve
+            </Button>
+          </div>
+        </div>
+      )}
+    </Modal>
+  );
+}
+
+type InvestigationReportArraySection = 'scope' | 'evidence' | 'hypotheses' | 'ruledOut' | 'nextSteps' | 'remediation';
+
+const INVESTIGATION_REPORT_SECTIONS: Array<{ key: InvestigationReportArraySection; title: string }> = [
+  { key: 'scope', title: 'Scope' },
+  { key: 'evidence', title: 'Evidence' },
+  { key: 'hypotheses', title: 'Hypotheses' },
+  { key: 'ruledOut', title: 'Ruled out' },
+  { key: 'nextSteps', title: 'Next checks' },
+  { key: 'remediation', title: 'Remediation' },
+];
+
+function InvestigationReportPanel({ report }: { report: InvestigationReport }) {
+  const styles = useStyles2(getStyles);
+
+  return (
+    <aside className={styles.investigationReport} data-testid={testIds.chat.investigationReport}>
+      <div className={styles.investigationReportHeader}>
+        <div className={styles.investigationReportTitleGroup}>
+          <Icon name="search" />
+          <h3>{report.title}</h3>
+        </div>
+        <Badge text={report.status === 'complete' ? 'Complete' : 'Active'} color={report.status === 'complete' ? 'green' : 'blue'} />
+      </div>
+      <div className={styles.investigationReportUpdated}>Updated {formatDate(report.updatedAt)}</div>
+      <div className={styles.investigationReportSections}>
+        {INVESTIGATION_REPORT_SECTIONS.map((section) => {
+          const items = report[section.key];
+          return (
+            <section className={styles.investigationReportSection} key={section.key}>
+              <h4>{section.title}</h4>
+              {Array.isArray(items) && items.length > 0 ? (
+                <ul>
+                  {items.map((item, index) => (
+                    <li key={`${section.key}:${index}:${item}`}>{item}</li>
+                  ))}
+                </ul>
+              ) : (
+                <div className={styles.investigationReportEmpty}>No entries yet.</div>
+              )}
+            </section>
+          );
+        })}
+      </div>
+    </aside>
   );
 }
 
@@ -1151,6 +1396,106 @@ function AssistantErrorNotice({ error }: { error: AssistantErrorView }) {
       </div>
     </Alert>
   );
+}
+
+function buildToolConfirmation(toolName: string, args: unknown): ToolConfirmationView | undefined {
+  if (!PERSISTENT_WRITE_TOOLS.has(toolName)) {
+    return undefined;
+  }
+
+  const record = isRecord(args) ? args : {};
+  const id = `confirm-${toolName}-${Date.now()}`;
+
+  if (toolName === 'sync_dashboard') {
+    return {
+      id,
+      toolName,
+      title: 'Approve dashboard sync',
+      description:
+        'The assistant wants to create or update a Grafana dashboard from managed Jsonnet source. Approve only if this is the dashboard change you requested.',
+      fields: compactConfirmationFields([
+        confirmationField('UID', stringValue(record.uid) ?? 'compiled dashboard UID'),
+        confirmationField('Folder UID', stringValue(record.folderUid)),
+        confirmationField('Overwrite', booleanValue(record.overwrite, true)),
+        confirmationField('Source path', stringValue(record.path) ?? 'dashboard.jsonnet'),
+        confirmationField('Tags', stringArrayValue(record.tags)),
+      ]),
+      args,
+    };
+  }
+
+  if (toolName === 'upload_dashboard') {
+    const dashboard = parseConfirmationDashboard(record.dashboard_json);
+    return {
+      id,
+      toolName,
+      title: 'Approve dashboard upload',
+      description:
+        'The assistant wants to create or update a raw Grafana dashboard JSON model as the current user.',
+      fields: compactConfirmationFields([
+        confirmationField('Title', dashboard.title),
+        confirmationField('UID', dashboard.uid),
+        confirmationField('Folder UID', stringValue(record.folderUid)),
+        confirmationField('Overwrite', booleanValue(record.overwrite, true)),
+      ]),
+      args,
+    };
+  }
+
+  return {
+    id,
+    toolName,
+    title: 'Approve dashboard deletion',
+    description: 'The assistant wants to delete a Grafana dashboard. This removes the dashboard by UID.',
+    fields: compactConfirmationFields([confirmationField('UID', stringValue(record.uid))]),
+    args,
+  };
+}
+
+function confirmationField(label: string, value: unknown) {
+  if (value === undefined || value === null || value === '') {
+    return undefined;
+  }
+  return { label, value: String(value) };
+}
+
+function compactConfirmationFields(fields: Array<{ label: string; value: string } | undefined>) {
+  return fields.filter((field): field is { label: string; value: string } => Boolean(field));
+}
+
+function stringValue(value: unknown) {
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined;
+}
+
+function booleanValue(value: unknown, fallback: boolean) {
+  return typeof value === 'boolean' ? value : fallback;
+}
+
+function stringArrayValue(value: unknown) {
+  return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string').join(', ') : undefined;
+}
+
+function parseConfirmationDashboard(value: unknown) {
+  try {
+    const dashboard = typeof value === 'string' ? JSON.parse(value) : value;
+    if (!isRecord(dashboard)) {
+      return {};
+    }
+    return {
+      title: stringValue(dashboard.title),
+      uid: stringValue(dashboard.uid),
+    };
+  } catch {
+    return {};
+  }
+}
+
+function formatConfirmationArgs(value: unknown) {
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch {
+    return String(value);
+  }
 }
 
 function createSessionId() {
@@ -1511,7 +1856,34 @@ function parseChatSessionExport(value: unknown): StoredSession {
     modelId: typeof value.session.modelId === 'string' ? value.session.modelId : undefined,
     messages,
     virtualJsonnetFiles: parseVirtualJsonnetFiles(value.session.virtualJsonnetFiles),
+    investigationReport: parseInvestigationReport(value.session.investigationReport),
   };
+}
+
+function parseInvestigationReport(value: unknown): InvestigationReport | undefined {
+  if (value === null || value === undefined) {
+    return undefined;
+  }
+  if (!isRecord(value)) {
+    throw new Error('Import file session.investigationReport must be an object when present.');
+  }
+
+  return {
+    id: typeof value.id === 'string' && value.id ? value.id : createSessionId(),
+    title: typeof value.title === 'string' && value.title.trim() ? generateTitle(value.title) : 'Investigation report',
+    status: value.status === 'complete' ? 'complete' : 'active',
+    scope: parseStringList(value.scope),
+    evidence: parseStringList(value.evidence),
+    hypotheses: parseStringList(value.hypotheses),
+    ruledOut: parseStringList(value.ruledOut),
+    nextSteps: parseStringList(value.nextSteps),
+    remediation: parseStringList(value.remediation),
+    updatedAt: normalizeDateString(value.updatedAt),
+  };
+}
+
+function parseStringList(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : [];
 }
 
 function parseVirtualJsonnetFiles(value: unknown): Record<string, VirtualJsonnetFileSnapshot> | undefined {
@@ -1694,6 +2066,13 @@ const getStyles = (theme: GrafanaTheme2) => ({
     flex: '1 1 auto',
     minHeight: 0,
   }),
+  messagesFrameWithReport: css({
+    gridTemplateColumns: 'minmax(0, 1fr) minmax(280px, 360px)',
+    '@media (max-width: 1050px)': {
+      gridTemplateColumns: '1fr',
+      gridTemplateRows: 'minmax(0, 1fr) auto',
+    },
+  }),
   messages: css({
     height: '100%',
     minHeight: 0,
@@ -1707,6 +2086,80 @@ const getStyles = (theme: GrafanaTheme2) => ({
     '&:focus-visible': {
       boxShadow: `inset 0 0 0 2px ${theme.colors.primary.border}`,
     },
+  }),
+  investigationReport: css({
+    display: 'grid',
+    gridTemplateRows: 'auto auto minmax(0, 1fr)',
+    gap: theme.spacing(1.5),
+    minWidth: 0,
+    minHeight: 0,
+    overflow: 'hidden',
+    borderLeft: `1px solid ${theme.colors.border.weak}`,
+    background: theme.colors.background.secondary,
+    padding: theme.spacing(2),
+    '@media (max-width: 1050px)': {
+      borderLeft: 0,
+      borderTop: `1px solid ${theme.colors.border.weak}`,
+      maxHeight: 360,
+    },
+  }),
+  investigationReportHeader: css({
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: theme.spacing(1),
+    minWidth: 0,
+  }),
+  investigationReportTitleGroup: css({
+    display: 'flex',
+    alignItems: 'center',
+    gap: theme.spacing(0.75),
+    minWidth: 0,
+    '& h3': {
+      margin: 0,
+      minWidth: 0,
+      overflow: 'hidden',
+      textOverflow: 'ellipsis',
+      whiteSpace: 'nowrap',
+      fontSize: theme.typography.h5.fontSize,
+      fontWeight: theme.typography.fontWeightMedium,
+    },
+  }),
+  investigationReportUpdated: css({
+    color: theme.colors.text.secondary,
+    fontSize: theme.typography.bodySmall.fontSize,
+  }),
+  investigationReportSections: css({
+    display: 'grid',
+    alignContent: 'start',
+    gap: theme.spacing(1.5),
+    minHeight: 0,
+    overflow: 'auto',
+    paddingRight: theme.spacing(0.5),
+  }),
+  investigationReportSection: css({
+    display: 'grid',
+    gap: theme.spacing(0.75),
+    '& h4': {
+      margin: 0,
+      color: theme.colors.text.secondary,
+      fontSize: theme.typography.bodySmall.fontSize,
+      fontWeight: theme.typography.fontWeightMedium,
+      textTransform: 'uppercase',
+    },
+    '& ul': {
+      display: 'grid',
+      gap: theme.spacing(0.5),
+      margin: 0,
+      paddingLeft: theme.spacing(2.25),
+    },
+    '& li': {
+      overflowWrap: 'anywhere',
+    },
+  }),
+  investigationReportEmpty: css({
+    color: theme.colors.text.secondary,
+    fontSize: theme.typography.bodySmall.fontSize,
   }),
   message: css({
     maxWidth: 980,
@@ -1885,5 +2338,63 @@ const getStyles = (theme: GrafanaTheme2) => ({
   bootstrapDashboardUid: css({
     color: theme.colors.text.secondary,
     fontSize: theme.typography.bodySmall.fontSize,
+  }),
+  toolConfirmationModal: css({
+    width: 'min(620px, calc(100vw - 32px))',
+  }),
+  toolConfirmationModalContent: css({
+    minHeight: 260,
+  }),
+  toolConfirmation: css({
+    display: 'grid',
+    gap: theme.spacing(2),
+  }),
+  toolConfirmationFields: css({
+    display: 'grid',
+    gap: theme.spacing(1),
+    margin: 0,
+  }),
+  toolConfirmationField: css({
+    display: 'grid',
+    gridTemplateColumns: '140px minmax(0, 1fr)',
+    gap: theme.spacing(1),
+    alignItems: 'start',
+    '& dt': {
+      color: theme.colors.text.secondary,
+      fontSize: theme.typography.bodySmall.fontSize,
+    },
+    '& dd': {
+      margin: 0,
+      overflowWrap: 'anywhere',
+    },
+    '@media (max-width: 520px)': {
+      gridTemplateColumns: '1fr',
+      gap: theme.spacing(0.25),
+    },
+  }),
+  toolConfirmationDetails: css({
+    '& summary': {
+      cursor: 'pointer',
+      fontWeight: theme.typography.fontWeightMedium,
+    },
+    '& pre': {
+      maxHeight: 220,
+      overflow: 'auto',
+      margin: `${theme.spacing(1)} 0 0`,
+      padding: theme.spacing(1),
+      border: `1px solid ${theme.colors.border.weak}`,
+      borderRadius: theme.shape.radius.default,
+      background: theme.colors.background.secondary,
+      color: theme.colors.text.secondary,
+      fontSize: theme.typography.bodySmall.fontSize,
+      whiteSpace: 'pre-wrap',
+      overflowWrap: 'anywhere',
+    },
+  }),
+  toolConfirmationActions: css({
+    display: 'flex',
+    justifyContent: 'flex-end',
+    gap: theme.spacing(1),
+    flexWrap: 'wrap',
   }),
 });

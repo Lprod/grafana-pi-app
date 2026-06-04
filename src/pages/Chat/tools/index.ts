@@ -2,6 +2,7 @@ import type { AgentTool } from '@earendil-works/pi-agent-core';
 import { createDashboardTools } from './dashboards';
 import { createJsonnetFileTools } from './jsonnetFiles';
 import { createJsonnetLibTools } from './jsonnetLibs';
+import { createInvestigationTools } from './investigation';
 import { createManagedDashboardTools } from './managedDashboards';
 import { createMetricTools, filterAllowedPrometheusDatasourceSettings } from './metrics';
 import { createRqliteTools, filterAllowedRqliteDatasourceSettings } from './rqlite';
@@ -19,6 +20,8 @@ export type {
   GrafanaToolConfig,
   GrafanaToolRegistry,
   GrafanaToolRuntime,
+  InvestigationReport,
+  InvestigationReportRuntime,
   SkillToolGroup,
   VirtualJsonnetFileRuntime,
   VirtualJsonnetFileSnapshot,
@@ -31,6 +34,7 @@ export function createGrafanaToolRegistry(options: CreateGrafanaToolsOptions = {
   const dashboards = createDashboardTools(options, options.includeAdHocDashboardTools);
   const jsonnetFiles = createJsonnetFileTools(options);
   const managedDashboards = createManagedDashboardTools(options);
+  const investigation = createInvestigationTools(options.investigationReport);
   const jsonnet = createJsonnetLibTools();
   const parentManagedDashboardTools = managedDashboards.all;
   const skills = options.skillTools ?? [];
@@ -48,6 +52,7 @@ export function createGrafanaToolRegistry(options: CreateGrafanaToolsOptions = {
     dashboards,
     jsonnetFiles,
     managedDashboards,
+    investigation,
     jsonnet,
     subagents,
     skills,
@@ -56,6 +61,7 @@ export function createGrafanaToolRegistry(options: CreateGrafanaToolsOptions = {
       ...rqlite,
       ...jsonnetFiles.all,
       ...parentManagedDashboardTools,
+      ...investigation,
       ...subagents,
       ...skills,
       ...(options.includeJsonnetLibraryTools ? jsonnet.all : []),
@@ -94,6 +100,10 @@ export function createGrafanaToolsForSkillGroups(
 
   if (groupSet.has('managedDashboards')) {
     selected.push(...registry.managedDashboards.all);
+  }
+
+  if (groupSet.has('investigation')) {
+    selected.push(...registry.investigation);
   }
 
   if (groupSet.has('subagents')) {

@@ -29,6 +29,7 @@ export default defineConfig([
       'test-results/',
       'playwright-report/',
       'blob-report/',
+      'research/',
       'playwright/.cache/',
       'playwright/.auth/',
       '**/.idea',

@@ -87,6 +87,7 @@ Admins can also add small instance-specific custom skills through plugin configu
 ```
 
 Custom skills are non-secret frontend configuration and are sent to the configured LLM when active. Supported custom skill tool groups are `metrics`, `rqlite`, `dashboardRead`, `jsonnetFiles`, `managedDashboards`, `subagents`, and `skillResources`.
+The bundled investigation skill also uses the `investigation` tool group to maintain the structured report shown in the chat workspace.
 
 ## Development
 

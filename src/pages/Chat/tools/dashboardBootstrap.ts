@@ -318,7 +318,7 @@ function renderBootstrapMarkdown({
 }
 
 function collectPanels(dashboard: Record<string, any>) {
-  const panels: Record<string, any>[] = [];
+  const panels: Array<Record<string, any>> = [];
   const visit = (panel: Record<string, any>) => {
     const nested = arrayField(panel, 'panels').filter(isRecord);
     if (stringField(panel, 'type') !== 'row' || nested.length === 0) {

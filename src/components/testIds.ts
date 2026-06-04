@@ -23,5 +23,9 @@ export const testIds = {
     importInput: 'data-testid oa-chat-import-input',
     export: 'data-testid oa-chat-export',
     send: 'data-testid oa-chat-send',
+    toolConfirmation: 'data-testid oa-chat-tool-confirmation',
+    toolConfirmationApprove: 'data-testid oa-chat-tool-confirmation-approve',
+    toolConfirmationDeny: 'data-testid oa-chat-tool-confirmation-deny',
+    investigationReport: 'data-testid oa-chat-investigation-report',
   },
 };

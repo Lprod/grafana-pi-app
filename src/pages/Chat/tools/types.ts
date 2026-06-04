@@ -12,6 +12,32 @@ export type GrafanaToolRuntime = {
   thinkingLevel: PiAppThinkingLevel;
 };
 
+export type InvestigationReportStatus = 'active' | 'complete';
+
+export type InvestigationReport = {
+  id: string;
+  title: string;
+  status: InvestigationReportStatus;
+  scope: string[];
+  evidence: string[];
+  hypotheses: string[];
+  ruledOut: string[];
+  nextSteps: string[];
+  remediation: string[];
+  updatedAt: string;
+};
+
+export type InvestigationReportPatch = {
+  op: 'add' | 'replace' | 'remove';
+  path: string;
+  value?: unknown;
+};
+
+export type InvestigationReportRuntime = {
+  getReport: () => InvestigationReport | undefined;
+  setReport: (report: InvestigationReport) => void;
+};
+
 export type VirtualJsonnetFileSnapshot = {
   path: string;
   content: string;
@@ -33,6 +59,7 @@ export type VirtualJsonnetFileRuntime = {
 export type CreateGrafanaToolsOptions = GrafanaToolConfig & {
   runtime?: GrafanaToolRuntime;
   virtualJsonnetFiles?: VirtualJsonnetFileRuntime;
+  investigationReport?: InvestigationReportRuntime;
   skillTools?: AgentTool[];
   includeAdHocDashboardTools?: boolean;
   includeJsonnetLibraryTools?: boolean;
@@ -217,6 +244,7 @@ export type GrafanaToolRegistry = {
   dashboards: AgentTool[];
   managedDashboards: ManagedDashboardToolSet;
   jsonnetFiles: JsonnetFileToolSet;
+  investigation: AgentTool[];
   jsonnet: JsonnetLibToolSet;
   subagents: AgentTool[];
   skills: AgentTool[];

@@ -4,6 +4,7 @@ export type SkillToolGroup =
   | 'dashboardRead'
   | 'jsonnetFiles'
   | 'managedDashboards'
+  | 'investigation'
   | 'subagents'
   | 'skillResources'
   | 'jsonnetLibraries'

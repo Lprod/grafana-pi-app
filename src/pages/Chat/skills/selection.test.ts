@@ -4,13 +4,22 @@ import { selectGrafanaSkills } from './selection';
 
 describe('Grafana skill selection', () => {
   it('keeps metrics and subagents available without a default skill', () => {
-    const selection = selectGrafanaSkills('why is CPU usage high?', GRAFANA_SKILLS);
+    const selection = selectGrafanaSkills('show current CPU usage', GRAFANA_SKILLS);
 
     expect(selection.activeSkillNames).toEqual([]);
     expect(selection.toolGroups).toEqual(expect.arrayContaining(['metrics', 'subagents']));
     expect(selection.toolGroups).not.toContain('skillResources');
     expect(selection.toolGroups).not.toContain('managedDashboards');
     expect(selection.toolGroups).not.toContain('jsonnetFiles');
+  });
+
+  it('activates the investigation skill for diagnostic requests', () => {
+    const selection = selectGrafanaSkills('why is CPU usage high on vm-web-01?', GRAFANA_SKILLS);
+
+    expect(selection.activeSkillNames).toEqual(['investigation']);
+    expect(selection.toolGroups).toEqual(
+      expect.arrayContaining(['metrics', 'subagents', 'investigation', 'skillResources'])
+    );
   });
 
   it('activates the dashboard skill for dashboard artifact requests', () => {

@@ -7,6 +7,7 @@ export const CONFIGURABLE_SKILL_TOOL_GROUPS = [
   'dashboardRead',
   'jsonnetFiles',
   'managedDashboards',
+  'investigation',
   'subagents',
   'skillResources',
 ] as const satisfies readonly SkillToolGroup[];

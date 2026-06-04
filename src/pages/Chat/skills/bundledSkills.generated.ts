@@ -18,6 +18,14 @@ export const BUNDLED_GRAFANA_SKILLS = [
     }
   },
   {
+    "name": "investigation",
+    "description": "Run evidence-based Prometheus investigations and maintain a structured investigation report.",
+    "content": "---\nname: investigation\ndescription: Run evidence-based Prometheus investigations and maintain a structured investigation report.\n---\n\n# Investigation Skill\n\nUse this skill when the user asks to investigate, diagnose, explain why something is happening, find root cause, or analyze an incident, outage, failure, latency spike, error spike, or degradation.\n\n## Workflow\n\n1. Define the scope: affected service, host, route, symptom, datasource UID, and time range when available.\n2. Use `update_report` early to create a report with the initial scope and open hypotheses.\n3. Gather evidence with metric discovery and PromQL validation. Prefer `explore_metrics` for broad reconnaissance.\n4. Update the report after each material finding. Add evidence only when it came from a tool result or user-provided context.\n5. Keep hypotheses separate from evidence. Move invalidated ideas to ruled-out causes.\n6. End with current finding, confidence, remaining gaps, and next checks or remediation.\n\n## Report Rules\n\n- Use `update_report` JSON Pointer paths such as `/scope/-`, `/evidence/-`, `/hypotheses/-`, `/ruledOut/-`, `/nextSteps/-`, and `/remediation/-`.\n- Use `/status` with `complete` only when the investigation has a defensible answer or a clear handoff state.\n- Do not invent dashboard, datasource, metric, label, or host names. Use only values returned by tools or provided by the user.\n- If evidence is insufficient, state what was checked and what remains unknown.",
+    "filePath": ".agents/skills/investigation/SKILL.md",
+    "disableModelInvocation": false,
+    "resources": {}
+  },
+  {
     "name": "rqlite-datasource",
     "description": "Query rqlite SQLite-compatible datasources through Grafana using read-only SQL and schema inspection tools.",
     "content": "---\nname: rqlite-datasource\ndescription: Query rqlite SQLite-compatible datasources through Grafana using read-only SQL and schema inspection tools.\n---\n\n# rqlite Datasource Skill\n\nUse this skill when the user asks about rqlite, SQLite, SQL query results, database tables, or table columns.\n\n## Rules\n\n- Discover rqlite datasources before selecting a datasource UID.\n- Inspect tables and columns before writing SQL unless the user provides a complete query.\n- Use `query_rqlite` only for read-only SQL: `SELECT`, `WITH ... SELECT`, `VALUES`, `EXPLAIN SELECT`, or `PRAGMA table_info`.\n- Do not attempt writes, schema changes, transactions, or maintenance statements.\n- Keep query results focused. Summarize rows and mention when the tool result is truncated.",

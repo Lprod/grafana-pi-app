@@ -16,6 +16,8 @@ export type {
   GrafanaToolConfig,
   GrafanaToolRegistry,
   GrafanaToolRuntime,
+  InvestigationReport,
+  InvestigationReportRuntime,
   SkillToolGroup,
   VirtualJsonnetFileRuntime,
   VirtualJsonnetFileSnapshot,
