@@ -25,6 +25,7 @@ type proxyModel struct {
 type proxyOptions struct {
 	Temperature *float64 `json:"temperature,omitempty"`
 	MaxTokens   *int     `json:"maxTokens,omitempty"`
+	Reasoning   string   `json:"reasoning,omitempty"`
 }
 
 type proxyContext struct {
@@ -48,13 +49,20 @@ type proxyTool struct {
 }
 
 type openAIChatRequest struct {
-	Model         string          `json:"model"`
-	Messages      []openAIMessage `json:"messages"`
-	Tools         []openAITool    `json:"tools,omitempty"`
-	Stream        bool            `json:"stream"`
-	StreamOptions map[string]bool `json:"stream_options,omitempty"`
-	Temperature   *float64        `json:"temperature,omitempty"`
-	MaxTokens     *int            `json:"max_tokens,omitempty"`
+	Model              string                    `json:"model"`
+	Messages           []openAIMessage           `json:"messages"`
+	Tools              []openAITool              `json:"tools,omitempty"`
+	Stream             bool                      `json:"stream"`
+	StreamOptions      map[string]bool           `json:"stream_options,omitempty"`
+	Temperature        *float64                  `json:"temperature,omitempty"`
+	MaxTokens          *int                      `json:"max_tokens,omitempty"`
+	ReasoningEffort    string                    `json:"reasoning_effort,omitempty"`
+	EnableThinking     *bool                     `json:"enable_thinking,omitempty"`
+	ChatTemplateKwargs *openAIChatTemplateKwargs `json:"chat_template_kwargs,omitempty"`
+}
+
+type openAIChatTemplateKwargs struct {
+	EnableThinking bool `json:"enable_thinking"`
 }
 
 type openAIMessage struct {
@@ -90,8 +98,11 @@ type openAIToolFunction struct {
 type openAIStreamChunk struct {
 	Choices []struct {
 		Delta struct {
-			Content   string `json:"content"`
-			ToolCalls []struct {
+			Content          string `json:"content"`
+			Reasoning        string `json:"reasoning"`
+			ReasoningContent string `json:"reasoning_content"`
+			ReasoningText    string `json:"reasoning_text"`
+			ToolCalls        []struct {
 				Index    int    `json:"index"`
 				ID       string `json:"id"`
 				Type     string `json:"type"`
@@ -219,7 +230,7 @@ func (a *App) openAIRequest(req proxyStreamRequest) openAIChatRequest {
 		})
 	}
 
-	return openAIChatRequest{
+	payload := openAIChatRequest{
 		Model:         model,
 		Messages:      messages,
 		Tools:         tools,
@@ -227,6 +238,23 @@ func (a *App) openAIRequest(req proxyStreamRequest) openAIChatRequest {
 		StreamOptions: map[string]bool{"include_usage": true},
 		Temperature:   req.Options.Temperature,
 		MaxTokens:     req.Options.MaxTokens,
+	}
+	a.applyThinkingOptions(&payload, a.settings.ThinkingLevel)
+	return payload
+}
+
+func (a *App) applyThinkingOptions(payload *openAIChatRequest, reasoning string) {
+	if normalizeThinkingLevel(reasoning) == thinkingLevelOff {
+		return
+	}
+
+	switch normalizeThinkingFormat(a.settings.ThinkingFormat) {
+	case thinkingFormatQwen:
+		payload.EnableThinking = boolPtr(true)
+	case thinkingFormatQwenChatTemplate:
+		payload.ChatTemplateKwargs = &openAIChatTemplateKwargs{EnableThinking: true}
+	default:
+		payload.ReasoningEffort = normalizeThinkingLevel(reasoning)
 	}
 }
 
@@ -249,6 +277,8 @@ func (a *App) relayOpenAIStream(body io.Reader, stream proxyEventWriter) error {
 	nextContentIndex := 0
 	textStarted := false
 	textIndex := -1
+	thinkingStarted := false
+	thinkingIndex := -1
 	toolCalls := map[int]*streamedToolCall{}
 	usage := zeroUsage()
 	doneReason := "stop"
@@ -289,6 +319,20 @@ func (a *App) relayOpenAIStream(body io.Reader, stream proxyEventWriter) error {
 					}
 				}
 				if err := stream.write(map[string]interface{}{"type": "text_delta", "contentIndex": textIndex, "delta": choice.Delta.Content}); err != nil {
+					return err
+				}
+			}
+
+			if delta := reasoningDelta(choice.Delta.ReasoningContent, choice.Delta.Reasoning, choice.Delta.ReasoningText); delta != "" {
+				if !thinkingStarted {
+					thinkingStarted = true
+					thinkingIndex = nextContentIndex
+					nextContentIndex++
+					if err := stream.write(map[string]interface{}{"type": "thinking_start", "contentIndex": thinkingIndex}); err != nil {
+						return err
+					}
+				}
+				if err := stream.write(map[string]interface{}{"type": "thinking_delta", "contentIndex": thinkingIndex, "delta": delta}); err != nil {
 					return err
 				}
 			}
@@ -386,6 +430,11 @@ func (a *App) relayOpenAIStream(body io.Reader, stream proxyEventWriter) error {
 			return err
 		}
 	}
+	if thinkingStarted {
+		if err := stream.write(map[string]interface{}{"type": "thinking_end", "contentIndex": thinkingIndex}); err != nil {
+			return err
+		}
+	}
 	toolCallIndexes := make([]int, 0, len(toolCalls))
 	for index := range toolCalls {
 		toolCallIndexes = append(toolCallIndexes, index)
@@ -402,6 +451,15 @@ func (a *App) relayOpenAIStream(body io.Reader, stream proxyEventWriter) error {
 	}
 
 	return stream.write(map[string]interface{}{"type": "done", "reason": doneReason, "usage": usage})
+}
+
+func reasoningDelta(values ...string) string {
+	for _, value := range values {
+		if value != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func convertMessage(message proxyMessage) openAIMessage {
@@ -556,6 +614,10 @@ func zeroCost() map[string]int {
 		"cacheWrite": 0,
 		"total":      0,
 	}
+}
+
+func boolPtr(value bool) *bool {
+	return &value
 }
 
 func errorEvent(message string) map[string]interface{} {

@@ -242,6 +242,91 @@ describe('grafana datasource tool policy', () => {
     });
   });
 
+  it('keeps anomalous Prometheus series when compacting batch summaries', async () => {
+    const times = [Date.UTC(2026, 0, 1, 0, 0, 0), Date.UTC(2026, 0, 1, 0, 5, 0)];
+    const firstFrame = makePrometheusFrame({
+      displayName: 'value',
+      labels: {},
+      times,
+      values: [1, 1],
+    });
+    const latencyFrames = [
+      makePrometheusFrame({
+        displayName: 'latency{route="/",vm="vm-web-01"}',
+        labels: { route: '/', vm: 'vm-web-01' },
+        times,
+        values: [0.2, 0.7],
+      }),
+      makePrometheusFrame({
+        displayName: 'latency{route="/",vm="vm-web-02"}',
+        labels: { route: '/', vm: 'vm-web-02' },
+        times,
+        values: [0.2, 0.22],
+      }),
+      makePrometheusFrame({
+        displayName: 'latency{route="/api/orders",vm="vm-web-01"}',
+        labels: { route: '/api/orders', vm: 'vm-web-01' },
+        times,
+        values: [0.35, 1.66],
+      }),
+      makePrometheusFrame({
+        displayName: 'latency{route="/api/orders",vm="vm-web-02"}',
+        labels: { route: '/api/orders', vm: 'vm-web-02' },
+        times,
+        values: [0.35, 0.4],
+      }),
+      makePrometheusFrame({
+        displayName: 'latency{route="/health",vm="vm-web-01"}',
+        labels: { route: '/health', vm: 'vm-web-01' },
+        times,
+        values: [0.05, 0.05],
+      }),
+      makePrometheusFrame({
+        displayName: 'latency{route="/render/report",vm="vm-web-01"}',
+        labels: { route: '/render/report', vm: 'vm-web-01' },
+        times,
+        values: [0.1, 4],
+      }),
+    ];
+    const dataSource = {
+      uid: 'prom-b',
+      type: 'prometheus',
+      query: jest
+        .fn()
+        .mockResolvedValueOnce({ state: 'Done', data: [firstFrame] })
+        .mockResolvedValueOnce({ state: 'Done', data: latencyFrames }),
+    };
+    mockDataSourceSrv.get.mockResolvedValue(dataSource);
+    const tool = getTool(createGrafanaTools({ allowedPrometheusDatasourceUids: ['prom-b'] }), 'query_prometheus');
+
+    const result = await tool.execute(
+      'call-1',
+      {
+        queries: [
+          { query: 'node_load1', type: 'range', start: 'now-6h', end: 'now' },
+          { query: 'histogram_quantile(...)', type: 'range', start: 'now-6h', end: 'now' },
+        ],
+      },
+      undefined
+    );
+    const body = JSON.parse(result.content[0].text);
+    const latencySummary = body.results[1];
+
+    expect(latencySummary.totalSeries).toBe(6);
+    expect(latencySummary.truncatedSeries).toBe(true);
+    expect(latencySummary.series).toHaveLength(3);
+    expect(latencySummary.series.map((series: { labels: { route: string } }) => series.labels.route)).toContain(
+      '/render/report'
+    );
+    expect(latencySummary.seriesSelection).toMatch(/ranked by max/);
+    expect(latencySummary.omittedSeries).toMatchObject({
+      count: 3,
+      labelValues: {
+        route: expect.arrayContaining(['/api/orders', '/', '/health']),
+      },
+    });
+  });
+
   it('rejects an explicit datasource UID outside the allow-list', async () => {
     const tool = getTool(createGrafanaTools({ allowedPrometheusDatasourceUids: ['prom-b'] }), 'list_metrics');
 
@@ -726,6 +811,7 @@ describe('grafana datasource tool policy', () => {
       runtime: {
         model: {} as any,
         streamFn: jest.fn() as any,
+        thinkingLevel: 'off',
       },
     });
     expect(defaultRegistry.subagents.map((tool) => tool.name)).toEqual(['explore_metrics']);
@@ -738,6 +824,7 @@ describe('grafana datasource tool policy', () => {
       runtime: {
         model: {} as any,
         streamFn: jest.fn() as any,
+        thinkingLevel: 'off',
       },
     });
 
@@ -770,6 +857,7 @@ describe('grafana datasource tool policy', () => {
       runtime: {
         model: {} as any,
         streamFn: jest.fn() as any,
+        thinkingLevel: 'off',
       },
     }).map((tool) => tool.name);
 
@@ -788,6 +876,7 @@ describe('grafana datasource tool policy', () => {
         runtime: {
           model: {} as any,
           streamFn: jest.fn() as any,
+          thinkingLevel: 'off',
         },
       },
       ['metrics', 'subagents']
@@ -820,6 +909,7 @@ describe('grafana datasource tool policy', () => {
         runtime: {
           model: {} as any,
           streamFn: jest.fn() as any,
+          thinkingLevel: 'off',
         },
       },
       ['metrics', 'dashboardRead', 'jsonnetFiles', 'managedDashboards', 'subagents']

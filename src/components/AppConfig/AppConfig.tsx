@@ -16,8 +16,9 @@ import { getBackendSrv, getDataSourceSrv, locationService } from '@grafana/runti
 import { css } from '@emotion/css';
 import { testIds } from '../testIds';
 import { lastValueFrom } from 'rxjs';
-import type { PiAppAccessMode, PiAppJsonData } from '../../types';
+import type { PiAppAccessMode, PiAppJsonData, PiAppThinkingFormat, PiAppThinkingLevel } from '../../types';
 import { parseCustomSkillsJson, validateCustomSkillsJson } from '../../pages/Chat/skills/configured';
+import { getConfiguredThinkingFormat, getConfiguredThinkingLevel } from '../../pages/Chat/model';
 import {
   APP_ACCESS_ACTION,
   accessModeOptions,
@@ -29,6 +30,8 @@ import {
 type State = {
   openAIBaseUrl: string;
   defaultModel: string;
+  thinkingLevel: PiAppThinkingLevel;
+  thinkingFormat: PiAppThinkingFormat;
   isOpenAIAPIKeySet: boolean;
   openAIAPIKey: string;
   accessMode: PiAppAccessMode;
@@ -47,6 +50,8 @@ const AppConfig = ({ plugin }: AppConfigProps) => {
   const [state, setState] = useState<State>({
     openAIBaseUrl: jsonData?.openAIBaseUrl || 'https://api.openai.com/v1',
     defaultModel: jsonData?.defaultModel || 'gpt-4.1',
+    thinkingLevel: getConfiguredThinkingLevel(jsonData),
+    thinkingFormat: getConfiguredThinkingFormat(jsonData),
     openAIAPIKey: '',
     isOpenAIAPIKeySet: Boolean(jsonData?.isOpenAIAPIKeySet),
     accessMode: getConfiguredAccessMode(jsonData),
@@ -105,6 +110,20 @@ const AppConfig = ({ plugin }: AppConfigProps) => {
     });
   };
 
+  const onChangeThinkingLevel = (thinkingLevel: PiAppThinkingLevel) => {
+    setState({
+      ...state,
+      thinkingLevel,
+    });
+  };
+
+  const onChangeThinkingFormat = (thinkingFormat: PiAppThinkingFormat) => {
+    setState({
+      ...state,
+      thinkingFormat,
+    });
+  };
+
   const onChangeAccessMode = (accessMode: PiAppAccessMode) => {
     setState({
       ...state,
@@ -157,6 +176,8 @@ const AppConfig = ({ plugin }: AppConfigProps) => {
       jsonData: {
         openAIBaseUrl: state.openAIBaseUrl,
         defaultModel: state.defaultModel,
+        thinkingLevel: state.thinkingLevel,
+        thinkingFormat: state.thinkingFormat,
         isOpenAIAPIKeySet: true,
         accessMode: state.accessMode,
         allowedUsers,
@@ -250,6 +271,34 @@ const AppConfig = ({ plugin }: AppConfigProps) => {
             placeholder="gpt-4.1"
             onChange={onChangeDefaultModel}
           />
+        </Field>
+
+        <Field
+          label="Thinking level"
+          description="Optional reasoning effort for models that support it. Off preserves the current request shape."
+          className={s.marginTop}
+        >
+          <div data-testid={testIds.appConfig.thinkingLevel}>
+            <RadioButtonGroup<PiAppThinkingLevel>
+              options={thinkingLevelOptions}
+              value={state.thinkingLevel}
+              onChange={onChangeThinkingLevel}
+            />
+          </div>
+        </Field>
+
+        <Field
+          label="Thinking format"
+          description="Provider-specific OpenAI-compatible request field used when thinking is enabled."
+          className={s.marginTop}
+        >
+          <div data-testid={testIds.appConfig.thinkingFormat}>
+            <RadioButtonGroup<PiAppThinkingFormat>
+              options={thinkingFormatOptions}
+              value={state.thinkingFormat}
+              onChange={onChangeThinkingFormat}
+            />
+          </div>
         </Field>
 
         <Field
@@ -376,6 +425,19 @@ const CUSTOM_SKILLS_PLACEHOLDER = `[
     ]
   }
 ]`;
+
+const thinkingLevelOptions: Array<{ label: string; value: PiAppThinkingLevel; description: string }> = [
+  { label: 'Off', value: 'off', description: 'Do not request model thinking.' },
+  { label: 'Low', value: 'low', description: 'Small reasoning budget.' },
+  { label: 'Medium', value: 'medium', description: 'Balanced reasoning budget.' },
+  { label: 'High', value: 'high', description: 'Higher reasoning budget.' },
+];
+
+const thinkingFormatOptions: Array<{ label: string; value: PiAppThinkingFormat; description: string }> = [
+  { label: 'OpenAI', value: 'openai', description: 'Send reasoning_effort.' },
+  { label: 'Qwen', value: 'qwen', description: 'Send enable_thinking.' },
+  { label: 'Qwen template', value: 'qwen-chat-template', description: 'Send chat_template_kwargs.enable_thinking.' },
+];
 
 function formatCustomSkillsJson(customSkills: PiAppJsonData['customSkills']) {
   if (!Array.isArray(customSkills) || customSkills.length === 0) {

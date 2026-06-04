@@ -501,9 +501,16 @@ type PrometheusQuerySummary = {
   frameCount: number;
   totalSeries: number;
   truncatedSeries: boolean;
+  seriesSelection?: string;
+  omittedSeries?: OmittedSeriesSummary;
   notices: QueryNotice[];
   executedQueryStrings: string[];
   series: SeriesSummary[];
+};
+
+type OmittedSeriesSummary = {
+  count: number;
+  labelValues: Record<string, string[]>;
 };
 
 type QueryNotice = {
@@ -552,6 +559,7 @@ function summarizePrometheusQuery(options: {
       allSeries.push(summarizeNumberField(frame, field, timeField));
     }
   }
+  const selected = selectProminentSeries(allSeries, MAX_SERIES_SUMMARIES);
 
   return {
     datasourceUid: options.datasourceUid,
@@ -566,9 +574,11 @@ function summarizePrometheusQuery(options: {
     frameCount: options.frames.length,
     totalSeries: allSeries.length,
     truncatedSeries: allSeries.length > MAX_SERIES_SUMMARIES,
+    seriesSelection: selected.selection,
+    omittedSeries: selected.omittedSeries,
     notices: collectNotices(options.frames),
     executedQueryStrings: collectExecutedQueryStrings(options.frames),
-    series: allSeries.slice(0, MAX_SERIES_SUMMARIES),
+    series: selected.series,
   };
 }
 
@@ -648,10 +658,145 @@ function summarizeNumberField(frame: DataFrame, field: Field, timeField?: Field)
 }
 
 function compactBatchPrometheusSummary(summary: PrometheusQuerySummary): PrometheusQuerySummary {
+  const selected = selectProminentSeries(summary.series, MAX_BATCH_SERIES_SUMMARIES);
+
   return {
     ...summary,
     truncatedSeries: summary.truncatedSeries || summary.totalSeries > MAX_BATCH_SERIES_SUMMARIES,
-    series: summary.series.slice(0, MAX_BATCH_SERIES_SUMMARIES),
+    seriesSelection: selected.selection ?? summary.seriesSelection,
+    omittedSeries: mergeOmittedSeries(selected.omittedSeries, summary.omittedSeries),
+    series: selected.series,
+  };
+}
+
+function selectProminentSeries(
+  allSeries: SeriesSummary[],
+  limit: number
+): { series: SeriesSummary[]; selection?: string; omittedSeries?: OmittedSeriesSummary } {
+  if (allSeries.length <= limit) {
+    return { series: allSeries };
+  }
+
+  const selectedIndexes = new Set<number>();
+  const rankers = [seriesMaxAbs, seriesDeltaPercentAbs, seriesSpikeRatio, seriesLastAbs];
+
+  for (const ranker of rankers) {
+    if (selectedIndexes.size >= limit) {
+      break;
+    }
+    const candidate = rankedSeriesIndexes(allSeries, ranker).find((index) => !selectedIndexes.has(index));
+    if (candidate !== undefined && ranker(allSeries[candidate]) > 0) {
+      selectedIndexes.add(candidate);
+    }
+  }
+
+  for (const index of rankedSeriesIndexes(allSeries, seriesCompositeScore)) {
+    if (selectedIndexes.size >= limit) {
+      break;
+    }
+    selectedIndexes.add(index);
+  }
+
+  const selected = [...selectedIndexes]
+    .sort((left, right) => seriesCompositeScore(allSeries[right]) - seriesCompositeScore(allSeries[left]) || left - right)
+    .map((index) => allSeries[index]);
+  const omitted = allSeries.filter((_series, index) => !selectedIndexes.has(index));
+
+  return {
+    series: selected,
+    selection: 'ranked by max, deltaPercent, spike ratio, and last value',
+    omittedSeries: summarizeOmittedSeries(omitted),
+  };
+}
+
+function rankedSeriesIndexes(series: SeriesSummary[], score: (series: SeriesSummary) => number) {
+  return series
+    .map((item, index) => ({ index, score: score(item) }))
+    .sort((left, right) => right.score - left.score || left.index - right.index)
+    .map((item) => item.index);
+}
+
+function seriesCompositeScore(series: SeriesSummary) {
+  return Math.max(seriesMaxAbs(series), seriesDeltaPercentAbs(series), seriesSpikeRatio(series), seriesLastAbs(series));
+}
+
+function seriesMaxAbs(series: SeriesSummary) {
+  return absPointValue(series.max);
+}
+
+function seriesLastAbs(series: SeriesSummary) {
+  return absPointValue(series.last);
+}
+
+function seriesDeltaPercentAbs(series: SeriesSummary) {
+  return Math.abs(series.deltaPercent ?? 0);
+}
+
+function seriesSpikeRatio(series: SeriesSummary) {
+  const max = absPointValue(series.max);
+  const mean = Math.abs(series.mean ?? 0);
+  return mean > 0 ? (max / mean) * 100 : max;
+}
+
+function absPointValue(point?: SummaryPoint) {
+  return typeof point?.value === 'number' && Number.isFinite(point.value) ? Math.abs(point.value) : 0;
+}
+
+function summarizeOmittedSeries(series: SeriesSummary[]): OmittedSeriesSummary | undefined {
+  if (series.length === 0) {
+    return undefined;
+  }
+
+  const values = new Map<string, Set<string>>();
+  for (const item of series) {
+    for (const [label, value] of Object.entries(item.labels)) {
+      if (!values.has(label)) {
+        values.set(label, new Set());
+      }
+      values.get(label)!.add(value);
+    }
+  }
+
+  return {
+    count: series.length,
+    labelValues: Object.fromEntries(
+      [...values.entries()]
+        .sort(([left], [right]) => left.localeCompare(right))
+        .map(([label, labelValues]) => [label, [...labelValues].sort().slice(0, 20)])
+    ),
+  };
+}
+
+function mergeOmittedSeries(
+  left: OmittedSeriesSummary | undefined,
+  right: OmittedSeriesSummary | undefined
+): OmittedSeriesSummary | undefined {
+  if (!left) {
+    return right;
+  }
+  if (!right) {
+    return left;
+  }
+
+  const values = new Map<string, Set<string>>();
+  for (const source of [left, right]) {
+    for (const [label, labelValues] of Object.entries(source.labelValues)) {
+      if (!values.has(label)) {
+        values.set(label, new Set());
+      }
+      for (const value of labelValues) {
+        values.get(label)!.add(value);
+      }
+    }
+  }
+
+  return {
+    count: left.count + right.count,
+    labelValues: Object.fromEntries(
+      [...values.entries()]
+        .sort(([leftLabel], [rightLabel]) => leftLabel.localeCompare(rightLabel))
+        .map(([label, labelValues]) => [label, [...labelValues].sort().slice(0, 20)])
+    ),
   };
 }
 

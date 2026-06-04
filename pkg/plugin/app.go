@@ -38,12 +38,25 @@ type App struct {
 type appSettings struct {
 	OpenAIBaseURL                   string   `json:"openAIBaseUrl"`
 	DefaultModel                    string   `json:"defaultModel"`
+	ThinkingLevel                   string   `json:"thinkingLevel"`
+	ThinkingFormat                  string   `json:"thinkingFormat"`
 	AccessMode                      string   `json:"accessMode"`
 	AllowedUsers                    []string `json:"allowedUsers"`
 	AllowedPrometheusDatasourceUIDs []string `json:"allowedPrometheusDatasourceUids"`
 	SystemPromptAddendum            string   `json:"systemPromptAddendum"`
 	OpenAIAPIKey                    string
 }
+
+const (
+	thinkingLevelOff    = "off"
+	thinkingLevelLow    = "low"
+	thinkingLevelMedium = "medium"
+	thinkingLevelHigh   = "high"
+
+	thinkingFormatOpenAI           = "openai"
+	thinkingFormatQwen             = "qwen"
+	thinkingFormatQwenChatTemplate = "qwen-chat-template"
+)
 
 // NewApp creates a new example *App instance.
 func NewApp(_ context.Context, settings backend.AppInstanceSettings) (instancemgmt.Instance, error) {
@@ -101,9 +114,29 @@ func loadSettings(settings backend.AppInstanceSettings) appSettings {
 	if loaded.DefaultModel == "" {
 		loaded.DefaultModel = "gpt-4.1"
 	}
+	loaded.ThinkingLevel = normalizeThinkingLevel(loaded.ThinkingLevel)
+	loaded.ThinkingFormat = normalizeThinkingFormat(loaded.ThinkingFormat)
 	loaded.AccessMode = normalizeAccessMode(loaded.AccessMode)
 	loaded.AllowedUsers = normalizeAllowedUsers(loaded.AllowedUsers)
 	loaded.OpenAIAPIKey = settings.DecryptedSecureJSONData["openAIAPIKey"]
 
 	return loaded
+}
+
+func normalizeThinkingLevel(value string) string {
+	switch value {
+	case thinkingLevelLow, thinkingLevelMedium, thinkingLevelHigh:
+		return value
+	default:
+		return thinkingLevelOff
+	}
+}
+
+func normalizeThinkingFormat(value string) string {
+	switch value {
+	case thinkingFormatQwen, thinkingFormatQwenChatTemplate:
+		return value
+	default:
+		return thinkingFormatOpenAI
+	}
 }

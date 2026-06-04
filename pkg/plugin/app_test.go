@@ -52,6 +52,36 @@ func TestLoadSettingsNormalizesAccessPolicy(t *testing.T) {
 	}
 }
 
+func TestLoadSettingsNormalizesThinkingSettings(t *testing.T) {
+	jsonData, _ := json.Marshal(map[string]any{
+		"thinkingLevel":  "medium",
+		"thinkingFormat": "qwen-chat-template",
+	})
+
+	settings := loadSettings(backend.AppInstanceSettings{JSONData: jsonData})
+
+	if settings.ThinkingLevel != thinkingLevelMedium {
+		t.Fatalf("expected medium thinking level, got %q", settings.ThinkingLevel)
+	}
+	if settings.ThinkingFormat != thinkingFormatQwenChatTemplate {
+		t.Fatalf("expected qwen chat-template thinking format, got %q", settings.ThinkingFormat)
+	}
+
+	jsonData, _ = json.Marshal(map[string]any{
+		"thinkingLevel":  "minimal",
+		"thinkingFormat": "deepseek",
+	})
+
+	settings = loadSettings(backend.AppInstanceSettings{JSONData: jsonData})
+
+	if settings.ThinkingLevel != thinkingLevelOff {
+		t.Fatalf("expected invalid thinking level to default off, got %q", settings.ThinkingLevel)
+	}
+	if settings.ThinkingFormat != thinkingFormatOpenAI {
+		t.Fatalf("expected invalid thinking format to default openai, got %q", settings.ThinkingFormat)
+	}
+}
+
 func TestLoadSettingsDefaultsToAllAccess(t *testing.T) {
 	settings := loadSettings(backend.AppInstanceSettings{})
 

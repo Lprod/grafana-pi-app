@@ -15,7 +15,7 @@ import {
   type VirtualJsonnetFileSnapshot,
 } from './grafanaTools';
 import { formatAssistantError, type AssistantErrorView } from './llmErrors';
-import { createOpenAICompatibleModel, type PiAppJsonData } from './model';
+import { createOpenAICompatibleModel, getConfiguredThinkingLevel, type PiAppJsonData } from './model';
 import { getGrafanaSkills, renderGrafanaSystemPrompt, selectGrafanaSkills } from './skills';
 import { ContentBlocks, ToolActivityPanel, ToolResultMessageBody, type ToolRunView } from './ToolRenderer';
 
@@ -77,6 +77,7 @@ function ChatApp() {
   const pluginMeta = usePluginMeta();
   const jsonData = useMemo(() => (pluginMeta?.jsonData ?? {}) as PiAppJsonData, [pluginMeta?.jsonData]);
   const llmModel = useMemo(() => createOpenAICompatibleModel(jsonData), [jsonData]);
+  const thinkingLevel = useMemo(() => getConfiguredThinkingLevel(jsonData), [jsonData]);
   const skills = useMemo(() => getGrafanaSkills(jsonData), [jsonData]);
   const streamFn = useCallback<StreamFn>(
     (model, context, options) =>
@@ -121,7 +122,7 @@ function ChatApp() {
       const tools = createGrafanaToolsForSkillGroups(
         {
           ...jsonData,
-          runtime: { model: llmModel, streamFn },
+          runtime: { model: llmModel, streamFn, thinkingLevel },
           virtualJsonnetFiles: virtualJsonnetRuntime,
           skillTools,
         },
@@ -136,7 +137,7 @@ function ChatApp() {
         tools,
       };
     },
-    [jsonData, llmModel, skills, streamFn, virtualJsonnetRuntime]
+    [jsonData, llmModel, skills, streamFn, thinkingLevel, virtualJsonnetRuntime]
   );
   const [agent, setAgent] = useState<Agent>();
   const agentRef = useRef<Agent>();
@@ -202,7 +203,7 @@ function ChatApp() {
         initialState: {
           systemPrompt: runtime.systemPrompt,
           model: llmModel,
-          thinkingLevel: 'off',
+          thinkingLevel,
           messages,
           tools: runtime.tools,
         },
@@ -230,7 +231,7 @@ function ChatApp() {
       flushRevision();
       return nextAgent;
     },
-    [buildSkillRuntime, flushRevision, llmModel, saveSession, scheduleRevision, streamFn]
+    [buildSkillRuntime, flushRevision, llmModel, saveSession, scheduleRevision, streamFn, thinkingLevel]
   );
 
   const startNewSession = useCallback(() => {

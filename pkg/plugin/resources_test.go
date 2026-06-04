@@ -334,6 +334,102 @@ func TestOpenAIRequestAppendsConfiguredSystemPromptAddendum(t *testing.T) {
 	}
 }
 
+func TestOpenAIRequestOmitsThinkingFieldsByDefault(t *testing.T) {
+	app := App{settings: appSettings{DefaultModel: "gpt-default"}}
+
+	payload := app.openAIRequest(proxyStreamRequest{
+		Context: proxyContext{
+			Messages: []proxyMessage{
+				{Role: "user", Content: json.RawMessage(`"Hello"`)},
+			},
+		},
+		Options: proxyOptions{Reasoning: thinkingLevelHigh},
+	})
+
+	if payload.ReasoningEffort != "" {
+		t.Fatalf("default payload should not include reasoning_effort, got %q", payload.ReasoningEffort)
+	}
+	if payload.EnableThinking != nil {
+		t.Fatalf("default payload should not include enable_thinking")
+	}
+	if payload.ChatTemplateKwargs != nil {
+		t.Fatalf("default payload should not include chat_template_kwargs")
+	}
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("marshal payload: %s", err)
+	}
+	for _, unexpected := range []string{"reasoning_effort", "enable_thinking", "chat_template_kwargs"} {
+		if bytes.Contains(encoded, []byte(unexpected)) {
+			t.Fatalf("default payload should not contain %q: %s", unexpected, encoded)
+		}
+	}
+}
+
+func TestOpenAIRequestAppliesConfiguredThinkingFormat(t *testing.T) {
+	tests := []struct {
+		name   string
+		format string
+		assert func(t *testing.T, payload openAIChatRequest)
+	}{
+		{
+			name:   "openai",
+			format: thinkingFormatOpenAI,
+			assert: func(t *testing.T, payload openAIChatRequest) {
+				t.Helper()
+				if payload.ReasoningEffort != thinkingLevelMedium {
+					t.Fatalf("expected reasoning_effort medium, got %q", payload.ReasoningEffort)
+				}
+				if payload.EnableThinking != nil || payload.ChatTemplateKwargs != nil {
+					t.Fatalf("openai format should not include qwen thinking fields: %#v", payload)
+				}
+			},
+		},
+		{
+			name:   "qwen",
+			format: thinkingFormatQwen,
+			assert: func(t *testing.T, payload openAIChatRequest) {
+				t.Helper()
+				if payload.EnableThinking == nil || !*payload.EnableThinking {
+					t.Fatalf("expected enable_thinking true, got %#v", payload.EnableThinking)
+				}
+				if payload.ReasoningEffort != "" || payload.ChatTemplateKwargs != nil {
+					t.Fatalf("qwen format should only include enable_thinking: %#v", payload)
+				}
+			},
+		},
+		{
+			name:   "qwen chat template",
+			format: thinkingFormatQwenChatTemplate,
+			assert: func(t *testing.T, payload openAIChatRequest) {
+				t.Helper()
+				if payload.ChatTemplateKwargs == nil || !payload.ChatTemplateKwargs.EnableThinking {
+					t.Fatalf("expected chat_template_kwargs.enable_thinking true, got %#v", payload.ChatTemplateKwargs)
+				}
+				if payload.ReasoningEffort != "" || payload.EnableThinking != nil {
+					t.Fatalf("qwen chat template format should only include chat_template_kwargs: %#v", payload)
+				}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			app := App{settings: appSettings{DefaultModel: "gpt-default", ThinkingLevel: thinkingLevelMedium, ThinkingFormat: tt.format}}
+
+			payload := app.openAIRequest(proxyStreamRequest{
+				Context: proxyContext{
+					Messages: []proxyMessage{
+						{Role: "user", Content: json.RawMessage(`"Hello"`)},
+					},
+				},
+			})
+
+			tt.assert(t, payload)
+		})
+	}
+}
+
 func TestLLMStreamParsesMultilineSSEAndBufferedToolArguments(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
@@ -387,6 +483,35 @@ func TestLLMStreamParsesMultilineSSEAndBufferedToolArguments(t *testing.T) {
 	laterArgIndex := strings.Index(combined, `"delta":"\"up\"}"`)
 	if startIndex < 0 || bufferedArgIndex < startIndex || laterArgIndex < bufferedArgIndex {
 		t.Fatalf("expected buffered tool arguments to be replayed after start and before later args, got %s", combined)
+	}
+}
+
+func TestLLMStreamRelaysReasoningDeltas(t *testing.T) {
+	app := App{}
+	recorder := httptest.NewRecorder()
+	body := strings.NewReader(
+		"data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"check\"}}]}\n\n" +
+			"data: {\"choices\":[{\"delta\":{\"content\":\"answer\"}}]}\n\n" +
+			"data: {\"choices\":[{\"finish_reason\":\"stop\",\"delta\":{}}]}\n\n" +
+			"data: [DONE]\n\n",
+	)
+
+	if err := app.relayOpenAIStream(body, newProxyEventWriter(recorder, nil)); err != nil {
+		t.Fatalf("relay stream: %s", err)
+	}
+
+	combined := recorder.Body.String()
+	for _, expected := range []string{
+		`"type":"thinking_start"`,
+		`"delta":"check"`,
+		`"type":"thinking_end"`,
+		`"type":"text_start"`,
+		`"delta":"answer"`,
+		`"type":"done"`,
+	} {
+		if !strings.Contains(combined, expected) {
+			t.Fatalf("expected stream to contain %s, got %s", expected, combined)
+		}
 	}
 }
 

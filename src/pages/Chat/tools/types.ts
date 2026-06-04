@@ -1,7 +1,7 @@
 import type { AgentTool, StreamFn } from '@earendil-works/pi-agent-core';
 import type { Model } from '@earendil-works/pi-ai';
 import type { DataSourceApi, DataSourceInstanceSettings } from '@grafana/data';
-import type { PiAppJsonData } from '../../../types';
+import type { PiAppJsonData, PiAppThinkingLevel } from '../../../types';
 import type { SkillToolGroup } from '../skills/types';
 
 export type GrafanaToolConfig = Pick<PiAppJsonData, 'allowedPrometheusDatasourceUids' | 'allowedRqliteDatasourceUids'>;
@@ -9,6 +9,7 @@ export type GrafanaToolConfig = Pick<PiAppJsonData, 'allowedPrometheusDatasource
 export type GrafanaToolRuntime = {
   model: Model<any>;
   streamFn: StreamFn;
+  thinkingLevel: PiAppThinkingLevel;
 };
 
 export type VirtualJsonnetFileSnapshot = {

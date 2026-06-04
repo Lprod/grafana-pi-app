@@ -77,6 +77,7 @@ try {
       {
         env: {
           ...process.env,
+          RUN_AGENT_BENCHMARKS: '1',
           BENCH_TIMEOUT_MS: String(BENCH_TIMEOUT_MS),
           BENCH_RUN_INDEX: String(runIndex),
           GRAFANA_URL,

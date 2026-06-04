@@ -4,6 +4,8 @@ export const testIds = {
     openAIAPIKey: 'data-testid ac-openai-api-key',
     openAIBaseUrl: 'data-testid ac-openai-base-url',
     defaultModel: 'data-testid ac-default-model',
+    thinkingLevel: 'data-testid ac-thinking-level',
+    thinkingFormat: 'data-testid ac-thinking-format',
     allowedUsers: 'data-testid ac-allowed-users',
     systemPromptAddendum: 'data-testid ac-system-prompt-addendum',
     allowedPrometheusDatasourceUids: 'data-testid ac-allowed-prometheus-datasource-uids',

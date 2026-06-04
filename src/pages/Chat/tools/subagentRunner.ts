@@ -88,7 +88,7 @@ export async function runGrafanaSubagent(options: RunSubagentOptions): Promise<T
     initialState: {
       systemPrompt: options.systemPrompt,
       model: options.runtime.model,
-      thinkingLevel: 'off',
+      thinkingLevel: options.runtime.thinkingLevel,
       messages: [],
       tools: options.tools,
     },
