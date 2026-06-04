@@ -8,6 +8,8 @@ import { createRqliteTools, filterAllowedRqliteDatasourceSettings } from './rqli
 import { createSubagentTools } from './subagents';
 import type { CreateGrafanaToolsOptions, GrafanaToolRegistry, SkillToolGroup } from './types';
 
+export { buildDashboardBootstrapDigest } from './dashboardBootstrap';
+export type { DashboardBootstrapDigest } from './dashboardBootstrap';
 export { getUnavailableDashboardDatasourceUids } from './dashboardPolicy';
 export { DEFAULT_JSONNET_FILE_PATH, normalizeJsonnetPath } from './jsonnetFiles';
 export { filterAllowedPrometheusDatasourceSettings, filterAllowedRqliteDatasourceSettings };

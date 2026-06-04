@@ -1,4 +1,5 @@
 export {
+  buildDashboardBootstrapDigest,
   createGrafanaToolRegistry,
   createGrafanaTools,
   createGrafanaToolsForSkillGroups,
@@ -9,6 +10,7 @@ export {
   getUnavailableDashboardDatasourceUids,
   normalizeJsonnetPath,
 } from './tools';
+export type { DashboardBootstrapDigest } from './tools';
 export type {
   CreateGrafanaToolsOptions,
   GrafanaToolConfig,

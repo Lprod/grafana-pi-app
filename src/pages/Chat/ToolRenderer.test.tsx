@@ -20,7 +20,12 @@ jest.mock('@grafana/scenes', () => {
   class EmbeddedScene extends MockSceneObject {
     static Component = ({ model }: { model: any }) => {
       const state = panelState(model);
-      return React.createElement('div', { 'data-testid': 'mock-embedded-scene' }, state?.title ?? 'scene', state?.headerActions);
+      return React.createElement(
+        'div',
+        { 'data-testid': 'mock-embedded-scene' },
+        state?.title ?? 'scene',
+        state?.headerActions
+      );
     };
   }
 
@@ -233,6 +238,13 @@ describe('ToolRenderer', () => {
           },
           {
             type: 'toolCall',
+            name: 'bootstrap_dashboard_context',
+            arguments: {
+              uid: 'service-health',
+            },
+          },
+          {
+            type: 'toolCall',
             name: 'search_grafonnet',
             arguments: {
               query: 'timeseries panel',
@@ -253,6 +265,7 @@ describe('ToolRenderer', () => {
 
     expect(container.textContent).toContain('Render dashboard | service-health');
     expect(container.textContent).toContain('Capture dashboard screenshot | service-health');
+    expect(container.textContent).toContain('Bootstrap dashboard context | service-health');
     expect(container.textContent).toContain('1200 x 800');
     expect(container.textContent).toContain('Search Jsonnet libraries | timeseries panel');
     expect(container.textContent).toContain('Edit Jsonnet source | dashboards/service.jsonnet');

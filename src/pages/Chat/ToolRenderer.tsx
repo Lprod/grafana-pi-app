@@ -312,8 +312,8 @@ function prometheusQueryToolCallFromArgs(args: unknown, partial: boolean): Prome
       ? queryRecords
           .map((queryRecord) => prometheusQueryToolCallQueryFromRecord(queryRecord, args))
           .filter((query): query is PrometheusQueryToolCallQuery => Boolean(query))
-      : [prometheusQueryToolCallQueryFromRecord(args, args)].filter(
-          (query): query is PrometheusQueryToolCallQuery => Boolean(query)
+      : [prometheusQueryToolCallQueryFromRecord(args, args)].filter((query): query is PrometheusQueryToolCallQuery =>
+          Boolean(query)
         );
 
   if (queries.length === 0) {
@@ -477,6 +477,8 @@ function asSimpleToolCallSummary(
     case 'get_dashboard':
     case 'grafana_get_dashboard':
       return dashboardToolCallSummary('Get dashboard', record);
+    case 'bootstrap_dashboard_context':
+      return dashboardToolCallSummary('Bootstrap dashboard context', record);
     case 'get_dashboard_source':
     case 'grafana_get_managed_dashboard_source':
       return dashboardToolCallSummary('Read managed dashboard source', record);
@@ -534,7 +536,11 @@ function labelValuesToolCallSummary(record: Record<string, unknown>): SimpleTool
 function inspectMetricSeriesToolCallSummary(record: Record<string, unknown>): SimpleToolCallSummary {
   const selector = stringField(record, 'match') ?? stringField(record, 'selector') ?? stringField(record, 'metric');
   return {
-    summary: summaryLine(['Inspect metric series', selector ? 'selector provided' : undefined, formatDatasourceSummary(record)]),
+    summary: summaryLine([
+      'Inspect metric series',
+      selector ? 'selector provided' : undefined,
+      formatDatasourceSummary(record),
+    ]),
     items: [
       { label: 'Datasource', value: formatDatasourceMetaValue(record) },
       { label: 'Selector', value: selector ? <code>{selector}</code> : undefined },
@@ -546,7 +552,8 @@ function inspectMetricSeriesToolCallSummary(record: Record<string, unknown>): Si
 function dashboardToolCallSummary(action: string, record: Record<string, unknown>): SimpleToolCallSummary {
   const dashboard = dashboardToolCallIdentifier(record);
   const path = stringField(record, 'path') ?? stringField(record, 'file');
-  const folder = stringField(record, 'folderUid') ?? stringField(record, 'folder') ?? stringField(record, 'folderTitle');
+  const folder =
+    stringField(record, 'folderUid') ?? stringField(record, 'folder') ?? stringField(record, 'folderTitle');
   return {
     summary: summaryLine([action, dashboard]),
     items: [
@@ -811,6 +818,7 @@ const TOOL_ICONS: Record<string, IconName> = {
   list_managed_dashboards: 'dashboard',
   get_dashboard: 'dashboard',
   grafana_get_dashboard: 'dashboard',
+  bootstrap_dashboard_context: 'dashboard',
   get_dashboard_source: 'file-alt',
   grafana_get_managed_dashboard_source: 'file-alt',
   render_dashboard: 'dashboard',
@@ -834,11 +842,7 @@ function SubagentResultView({ content, details }: { content: unknown; details: S
   const styles = useStyles2(getToolStyles);
   const [isOpen, setIsOpen] = useState(false);
   return (
-    <details
-      className={styles.subagentResult}
-      data-testid="subagent-result"
-      open={isOpen}
-    >
+    <details className={styles.subagentResult} data-testid="subagent-result" open={isOpen}>
       <summary
         aria-expanded={isOpen}
         className={styles.subagentResultSummary}
@@ -847,11 +851,7 @@ function SubagentResultView({ content, details }: { content: unknown; details: S
           setIsOpen((open) => !open);
         }}
       >
-        <Icon
-          aria-hidden
-          className={styles.queryResultChevron}
-          name={isOpen ? 'angle-down' : 'angle-right'}
-        />
+        <Icon aria-hidden className={styles.queryResultChevron} name={isOpen ? 'angle-down' : 'angle-right'} />
         <span>{subagentResultLabel(details)}</span>
       </summary>
       <div className={styles.subagentResultBody}>
@@ -905,10 +905,7 @@ function SubagentToolCallRow({ call }: { call: SubagentToolCall }) {
   const isStreaming = call.status === 'running';
 
   return (
-    <details
-      className={cx(styles.toolStep, call.status === 'failed' && styles.toolStepError)}
-      open={isOpen}
-    >
+    <details className={cx(styles.toolStep, call.status === 'failed' && styles.toolStepError)} open={isOpen}>
       <summary
         aria-expanded={isOpen}
         onClick={(event) => {
@@ -1270,7 +1267,9 @@ function PrometheusBatchQueryResultView({ result }: { result: PrometheusBatchQue
         ]}
       />
       {!result.contentAvailable && (
-        <div className={styles.emptyState}>The query batch completed, but the detailed result text was unavailable.</div>
+        <div className={styles.emptyState}>
+          The query batch completed, but the detailed result text was unavailable.
+        </div>
       )}
       {result.results.length > 0 && (
         <div className={styles.queryResultList}>
@@ -1290,17 +1289,9 @@ function PrometheusBatchQueryResultItem({ index, result }: { index: number; resu
   const summaryMeta = formatQueryResultSummaryMeta(result);
 
   return (
-    <details
-      className={styles.queryResultItem}
-      open={isOpen}
-      onToggle={(event) => setIsOpen(event.currentTarget.open)}
-    >
+    <details className={styles.queryResultItem} open={isOpen} onToggle={(event) => setIsOpen(event.currentTarget.open)}>
       <summary className={styles.queryResultSummary}>
-        <Icon
-          aria-hidden
-          className={styles.queryResultChevron}
-          name={isOpen ? 'angle-down' : 'angle-right'}
-        />
+        <Icon aria-hidden className={styles.queryResultChevron} name={isOpen ? 'angle-down' : 'angle-right'} />
         <span className={styles.queryResultIndex}>Query {index + 1}</span>
         <code className={styles.queryResultExpression} title={result.query}>
           {result.query}
@@ -1462,14 +1453,7 @@ function createPrometheusTimeseriesScene(visualization: PrometheusTimeseriesVisu
     .setColor({ mode: 'palette-classic' })
     .setNoValue('-')
     .setHeaderActions(
-      <LinkButton
-        href={exploreHref}
-        icon="compass"
-        rel="noreferrer"
-        size="sm"
-        target="_blank"
-        variant="secondary"
-      >
+      <LinkButton href={exploreHref} icon="compass" rel="noreferrer" size="sm" target="_blank" variant="secondary">
         Explore
       </LinkButton>
     )

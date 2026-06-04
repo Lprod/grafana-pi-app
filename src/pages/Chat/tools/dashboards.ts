@@ -2,14 +2,27 @@ import type { AgentTool } from '@earendil-works/pi-agent-core';
 import { config } from '@grafana/runtime';
 import { Type } from 'typebox';
 import { backendFetch } from './client';
+import { createDashboardBootstrapTools } from './dashboardBootstrap';
 import { getUnavailableDashboardDatasourceUids } from './dashboardPolicy';
 import { textResult, throwIfAborted, truncateText } from './result';
-import type { DashboardSearchResult, DashboardUidParams, GrafanaToolConfig, ListDashboardsParams, ScreenshotParams, UploadDashboardParams } from './types';
+import type {
+  DashboardSearchResult,
+  DashboardUidParams,
+  GrafanaToolConfig,
+  ListDashboardsParams,
+  ScreenshotParams,
+  UploadDashboardParams,
+} from './types';
 
 const REQUIRED_DASHBOARD_TAG = 'genai';
 
 export function createDashboardTools(toolConfig: GrafanaToolConfig, includeAdHocWrites = false): AgentTool[] {
-  const readTools = [grafanaGetDashboardTool, grafanaListDashboardsTool, grafanaScreenshotTool];
+  const readTools = [
+    ...createDashboardBootstrapTools(toolConfig),
+    grafanaGetDashboardTool,
+    grafanaListDashboardsTool,
+    grafanaScreenshotTool,
+  ];
   if (!includeAdHocWrites) {
     return readTools;
   }
@@ -23,7 +36,9 @@ function makeGrafanaUploadDashboardTool(toolConfig: GrafanaToolConfig): AgentToo
     description: 'Create or update a Grafana dashboard JSON model as the current user.',
     parameters: Type.Object({
       dashboard_json: Type.String({ description: 'Grafana dashboard JSON object as a string.' }),
-      overwrite: Type.Optional(Type.Boolean({ description: 'Whether to overwrite an existing dashboard UID. Defaults to true.' })),
+      overwrite: Type.Optional(
+        Type.Boolean({ description: 'Whether to overwrite an existing dashboard UID. Defaults to true.' })
+      ),
       folderUid: Type.Optional(Type.String({ description: 'Optional target folder UID.' })),
     }),
     async execute(_toolCallId, params, signal) {
@@ -35,7 +50,9 @@ function makeGrafanaUploadDashboardTool(toolConfig: GrafanaToolConfig): AgentToo
       }
       const unavailableDatasourceUids = getUnavailableDashboardDatasourceUids(dashboard, toolConfig);
       if (unavailableDatasourceUids.length > 0) {
-        throw new Error(`Dashboard references datasource UIDs not available to the assistant: ${unavailableDatasourceUids.join(', ')}`);
+        throw new Error(
+          `Dashboard references datasource UIDs not available to the assistant: ${unavailableDatasourceUids.join(', ')}`
+        );
       }
 
       dashboard.uid = normalizeDashboardUid(dashboard.uid, String(dashboard.title));
@@ -138,7 +155,9 @@ const grafanaScreenshotTool: AgentTool = {
   async execute(_toolCallId, params, signal) {
     const args = params as ScreenshotParams;
     throwIfAborted(signal);
-    const dashboard = await backendFetch<{ meta: { slug: string } }>(`/api/dashboards/uid/${encodeURIComponent(args.uid)}`);
+    const dashboard = await backendFetch<{ meta: { slug: string } }>(
+      `/api/dashboards/uid/${encodeURIComponent(args.uid)}`
+    );
     const width = clamp(args.width ?? 1200, 300, 2400);
     const height = clamp(args.height ?? 700, 200, 2400);
     const renderPath =

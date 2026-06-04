@@ -355,20 +355,19 @@ describe('grafana datasource tool policy', () => {
     const dataSource = {
       uid: 'rqlite-b',
       type: 'g42-rqlite-datasource',
-      getResource: jest.fn().mockResolvedValueOnce(['metrics']).mockResolvedValueOnce([
-        { name: 'time', type: 'INTEGER' },
-        { name: 'value', type: 'REAL' },
-      ]),
+      getResource: jest
+        .fn()
+        .mockResolvedValueOnce(['metrics'])
+        .mockResolvedValueOnce([
+          { name: 'time', type: 'INTEGER' },
+          { name: 'value', type: 'REAL' },
+        ]),
     };
     mockDataSourceSrv.get.mockResolvedValue(dataSource);
     const tools = createGrafanaTools({ allowedRqliteDatasourceUids: ['rqlite-b'] });
 
     const tableResult = await getTool(tools, 'list_rqlite_tables').execute('call-1', {}, undefined);
-    const columnResult = await getTool(tools, 'list_rqlite_columns').execute(
-      'call-2',
-      { table: 'metrics' },
-      undefined
-    );
+    const columnResult = await getTool(tools, 'list_rqlite_columns').execute('call-2', { table: 'metrics' }, undefined);
 
     expect(dataSource.getResource).toHaveBeenNthCalledWith(1, '/tables', undefined);
     expect(dataSource.getResource).toHaveBeenNthCalledWith(2, '/columns', { table: 'metrics' });
@@ -423,9 +422,9 @@ describe('grafana datasource tool policy', () => {
   it('rejects explicit rqlite datasource UIDs outside the rqlite allow-list', async () => {
     const tool = getTool(createGrafanaTools({ allowedRqliteDatasourceUids: ['rqlite-b'] }), 'query_rqlite');
 
-    await expect(
-      tool.execute('call-1', { datasourceUid: 'rqlite-a', sql: 'SELECT 1' }, undefined)
-    ).rejects.toThrow('rqlite datasource is not available to the assistant: rqlite-a');
+    await expect(tool.execute('call-1', { datasourceUid: 'rqlite-a', sql: 'SELECT 1' }, undefined)).rejects.toThrow(
+      'rqlite datasource is not available to the assistant: rqlite-a'
+    );
     expect(mockDataSourceSrv.get).not.toHaveBeenCalled();
   });
 
@@ -836,6 +835,7 @@ describe('grafana datasource tool policy', () => {
     expect(names).toContain('read_jsonnet');
     expect(names).toContain('sync_dashboard');
     expect(names).toContain('get_dashboard_source');
+    expect(names).toContain('bootstrap_dashboard_context');
     expect(names).toContain('screenshot_dashboard');
     expect(names).toContain('explore_metrics');
     expect(names).not.toContain('query_prometheus_raw');
@@ -865,9 +865,161 @@ describe('grafana datasource tool policy', () => {
     expect(names).toContain('upload_dashboard');
     expect(names).toContain('delete_dashboard');
     expect(names).toContain('get_dashboard_source');
+    expect(names).toContain('bootstrap_dashboard_context');
     expect(names).toContain('search_grafonnet');
     expect(names).toContain('explore_metrics');
     expect(names).not.toContain('explore_jsonnet');
+  });
+
+  it('bootstraps an existing dashboard as compact markdown with variable values and panel queries', async () => {
+    const metricFindQuery = jest.fn().mockResolvedValue([{ text: 'api' }, { text: 'worker' }, { text: 'frontend' }]);
+    mockDataSourceSrv.get.mockResolvedValue({
+      uid: 'prom-a',
+      type: 'prometheus',
+      metricFindQuery,
+    });
+    const fetch = jest.fn().mockReturnValue(
+      of({
+        data: {
+          dashboard: {
+            uid: 'service-red',
+            title: 'Service RED',
+            tags: ['service', 'red'],
+            time: { from: 'now-6h', to: 'now' },
+            refresh: '30s',
+            templating: {
+              list: [
+                {
+                  name: 'service',
+                  type: 'query',
+                  datasource: { uid: 'prom-a', type: 'prometheus' },
+                  query: 'label_values(http_requests_total, service)',
+                  current: { text: 'api', value: 'api' },
+                  options: [{ text: 'api', value: 'api' }],
+                },
+                {
+                  name: 'env',
+                  type: 'custom',
+                  query: 'prod,stage',
+                  current: { text: 'prod', value: 'prod' },
+                  options: [
+                    { text: 'prod', value: 'prod' },
+                    { text: 'stage', value: 'stage' },
+                  ],
+                },
+              ],
+            },
+            panels: [
+              {
+                id: 1,
+                type: 'row',
+                title: 'RED',
+                panels: [
+                  {
+                    id: 2,
+                    title: 'Request rate',
+                    type: 'timeseries',
+                    description: 'Incoming requests by service.',
+                    datasource: { uid: 'prom-a', type: 'prometheus' },
+                    repeat: 'service',
+                    targets: [
+                      {
+                        refId: 'A',
+                        expr: 'sum(rate(http_requests_total{service="$service"}[$__rate_interval]))',
+                      },
+                    ],
+                    transformations: [{ id: 'renameByRegex' }],
+                    links: [{ title: 'Explore', url: '/explore' }],
+                  },
+                ],
+              },
+            ],
+          },
+          meta: {
+            folderTitle: 'Services',
+            url: '/d/service-red/service-red',
+          },
+        },
+      })
+    );
+    (getBackendSrv as jest.Mock).mockReturnValue({ fetch });
+    const tool = getTool(
+      createGrafanaTools({ allowedPrometheusDatasourceUids: ['prom-a'] }),
+      'bootstrap_dashboard_context'
+    );
+
+    const result = await tool.execute('call-1', { uid: 'service-red' }, undefined);
+    const text = result.content[0].text;
+
+    expect(fetch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        url: '/api/dashboards/uid/service-red',
+        method: 'GET',
+        showErrorAlert: false,
+      })
+    );
+    expect(metricFindQuery).toHaveBeenCalledWith(
+      'label_values(http_requests_total, service)',
+      expect.objectContaining({ variable: { name: 'service' } })
+    );
+    expect(text).toContain('# Dashboard bootstrap: Service RED');
+    expect(text).toContain('uid: service-red | folder: Services | time: now-6h -> now | refresh: 30s');
+    expect(text).toContain('- service: query ds=prom-a current=`api`');
+    expect(text).toContain('values=`api`, `worker`, `frontend`');
+    expect(text).toContain('1. Request rate [timeseries] id=2 ds=prom-a repeat=service');
+    expect(text).toContain('desc: Incoming requests by service.');
+    expect(text).toContain('A: sum(rate(http_requests_total{service="$service"}[$__rate_interval]))');
+    expect(text).toContain('transformations: renameByRegex');
+    expect(text).not.toContain('"panels"');
+    expect(result.details).toMatchObject({
+      uid: 'service-red',
+      title: 'Service RED',
+      folderTitle: 'Services',
+      panelCount: 1,
+      variableCount: 2,
+      queryCount: 1,
+      summarized: true,
+    });
+  });
+
+  it('keeps bootstrap variable lookup best-effort when a datasource is disallowed', async () => {
+    mockDataSourceSrv.get.mockResolvedValue({
+      uid: 'prom-a',
+      type: 'prometheus',
+      metricFindQuery: jest.fn(),
+    });
+    const fetch = jest.fn().mockReturnValue(
+      of({
+        data: {
+          dashboard: {
+            uid: 'node',
+            title: 'Node',
+            templating: {
+              list: [
+                {
+                  name: 'instance',
+                  type: 'query',
+                  datasource: { uid: 'prom-a', type: 'prometheus' },
+                  query: 'label_values(up, instance)',
+                },
+              ],
+            },
+            panels: [],
+          },
+          meta: {},
+        },
+      })
+    );
+    (getBackendSrv as jest.Mock).mockReturnValue({ fetch });
+    const tool = getTool(
+      createGrafanaTools({ allowedPrometheusDatasourceUids: ['prom-b'] }),
+      'bootstrap_dashboard_context'
+    );
+
+    const result = await tool.execute('call-1', { uid: 'node' }, undefined);
+
+    expect(result.content[0].text).toContain('warning=datasource prom-a is outside the assistant allow-list');
+    expect(result.details.warnings).toEqual(['instance: datasource prom-a is outside the assistant allow-list']);
   });
 
   it('exposes a narrower metrics-only toolset for skill-selected turns', () => {
@@ -895,12 +1047,7 @@ describe('grafana datasource tool policy', () => {
   it('adds rqlite tools when the rqlite skill group is selected', () => {
     const names = createGrafanaToolsForSkillGroups({}, ['rqlite']).map((tool) => tool.name);
 
-    expect(names).toEqual([
-      'list_rqlite_datasources',
-      'list_rqlite_tables',
-      'list_rqlite_columns',
-      'query_rqlite',
-    ]);
+    expect(names).toEqual(['list_rqlite_datasources', 'list_rqlite_tables', 'list_rqlite_columns', 'query_rqlite']);
   });
 
   it('adds managed dashboard tools when the dashboard skill group is selected', () => {
@@ -941,9 +1088,9 @@ describe('grafana datasource tool policy', () => {
       path: 'references/dashboard-jsonnet-workflow.md',
       truncated: false,
     });
-    await expect(
-      tool.execute('call-2', { skill: 'grafana-dashboard', path: 'missing.md' }, undefined)
-    ).rejects.toThrow('Unknown resource for grafana-dashboard: missing.md');
+    await expect(tool.execute('call-2', { skill: 'grafana-dashboard', path: 'missing.md' }, undefined)).rejects.toThrow(
+      'Unknown resource for grafana-dashboard: missing.md'
+    );
   });
 });
 
