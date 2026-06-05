@@ -1,3 +1,10 @@
+## [2.5.1](https://github.com/elohmeier/grafana-pi-app/compare/v2.5.0...v2.5.1) (2026-06-05)
+
+
+### Bug Fixes
+
+* **chat:** handle stopped chat replay content ([2db3ccf](https://github.com/elohmeier/grafana-pi-app/commit/2db3ccfbd1e2b0cd9c0e00ed9f619b5edcb1f4a4))
+
 # [2.5.0](https://github.com/elohmeier/grafana-pi-app/compare/v2.4.1...v2.5.0) (2026-06-05)
 
 ### Features
