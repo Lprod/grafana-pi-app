@@ -9,6 +9,7 @@ import (
 	"github.com/grafana/authlib/authz"
 	"github.com/grafana/authlib/cache"
 	"github.com/grafana/grafana-plugin-sdk-go/backend"
+	"github.com/grafana/grafana-plugin-sdk-go/config"
 )
 
 const (
@@ -78,7 +79,7 @@ func (a *App) hasRBACAccess(req *http.Request, action string) (bool, error) {
 }
 
 func (a *App) getAuthZClient(req *http.Request) (authz.EnforcementClient, error) {
-	cfg := backend.GrafanaConfigFromContext(req.Context())
+	cfg := config.GrafanaConfigFromContext(req.Context())
 	if cfg == nil {
 		return nil, errors.New("grafana config not found")
 	}

@@ -10,3 +10,7 @@ This repository contains a **Grafana plugin**. You must Read @./.config/AGENTS/i
 ## Reference sources
 
 - Grafana source code is checked out at `$HOME/repos/github.com/grafana/grafana`. Grep or read it when you need to confirm current Grafana API behavior rather than relying on stale training data.
+
+## Commit conventions
+
+Use semantic commit messages following Conventional Commits, for example `fix: escape search PromQL regexes`.
