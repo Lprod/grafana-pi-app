@@ -1,3 +1,11 @@
+## [2.4.1](https://github.com/elohmeier/grafana-pi-app/compare/v2.4.0...v2.4.1) (2026-06-05)
+
+
+### Bug Fixes
+
+* **chat:** improve artifact tool renderers ([c8538b9](https://github.com/elohmeier/grafana-pi-app/commit/c8538b917717c6dbf2241c399af4b34b29a49af1))
+* render nested Prometheus tool panels ([aab6a8c](https://github.com/elohmeier/grafana-pi-app/commit/aab6a8cfb5e102c6731cbe81476aad913c4b4f50))
+
 # [2.4.0](https://github.com/elohmeier/grafana-pi-app/compare/v2.3.0...v2.4.0) (2026-06-05)
 
 
