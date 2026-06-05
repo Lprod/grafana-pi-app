@@ -550,6 +550,42 @@ func TestOpenAIRequestKeepsUserAndToolContentNonEmpty(t *testing.T) {
 	}
 }
 
+func TestOpenAIRequestSerializesEmptyAssistantContentAsString(t *testing.T) {
+	app := App{settings: appSettings{DefaultModel: "gpt-default"}}
+
+	payload := app.openAIRequest(proxyStreamRequest{
+		Context: proxyContext{
+			Messages: []proxyMessage{
+				{Role: "user", Content: json.RawMessage(`"first request"`)},
+				{Role: "assistant", Content: json.RawMessage(`null`)},
+				{Role: "user", Content: json.RawMessage(`"follow-up after stop"`)},
+			},
+		},
+	})
+
+	encodedPayload, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("marshal payload: %s", err)
+	}
+
+	var encoded struct {
+		Messages []map[string]interface{} `json:"messages"`
+	}
+	if err := json.Unmarshal(encodedPayload, &encoded); err != nil {
+		t.Fatalf("decode encoded payload: %s", err)
+	}
+	if len(encoded.Messages) != 3 {
+		t.Fatalf("expected 3 messages, got %d: %s", len(encoded.Messages), encodedPayload)
+	}
+	content, ok := encoded.Messages[1]["content"]
+	if !ok {
+		t.Fatalf("assistant message must include content as an empty string, got %s", encodedPayload)
+	}
+	if content != "" {
+		t.Fatalf("assistant content should be an empty string, got %#v in %s", content, encodedPayload)
+	}
+}
+
 func TestOpenAIRequestPrefixesFailedToolResults(t *testing.T) {
 	app := App{settings: appSettings{DefaultModel: "gpt-default"}}
 

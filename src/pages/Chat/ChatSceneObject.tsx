@@ -10,7 +10,6 @@ import {
   type StreamFn,
   streamProxy,
 } from '@earendil-works/pi-agent-core';
-import type { Message } from '@earendil-works/pi-ai';
 import { SceneComponentProps, SceneObjectBase, SceneObjectState } from '@grafana/scenes';
 import { Alert, Badge, Button, EmptyState, Icon, Modal, Spinner, TextArea, useStyles2 } from '@grafana/ui';
 import { usePluginUserStorage } from '@grafana/runtime';
@@ -31,6 +30,7 @@ import {
 } from './grafanaTools';
 import { formatAssistantError, type AssistantErrorView } from './llmErrors';
 import { createOpenAICompatibleModel, getConfiguredThinkingLevel, type PiAppJsonData } from './model';
+import { convertChatMessagesToLlm, hasPersistableMessages } from './chatMessages';
 import { getGrafanaSkills, renderGrafanaSystemPrompt, selectGrafanaSkills } from './skills';
 import { ContentBlocks, ToolActivityPanel, ToolResultMessageBody, type ToolRunView } from './ToolRenderer';
 
@@ -1134,16 +1134,6 @@ function messageKey(message: AgentMessage, index: number, isStreaming: boolean) 
   return `${message.role}-${timestamp}-${index}${isStreaming ? '-streaming' : ''}`;
 }
 
-function convertChatMessagesToLlm(messages: AgentMessage[]): Message[] {
-  return messages.flatMap((message) => {
-    if (message.role === 'user' || message.role === 'assistant' || message.role === 'toolResult') {
-      return [message];
-    }
-
-    return [];
-  });
-}
-
 function AssistantErrorNotice({ error }: { error: AssistantErrorView }) {
   const styles = useStyles2(getStyles);
 
@@ -1572,10 +1562,6 @@ function formatDate(value: string): string {
     hour: '2-digit',
     minute: '2-digit',
   });
-}
-
-function hasPersistableMessages(messages: AgentMessage[]) {
-  return messages.some((message) => message.role === 'user' || message.role === 'assistant');
 }
 
 function createJsonDownload(data: ChatSessionExport, filename: string) {
