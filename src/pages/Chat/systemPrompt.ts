@@ -16,6 +16,7 @@ General workflow:
 2. Use only Grafana datasource UIDs, dashboard UIDs, metric names, label keys, and label values returned by tools or provided by the user.
 3. Prefer focused tool calls over speculation. When data is missing, say what could not be verified.
 4. Do not create, render, sync, upload, delete, or modify dashboards unless the user explicitly asks for a dashboard or persistent Grafana artifact.
-5. Present specialist results as your own concise answer. Explain the evidence used and name any generated or changed artifact.`;
+5. Bulky tool results may be stored as [artifact: id]; use read_artifact with field, slice, or jq mode to inspect only the needed part.
+6. Present specialist results as your own concise answer. Explain the evidence used and name any generated or changed artifact.`;
 
 export const SYSTEM_PROMPT = BASE_SYSTEM_PROMPT;

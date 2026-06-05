@@ -1039,6 +1039,32 @@ describe('grafana datasource tool policy', () => {
     ]);
   });
 
+  it('exposes artifact reads to the supervisor and specialist agents when a registry is available', async () => {
+    const artifacts = {
+      register: jest.fn(),
+      get: jest.fn(),
+      list: jest.fn(() => []),
+    };
+    const registry = createGrafanaToolRegistry({
+      artifacts,
+      runtime: {
+        model: {} as any,
+        streamFn: jest.fn() as any,
+        thinkingLevel: 'off',
+      },
+    });
+
+    expect(registry.artifacts.map((tool) => tool.name)).toEqual(['read_artifact']);
+    expect(createGrafanaSupervisorTools({ artifacts, runtime: registryRuntime() }).map((tool) => tool.name)).toContain(
+      'read_artifact'
+    );
+
+    const tool = getTool(registry.subagents, 'run_query_agent');
+    await tool.execute('call-1', { task: 'Inspect the stored result.' }, undefined);
+    const call = jest.mocked(runSpecialistAgent).mock.calls.at(-1)?.[0];
+    expect(call?.tools.map((childTool) => childTool.name)).toContain('read_artifact');
+  });
+
   it('builds safe Grafana navigation paths', () => {
     expect(buildNavigationPath({ type: 'dashboard', uid: 'service-red', slug: 'Service RED' })).toBe(
       '/d/service-red/service-red'
@@ -1453,6 +1479,14 @@ function getTool(tools: AgentTool[], name: string) {
 
   return tool as Omit<AgentTool, 'execute'> & {
     execute: (toolCallId: string, params: unknown, signal?: AbortSignal) => Promise<ToolResult>;
+  };
+}
+
+function registryRuntime() {
+  return {
+    model: {} as any,
+    streamFn: jest.fn() as any,
+    thinkingLevel: 'off' as const,
   };
 }
 

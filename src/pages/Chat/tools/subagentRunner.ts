@@ -107,6 +107,7 @@ export async function runSpecialistAgent(options: RunSubagentOptions): Promise<T
       tools: options.tools,
     },
     streamFn: options.runtime.streamFn,
+    afterToolCall: options.runtime.afterToolCall,
     beforeToolCall: async (context, signal) => {
       const toolCallLimit = CHILD_TOOL_CALL_LIMITS[options.kind];
       if (toolCalls.size >= toolCallLimit) {
@@ -344,10 +345,7 @@ function dashboardTaskRequiresSync(task: string) {
   if (/\b(draft|preview|plan only|design only|no-sync|no sync|do not sync|without syncing)\b/.test(normalized)) {
     return false;
   }
-  return (
-    /\bintent:\s*(create|update)\b/.test(normalized) ||
-    /\b(create|build|update|apply|sync)\b/.test(normalized)
-  );
+  return /\bintent:\s*(create|update)\b/.test(normalized) || /\b(create|build|update|apply|sync)\b/.test(normalized);
 }
 
 function missingDashboardCompletionSteps(toolCalls: Map<string, SubagentToolCall>) {

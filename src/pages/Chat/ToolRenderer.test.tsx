@@ -553,6 +553,144 @@ describe('ToolRenderer', () => {
     expect(container.textContent).not.toContain('Managed dashboard synced');
   });
 
+  it('renders object-shaped failed tool results as readable errors', () => {
+    const { container } = render(
+      <ToolResultMessageBody
+        toolName="inspect_metric_series"
+        content={{ error: { message: 'Prometheus series lookup failed' } }}
+        details={{ error: { message: 'Prometheus series lookup failed' }, datasourceUid: 'prometheus' }}
+        isError
+      />
+    );
+
+    expect(screen.getByTestId('tool-error')).toBeInTheDocument();
+    expect(container.textContent).toContain('inspect_metric_series failed');
+    expect(container.textContent).toContain('Prometheus series lookup failed');
+    expect(container.textContent).not.toContain('[object Object]');
+    expect(container.textContent).not.toContain('Inspect metric series | selector provided');
+  });
+
+  it('renders run_query_agent calls as specialist summaries', () => {
+    const task =
+      'Discover Prometheus metrics related to HTTP requests and errors. Look for metrics like http_requests_total.';
+
+    const { container } = render(
+      <ContentBlocks
+        content={[
+          {
+            type: 'toolCall',
+            name: 'run_query_agent',
+            arguments: {
+              task,
+              metricPrefix: 'http_',
+            },
+          },
+        ]}
+      />
+    );
+
+    expect(container.textContent).toContain('Run query agent | prefix http_');
+    expect(container.textContent).toContain(task);
+    expect(container.textContent).toContain('http_');
+    expect(container.textContent).not.toContain('"task"');
+    expect(container.textContent).not.toContain('"metricPrefix"');
+  });
+
+  it('renders nested failed subagent tool calls with normalized errors', () => {
+    const details = {
+      type: 'subagent',
+      agent: 'query',
+      status: 'completed',
+      task: 'Inspect HTTP metrics.',
+      toolNames: ['inspect_metric_series'],
+      toolCalls: [
+        {
+          id: 'tool-1',
+          name: 'inspect_metric_series',
+          args: {
+            match: 'http_server_requests_seconds_bucket',
+          },
+          status: 'failed',
+          result: {
+            content: [{ type: 'text', text: JSON.stringify({ error: { message: 'Series endpoint failed' } }) }],
+            details: { error: { message: 'Series endpoint failed' } },
+          },
+          isError: true,
+        },
+      ],
+      usage: {
+        turns: 1,
+        input: 10,
+        output: 4,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 14,
+        cost: 0,
+      },
+      finalOutput: 'Metric inspection failed.',
+    };
+
+    const { container } = render(
+      <ToolResultMessageBody
+        toolName="run_query_agent"
+        content={[{ type: 'text', text: 'Metric inspection failed.' }]}
+        details={details}
+      />
+    );
+
+    fireEvent.click(screen.getByText('inspect_metric_series'));
+
+    expect(container.textContent).toContain('http_server_requests_seconds_bucket');
+    expect(container.textContent).toContain('inspect_metric_series failed');
+    expect(container.textContent).toContain('Series endpoint failed');
+    expect(container.textContent).not.toContain('[object Object]');
+  });
+
+  it('renders batched inspect_metric_series results with the structured renderer', () => {
+    const content = [
+      {
+        type: 'text',
+        text: JSON.stringify({
+          datasourceUid: 'prometheus',
+          matchCount: 2,
+          truncatedMatches: false,
+          results: [
+            {
+              datasourceUid: 'prometheus',
+              match: 'http_requests_total',
+              labelNames: ['job', 'method', 'status_code'],
+              totalSeries: 12,
+              truncated: false,
+              examples: [{ __name__: 'http_requests_total', job: 'api', method: 'GET', status_code: '200' }],
+            },
+            {
+              datasourceUid: 'prometheus',
+              match: 'http_request_duration_seconds_bucket',
+              labelNames: ['job', 'le', 'path'],
+              totalSeries: 24,
+              truncated: true,
+              examples: [{ __name__: 'http_request_duration_seconds_bucket', job: 'api', le: '0.5', path: '/v1' }],
+            },
+          ],
+        }),
+      },
+    ];
+
+    const { container } = render(
+      <ToolResultMessageBody
+        toolName="inspect_metric_series"
+        content={content}
+        details={{ datasourceUid: 'prometheus', batch: true, matches: 2, totalSeries: 36 }}
+      />
+    );
+
+    expect(container.textContent).toContain('2 of 2 metric selectors inspected');
+    expect(container.textContent).toContain('Selector 1');
+    expect(container.textContent).toContain('http_requests_total');
+    expect(container.textContent).toContain('12 series | 3 labels');
+    expect(container.textContent).not.toContain('"matchCount"');
+  });
+
   it('renders a time series panel for range query visualization details', () => {
     const query = 'rate(http_requests_total[5m])';
     const content = [
@@ -759,5 +897,36 @@ describe('ToolRenderer', () => {
     expect(container.textContent).toContain('2 of 2 Prometheus queries summarized');
     expect(container.textContent).toContain('The query batch completed, but the detailed result text was unavailable.');
     expect(container.textContent).not.toContain('{"datasourceUid"');
+  });
+
+  it('renders artifactized tool results as artifact cards', () => {
+    const { container } = render(
+      <ToolResultMessageBody
+        toolName="query_rqlite"
+        content={[{ type: 'text', text: 'Stored artifact [artifact: artifact_1]' }]}
+        details={{
+          artifactRef: {
+            id: 'artifact_1',
+            kind: 'table',
+            title: 'query_rqlite',
+            toolName: 'query_rqlite',
+            createdAt: '2026-06-05T00:00:00.000Z',
+            bytes: 8192,
+            summary: 'rqlite query result with 120 rows.',
+          },
+          artifactPreview: {
+            type: 'json',
+            data: { rows: [{ id: 1 }] },
+            truncated: true,
+          },
+        }}
+      />
+    );
+
+    expect(screen.getByTestId('artifact-result')).toBeInTheDocument();
+    expect(container.textContent).toContain('artifact_1');
+    expect(container.textContent).toContain('rqlite query result with 120 rows.');
+    expect(container.textContent).toContain('8.0 KiB');
+    expect(container.textContent).not.toContain('Stored artifact [artifact: artifact_1]');
   });
 });

@@ -4,6 +4,8 @@ import {
   Agent,
   type AgentEvent,
   type AgentMessage,
+  type AfterToolCallContext,
+  type AfterToolCallResult,
   type BeforeToolCallResult,
   type StreamFn,
   streamProxy,
@@ -19,8 +21,12 @@ import { usePluginMeta } from '../../utils/utils.plugin';
 import {
   createGrafanaSupervisorTools,
   createSkillTools,
+  artifactByteSize,
+  artifactizeToolResult,
   buildDashboardBootstrapDigest,
   normalizeJsonnetPath,
+  type Artifact,
+  type ArtifactRuntime,
   type DashboardBootstrapDigest,
   type InvestigationReport,
   type VirtualJsonnetFileSnapshot,
@@ -45,6 +51,8 @@ type StoredSession = SessionIndexItem & {
   modelId?: string;
   virtualJsonnetFiles?: Record<string, VirtualJsonnetFileSnapshot>;
   investigationReport?: InvestigationReport;
+  artifacts?: Record<string, Artifact>;
+  artifactCounter?: number;
 };
 
 type ToolRunState = Record<string, ToolRunView>;
@@ -139,6 +147,8 @@ function ChatApp() {
   const virtualJsonnetFilesRef = useRef<Record<string, VirtualJsonnetFileSnapshot>>({});
   const virtualJsonnetHydratedRef = useRef<Record<string, number>>({});
   const investigationReportRef = useRef<InvestigationReport>();
+  const artifactsRef = useRef<Record<string, Artifact>>({});
+  const artifactCounterRef = useRef(0);
   const [investigationReport, setInvestigationReport] = useState<InvestigationReport>();
   const setVirtualJsonnetFile = useCallback((file: VirtualJsonnetFileSnapshot, options?: { hydrated?: boolean }) => {
     const path = normalizeJsonnetPath(file.path);
@@ -174,6 +184,53 @@ function ChatApp() {
       setReport: setInvestigationReportSnapshot,
     }),
     [setInvestigationReportSnapshot]
+  );
+  const setArtifactSnapshots = useCallback((artifacts: Record<string, Artifact>, counter?: number) => {
+    const compacted = compactArtifacts(artifacts);
+    artifactsRef.current = compacted;
+    artifactCounterRef.current = counter ?? nextArtifactCounter(compacted);
+  }, []);
+  const clearArtifacts = useCallback(() => {
+    artifactsRef.current = {};
+    artifactCounterRef.current = 0;
+  }, []);
+  const artifactRuntime = useMemo<ArtifactRuntime>(
+    () => ({
+      register: (input) => {
+        const id = createArtifactId(artifactCounterRef.current + 1);
+        artifactCounterRef.current += 1;
+        const artifact: Artifact = {
+          id,
+          kind: input.kind,
+          title: input.title,
+          toolName: input.toolName,
+          createdAt: new Date().toISOString(),
+          bytes: input.bytes ?? artifactByteSize(input.data),
+          summary: input.summary,
+          data: input.data,
+          preview: input.preview,
+          mimeType: input.mimeType,
+          toolDetails: input.toolDetails,
+        };
+        artifactsRef.current = compactArtifacts({
+          ...artifactsRef.current,
+          [id]: artifact,
+        });
+        return artifact;
+      },
+      get: (id) => artifactsRef.current[id],
+      list: () => Object.values(artifactsRef.current).sort(compareArtifactsByCreatedAt),
+    }),
+    []
+  );
+  const afterToolCall = useCallback(
+    async (context: AfterToolCallContext, signal?: AbortSignal): Promise<AfterToolCallResult | undefined> => {
+      if (signal?.aborted || context.isError) {
+        return undefined;
+      }
+      return artifactizeToolResult(artifactRuntime, context.toolCall.name, context.result);
+    },
+    [artifactRuntime]
   );
   const [agent, setAgent] = useState<Agent>();
   const agentRef = useRef<Agent>();
@@ -265,11 +322,12 @@ function ChatApp() {
           model: llmModel,
           streamFn,
           thinkingLevel,
-          beforeToolCall: async ({ toolCall, args }, signal) =>
-            requestToolConfirmation(toolCall.name, args, signal),
+          beforeToolCall: async ({ toolCall, args }, signal) => requestToolConfirmation(toolCall.name, args, signal),
+          afterToolCall,
         },
         virtualJsonnetFiles: virtualJsonnetRuntime,
         investigationReport: investigationReportRuntime,
+        artifacts: artifactRuntime,
         skillTools,
       });
 
@@ -283,6 +341,8 @@ function ChatApp() {
     },
     [
       investigationReportRuntime,
+      afterToolCall,
+      artifactRuntime,
       jsonData,
       llmModel,
       requestToolConfirmation,
@@ -321,6 +381,8 @@ function ChatApp() {
         modelId: llmModel.id,
         virtualJsonnetFiles: virtualJsonnetFilesRef.current,
         investigationReport: investigationReportRef.current,
+        artifacts: artifactsRef.current,
+        artifactCounter: artifactCounterRef.current,
       };
       const next = [indexItem, ...sessionsRef.current.filter((session) => session.id !== id)].slice(0, 50);
 
@@ -344,6 +406,7 @@ function ChatApp() {
         },
         convertToLlm: convertChatMessagesToLlm,
         streamFn,
+        afterToolCall,
         beforeToolCall: async ({ toolCall, args }, signal) => requestToolConfirmation(toolCall.name, args, signal),
       });
 
@@ -370,6 +433,7 @@ function ChatApp() {
     },
     [
       buildSkillRuntime,
+      afterToolCall,
       flushRevision,
       llmModel,
       requestToolConfirmation,
@@ -387,6 +451,7 @@ function ChatApp() {
     virtualJsonnetFilesRef.current = {};
     virtualJsonnetHydratedRef.current = {};
     investigationReportRef.current = undefined;
+    clearArtifacts();
     autoScrollRef.current = true;
     setIsAutoScrollPaused(false);
     setCurrentSessionId(id);
@@ -399,7 +464,7 @@ function ChatApp() {
     setIsBootstrapPickerOpen(false);
     setIsPreparingBootstrap(false);
     buildAgent([]);
-  }, [buildAgent, settleToolConfirmation]);
+  }, [buildAgent, clearArtifacts, settleToolConfirmation]);
 
   const startNewSessionRef = useRef(startNewSession);
 
@@ -629,6 +694,7 @@ function ChatApp() {
     virtualJsonnetFilesRef.current = stored.virtualJsonnetFiles ?? {};
     virtualJsonnetHydratedRef.current = {};
     investigationReportRef.current = stored.investigationReport;
+    setArtifactSnapshots(stored.artifacts ?? {}, stored.artifactCounter);
     keepAutoScrollEnabled();
     setCurrentSessionId(id);
     setCurrentTitle(stored.title);
@@ -683,6 +749,8 @@ function ChatApp() {
           messages,
           virtualJsonnetFiles: virtualJsonnetFilesRef.current,
           investigationReport: investigationReportRef.current,
+          artifacts: artifactsRef.current,
+          artifactCounter: artifactCounterRef.current,
         },
       };
 
@@ -728,6 +796,7 @@ function ChatApp() {
         virtualJsonnetFilesRef.current = imported.virtualJsonnetFiles ?? {};
         virtualJsonnetHydratedRef.current = {};
         investigationReportRef.current = imported.investigationReport;
+        setArtifactSnapshots(imported.artifacts ?? {}, imported.artifactCounter);
         keepAutoScrollEnabled();
         setCurrentSessionId(id);
         setCurrentTitle(title);
@@ -745,7 +814,7 @@ function ChatApp() {
         setError(`Could not import chat session: ${message}`);
       }
     },
-    [buildAgent, isPreparingBootstrap, keepAutoScrollEnabled, saveSession, settleToolConfirmation]
+    [buildAgent, isPreparingBootstrap, keepAutoScrollEnabled, saveSession, setArtifactSnapshots, settleToolConfirmation]
   );
 
   const visibleMessages = agent
@@ -1246,7 +1315,10 @@ function InvestigationReportPanel({ report }: { report: InvestigationReport }) {
           <Icon name="search" />
           <h3>{report.title}</h3>
         </div>
-        <Badge text={report.status === 'complete' ? 'Complete' : 'Active'} color={report.status === 'complete' ? 'green' : 'blue'} />
+        <Badge
+          text={report.status === 'complete' ? 'Complete' : 'Active'}
+          color={report.status === 'complete' ? 'green' : 'blue'}
+        />
       </div>
       <div className={styles.investigationReportUpdated}>Updated {formatDate(report.updatedAt)}</div>
       <div className={styles.investigationReportSections}>
@@ -1443,8 +1515,7 @@ function buildToolConfirmation(toolName: string, args: unknown): ToolConfirmatio
       id,
       toolName,
       title: 'Approve dashboard upload',
-      description:
-        'The assistant wants to create or update a raw Grafana dashboard JSON model as the current user.',
+      description: 'The assistant wants to create or update a raw Grafana dashboard JSON model as the current user.',
       fields: compactConfirmationFields([
         confirmationField('Title', dashboard.title),
         confirmationField('UID', dashboard.uid),
@@ -1528,6 +1599,47 @@ function createSessionId() {
   }
 
   return `session-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+const MAX_SESSION_ARTIFACTS = 40;
+const MAX_SESSION_ARTIFACT_BYTES = 8 * 1024 * 1024;
+
+function createArtifactId(index: number) {
+  return `artifact_${Math.max(1, Math.floor(index))}`;
+}
+
+function nextArtifactCounter(artifacts: Record<string, Artifact>) {
+  return Object.keys(artifacts).reduce((max, id) => {
+    const match = /^artifact_(\d+)$/.exec(id);
+    return match ? Math.max(max, Number(match[1])) : max;
+  }, 0);
+}
+
+function compactArtifacts(artifacts: Record<string, Artifact>) {
+  const sorted = Object.values(artifacts).sort(compareArtifactsByCreatedAt);
+  const kept: Record<string, Artifact> = {};
+  let totalBytes = 0;
+
+  for (const artifact of sorted) {
+    if (Object.keys(kept).length >= MAX_SESSION_ARTIFACTS) {
+      break;
+    }
+    const artifactBytes = Math.max(0, artifact.bytes || artifactByteSize(artifact.data));
+    if (totalBytes > 0 && totalBytes + artifactBytes > MAX_SESSION_ARTIFACT_BYTES) {
+      continue;
+    }
+    kept[artifact.id] = {
+      ...artifact,
+      bytes: artifactBytes,
+    };
+    totalBytes += artifactBytes;
+  }
+
+  return kept;
+}
+
+function compareArtifactsByCreatedAt(left: Artifact, right: Artifact) {
+  return Date.parse(right.createdAt) - Date.parse(left.createdAt);
 }
 
 function reduceToolRuns(state: ToolRunState, event: AgentEvent): ToolRunState {
@@ -1870,6 +1982,11 @@ function parseChatSessionExport(value: unknown): StoredSession {
     messages,
     virtualJsonnetFiles: parseVirtualJsonnetFiles(value.session.virtualJsonnetFiles),
     investigationReport: parseInvestigationReport(value.session.investigationReport),
+    artifacts: parseArtifacts(value.session.artifacts),
+    artifactCounter:
+      typeof value.session.artifactCounter === 'number' && Number.isFinite(value.session.artifactCounter)
+        ? Math.max(0, Math.floor(value.session.artifactCounter))
+        : undefined,
   };
 }
 
@@ -1932,6 +2049,78 @@ function parseVirtualJsonnetFiles(value: unknown): Record<string, VirtualJsonnet
   }
 
   return files;
+}
+
+function parseArtifacts(value: unknown): Record<string, Artifact> | undefined {
+  if (value === null || value === undefined) {
+    return undefined;
+  }
+  if (!isRecord(value)) {
+    throw new Error('Import file session.artifacts must be an object when present.');
+  }
+
+  const artifacts: Record<string, Artifact> = {};
+  for (const [key, artifact] of Object.entries(value)) {
+    if (!isRecord(artifact)) {
+      throw new Error(`Imported artifact ${key} must be an object.`);
+    }
+
+    const id = typeof artifact.id === 'string' && artifact.id ? artifact.id : key;
+    const kind = parseArtifactKind(artifact.kind);
+    const title = typeof artifact.title === 'string' && artifact.title ? artifact.title : id;
+    const toolName = typeof artifact.toolName === 'string' && artifact.toolName ? artifact.toolName : 'tool';
+    const summary = typeof artifact.summary === 'string' ? artifact.summary : `${toolName} result stored as artifact.`;
+
+    artifacts[id] = {
+      id,
+      kind,
+      title,
+      toolName,
+      createdAt: normalizeDateString(artifact.createdAt),
+      bytes: typeof artifact.bytes === 'number' && Number.isFinite(artifact.bytes) ? artifact.bytes : 0,
+      summary,
+      data: artifact.data,
+      preview: parseArtifactPreview(artifact.preview),
+      mimeType: typeof artifact.mimeType === 'string' ? artifact.mimeType : undefined,
+      toolDetails: artifact.toolDetails,
+    };
+  }
+
+  return compactArtifacts(artifacts);
+}
+
+function parseArtifactKind(value: unknown): Artifact['kind'] {
+  return value === 'json' || value === 'table' || value === 'dashboard' || value === 'image' || value === 'text'
+    ? value
+    : 'json';
+}
+
+function parseArtifactPreview(value: unknown): Artifact['preview'] {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  if (value.type === 'text' && typeof value.text === 'string') {
+    return {
+      type: 'text',
+      text: value.text,
+      truncated: value.truncated === true,
+    };
+  }
+  if (value.type === 'json') {
+    return {
+      type: 'json',
+      data: value.data,
+      truncated: value.truncated === true,
+    };
+  }
+  if (value.type === 'image' && typeof value.mimeType === 'string' && typeof value.data === 'string') {
+    return {
+      type: 'image',
+      mimeType: value.mimeType,
+      data: value.data,
+    };
+  }
+  return undefined;
 }
 
 function isAgentMessageLike(value: unknown): value is AgentMessage {

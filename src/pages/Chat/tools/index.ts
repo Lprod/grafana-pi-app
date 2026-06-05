@@ -1,4 +1,5 @@
 import type { AgentTool } from '@earendil-works/pi-agent-core';
+import { createArtifactTools } from './artifacts';
 import { createDashboardTools } from './dashboards';
 import { createJsonnetFileTools } from './jsonnetFiles';
 import { createJsonnetLibTools } from './jsonnetLibs';
@@ -11,6 +12,8 @@ import { createSubagentTools } from './subagents';
 import type { CreateGrafanaToolsOptions, GrafanaToolRegistry, SkillToolGroup } from './types';
 
 export { buildDashboardBootstrapDigest } from './dashboardBootstrap';
+export { artifactByteSize, artifactizeToolResult, createArtifactTools, readArtifact } from './artifacts';
+export type { Artifact, ArtifactPreview, ArtifactRef, ArtifactRuntime } from './artifacts';
 export type { DashboardBootstrapDigest } from './dashboardBootstrap';
 export { getUnavailableDashboardDatasourceUids } from './dashboardPolicy';
 export { DEFAULT_JSONNET_FILE_PATH, normalizeJsonnetPath } from './jsonnetFiles';
@@ -40,6 +43,7 @@ export function createGrafanaToolRegistry(options: CreateGrafanaToolsOptions = {
   const investigation = createInvestigationTools(options.investigationReport);
   const jsonnet = createJsonnetLibTools();
   const navigation = createNavigationTools();
+  const artifacts = createArtifactTools(options.artifacts);
   const parentManagedDashboardTools = managedDashboards.all;
   const skills = options.skillTools ?? [];
   const subagents = options.runtime
@@ -52,6 +56,7 @@ export function createGrafanaToolRegistry(options: CreateGrafanaToolsOptions = {
         managedDashboardTools: managedDashboards.all,
         investigationTools: investigation,
         navigationTools: navigation,
+        artifactTools: artifacts,
         skillTools: skills,
       })
     : [];
@@ -64,6 +69,7 @@ export function createGrafanaToolRegistry(options: CreateGrafanaToolsOptions = {
     managedDashboards,
     investigation,
     jsonnet,
+    artifacts,
     subagents,
     skills,
     all: [
@@ -72,6 +78,7 @@ export function createGrafanaToolRegistry(options: CreateGrafanaToolsOptions = {
       ...jsonnetFiles.all,
       ...parentManagedDashboardTools,
       ...investigation,
+      ...artifacts,
       ...subagents,
       ...skills,
       ...(options.includeJsonnetLibraryTools ? jsonnet.all : []),
@@ -85,7 +92,8 @@ export function createGrafanaTools(options: CreateGrafanaToolsOptions = {}): Age
 }
 
 export function createGrafanaSupervisorTools(options: CreateGrafanaToolsOptions = {}): AgentTool[] {
-  return createGrafanaToolRegistry(options).subagents;
+  const registry = createGrafanaToolRegistry(options);
+  return dedupeTools([...registry.subagents, ...registry.artifacts]);
 }
 
 export function createGrafanaToolsForSkillGroups(
@@ -127,6 +135,8 @@ export function createGrafanaToolsForSkillGroups(
   if (groupSet.has('skillResources')) {
     selected.push(...registry.skills);
   }
+
+  selected.push(...registry.artifacts);
 
   if (groupSet.has('jsonnetLibraries')) {
     selected.push(...registry.jsonnet.all);

@@ -425,7 +425,10 @@ function findAnalysisQualityError(events: BenchmarkEvent[]) {
     { label: 'route /render/report', pattern: /\/render\/report/i },
     { label: 'HTTP 500 or 5xx status', pattern: /(500|5xx|5\.\.|status=["']?500)/i },
     { label: 'CPU, load, or latency corroboration', pattern: /(cpu|load|latenc|duration|node_load1|node_cpu)/i },
-    { label: 'validated PromQL or metric names', pattern: /(promql|rate\(|histogram_quantile|http_requests_total|node_load1)/i },
+    {
+      label: 'validated PromQL or metric names',
+      pattern: /(promql|rate\(|histogram_quantile|http_requests_total|node_load1)/i,
+    },
   ];
   const missing = expectations.filter((expectation) => !expectation.pattern.test(answer));
   if (missing.length > 0) {

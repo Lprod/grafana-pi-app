@@ -11,7 +11,7 @@ import {
   SceneTimeRange,
 } from '@grafana/scenes';
 import { Badge, Icon, LinkButton, Spinner, useStyles2 } from '@grafana/ui';
-import type { SubagentRunDetails, SubagentToolCall } from './tools';
+import type { ArtifactPreview, ArtifactRef, SubagentRunDetails, SubagentToolCall } from './tools';
 import {
   highlightJsonnetLines,
   partialJsonStringField,
@@ -47,17 +47,21 @@ export function ContentBlocks({
     return markdown ? <MarkdownText isStreaming={isStreaming} text={content} /> : <div>{content}</div>;
   }
   if (!Array.isArray(content)) {
-    return <pre>{JSON.stringify(content, null, 2)}</pre>;
+    return <pre className={styles.toolCallJson}>{formatJson(content)}</pre>;
   }
 
   return (
     <>
       {content.map((block, index) => {
         if (!block || typeof block !== 'object') {
-          return <pre key={index}>{JSON.stringify(block, null, 2)}</pre>;
+          return (
+            <pre className={styles.toolCallJson} key={index}>
+              {formatJson(block)}
+            </pre>
+          );
         }
         const typedBlock = block as Record<string, any>;
-        if (typedBlock.type === 'text') {
+        if (typedBlock.type === 'text' && typeof typedBlock.text === 'string') {
           return markdown ? (
             <MarkdownText isStreaming={isStreaming} key={index} text={typedBlock.text} />
           ) : (
@@ -86,7 +90,11 @@ export function ContentBlocks({
         if (typedBlock.type === 'image') {
           return <img key={index} alt="Tool result" src={`data:${typedBlock.mimeType};base64,${typedBlock.data}`} />;
         }
-        return <pre key={index}>{JSON.stringify(typedBlock, null, 2)}</pre>;
+        return (
+          <pre className={styles.toolCallJson} key={index}>
+            {formatJson(typedBlock)}
+          </pre>
+        );
       })}
     </>
   );
@@ -105,12 +113,15 @@ export function ToolResultMessageBody({
 }) {
   const styles = useStyles2(getToolStyles);
   const subagentDetails = asSubagentDetails(details);
+  const artifactResult = isError ? undefined : asArtifactResult(details);
   const structuredResult = isError ? undefined : renderStructuredToolResult(toolName, details, content);
+  const error = isError ? extractToolError(toolName, details, content) : undefined;
 
   if (subagentDetails) {
     return (
       <div className={cx(styles.toolFrame, subagentDetails.status === 'failed' && styles.toolFrameError)}>
         <ToolHeader name={toolName ?? subagentDetails.agent} status={subagentDetails.status} />
+        {subagentDetails.status === 'failed' && <ToolErrorView error={extractToolError(toolName, details, content)} />}
         <SubagentResultView content={content} details={subagentDetails} />
         <SubagentDetailsView details={subagentDetails} />
       </div>
@@ -120,8 +131,13 @@ export function ToolResultMessageBody({
   return (
     <div className={cx(styles.toolFrame, isError && styles.toolFrameError)}>
       <ToolHeader name={toolName ?? 'tool'} status={isError ? 'failed' : 'completed'} />
-      {structuredResult ?? <ContentBlocks content={content} />}
-      {!structuredResult && hasDetails(details) && (
+      {artifactResult && <ArtifactResultView artifact={artifactResult.ref} preview={artifactResult.preview} />}
+      {error ? (
+        <ToolErrorView content={content} details={details} error={error} />
+      ) : (
+        (structuredResult ?? (!artifactResult ? <ContentBlocks content={content} /> : null))
+      )}
+      {!error && !structuredResult && !artifactResult && hasDetails(details) && (
         <details className={styles.collapsible}>
           <summary>Details</summary>
           <pre>{formatJson(details)}</pre>
@@ -465,6 +481,41 @@ function asSimpleToolCallSummary(
       return labelValuesToolCallSummary(record);
     case 'inspect_metric_series':
       return inspectMetricSeriesToolCallSummary(record);
+    case 'run_query_agent':
+      return specialistToolCallSummary('query agent', record, [
+        { label: 'Task', key: 'task' },
+        { label: 'Datasource', key: 'datasourceUid' },
+        { label: 'Metric prefix', key: 'metricPrefix' },
+      ]);
+    case 'run_dashboard_agent':
+      return specialistToolCallSummary('dashboard agent', record, [
+        { label: 'Task', key: 'task' },
+        { label: 'Intent', key: 'intent' },
+        { label: 'Datasource', key: 'datasourceUid' },
+        { label: 'Dashboard', key: 'existingDashboardUid' },
+      ]);
+    case 'run_investigation_agent':
+      return specialistToolCallSummary('investigation agent', record, [
+        { label: 'Task', key: 'task' },
+        { label: 'Datasource', key: 'datasourceUid' },
+        { label: 'Time range', key: 'timeRange' },
+      ]);
+    case 'run_support_agent':
+      return specialistToolCallSummary('support agent', record, [
+        { label: 'Task', key: 'task' },
+        { label: 'Audience', key: 'audience' },
+      ]);
+    case 'run_navigation_agent':
+      return specialistToolCallSummary('navigation agent', record, [
+        { label: 'Task', key: 'task' },
+        { label: 'Destination', key: 'destinationHint' },
+      ]);
+    case 'navigate':
+      return navigateToolCallSummary(record);
+    case 'update_report':
+      return updateReportToolCallSummary(record);
+    case 'read_artifact':
+      return readArtifactToolCallSummary(record);
     case 'list_dashboards':
     case 'grafana_list_dashboards':
       return { summary: 'List dashboards' };
@@ -566,8 +617,90 @@ function inspectMetricSeriesToolCallSummary(record: Record<string, unknown>): Si
         value: selectorCode ? <code>{selectors.length > 0 ? selectors.join(', ') : selector}</code> : undefined,
       },
     ],
-    code: selectorCode,
   };
+}
+
+function specialistToolCallSummary(
+  label: string,
+  record: Record<string, unknown>,
+  fields: Array<{ label: string; key: string }>
+): SimpleToolCallSummary {
+  const datasourceUid = stringField(record, 'datasourceUid');
+  const metricPrefix = stringField(record, 'metricPrefix');
+  const intent = stringField(record, 'intent');
+  const destinationHint = stringField(record, 'destinationHint');
+
+  return {
+    summary: summaryLine([
+      `Run ${label}`,
+      intent,
+      metricPrefix ? `prefix ${metricPrefix}` : undefined,
+      datasourceUid ? `datasource ${datasourceUid}` : undefined,
+      destinationHint,
+    ]),
+    items: fields.map((field) => ({
+      label: field.label,
+      value: formatSummaryFieldValue(record, field.key),
+    })),
+  };
+}
+
+function navigateToolCallSummary(record: Record<string, unknown>): SimpleToolCallSummary {
+  const type = stringField(record, 'type');
+  const uid = stringField(record, 'uid');
+  const path = stringField(record, 'path');
+  const query = stringField(record, 'query');
+  return {
+    summary: summaryLine(['Navigate', type, uid ?? path ?? query]),
+    items: [
+      { label: 'Type', value: type },
+      { label: 'Dashboard', value: uid ? <code>{uid}</code> : undefined },
+      { label: 'Datasource', value: formatSummaryFieldValue(record, 'datasourceUid') },
+      { label: 'Query', value: query ? <code>{query}</code> : undefined },
+      { label: 'Path', value: path ? <code>{path}</code> : undefined },
+    ],
+  };
+}
+
+function updateReportToolCallSummary(record: Record<string, unknown>): SimpleToolCallSummary {
+  const patchCount = recordsField(record, 'patch').length;
+  return {
+    summary: summaryLine(['Update investigation report', stringField(record, 'title'), formatPatchCount(patchCount)]),
+    items: [
+      { label: 'Title', value: stringField(record, 'title') },
+      { label: 'Patch count', value: patchCount > 0 ? formatCount(patchCount) : undefined },
+    ],
+  };
+}
+
+function readArtifactToolCallSummary(record: Record<string, unknown>): SimpleToolCallSummary {
+  const id = stringField(record, 'id');
+  const path = stringField(record, 'path');
+  const jq = stringField(record, 'jq');
+  const mode = stringField(record, 'mode') ?? (jq ? 'jq' : path ? 'field' : 'preview');
+  const offset = numberField(record, 'offset');
+  const limit = numberField(record, 'limit');
+
+  return {
+    summary: summaryLine(['Read artifact', id, mode]),
+    items: [
+      { label: 'Artifact', value: id ? <code>{id}</code> : undefined },
+      { label: 'Mode', value: mode },
+      { label: 'Path', value: path ? <code>{path}</code> : undefined },
+      { label: 'Slice', value: offset !== undefined || limit !== undefined ? `${offset ?? 0}:${limit ?? ''}` : undefined },
+      { label: 'jq', value: jq ? <code>{jq}</code> : undefined },
+    ],
+    code: jq,
+  };
+}
+
+function formatSummaryFieldValue(record: Record<string, unknown>, key: string) {
+  const value = stringOrNumberField(record, key);
+  return value ? <code>{value}</code> : undefined;
+}
+
+function formatPatchCount(count: number) {
+  return count > 0 ? `${formatCount(count)} ${count === 1 ? 'patch' : 'patches'}` : undefined;
 }
 
 function dashboardToolCallSummary(action: string, record: Record<string, unknown>): SimpleToolCallSummary {
@@ -808,6 +941,138 @@ function ToolHeader({
   );
 }
 
+type ToolErrorViewModel = {
+  toolName?: string;
+  message: string;
+};
+
+function ToolErrorView({
+  error,
+  details,
+  content,
+}: {
+  error: ToolErrorViewModel;
+  details?: unknown;
+  content?: unknown;
+}) {
+  const styles = useStyles2(getToolStyles);
+  const showDetails = hasDetails(details);
+  const showContent = hasUsefulErrorContent(content, error.message);
+
+  return (
+    <div className={styles.errorCard} data-testid="tool-error">
+      <div className={styles.errorTitle}>{error.toolName ? `${error.toolName} failed` : 'Tool failed'}</div>
+      <div className={styles.errorMessage}>{error.message}</div>
+      {(showDetails || showContent) && (
+        <details className={styles.collapsible}>
+          <summary>Details</summary>
+          {showDetails && <pre className={styles.queryBlock}>{formatJson(details)}</pre>}
+          {showContent && <pre className={styles.queryBlock}>{formatJson(content)}</pre>}
+        </details>
+      )}
+    </div>
+  );
+}
+
+function extractToolError(
+  toolName: string | undefined,
+  details: unknown,
+  content: unknown
+): ToolErrorViewModel {
+  const message =
+    extractExplicitErrorMessage(details) ??
+    extractErrorMessageFromText(extractToolText(content)) ??
+    extractErrorMessage(content) ??
+    'Tool failed without a readable error message.';
+
+  return {
+    toolName,
+    message,
+  };
+}
+
+function extractToolText(content: unknown): string | undefined {
+  if (typeof content === 'string') {
+    return content.trim() || undefined;
+  }
+  if (!Array.isArray(content)) {
+    return undefined;
+  }
+
+  const text = content
+    .map((block) => (isRecord(block) && block.type === 'text' && typeof block.text === 'string' ? block.text : ''))
+    .filter(Boolean)
+    .join('\n')
+    .trim();
+
+  return text || undefined;
+}
+
+function extractExplicitErrorMessage(value: unknown): string | undefined {
+  if (!value || typeof value !== 'object') {
+    return undefined;
+  }
+  if (Array.isArray(value)) {
+    return extractErrorMessageFromText(extractToolText(value));
+  }
+
+  const record = value as Record<string, unknown>;
+  for (const key of ['error', 'message', 'reason', 'detail', 'details']) {
+    const message = extractErrorMessage(record[key]);
+    if (message) {
+      return message;
+    }
+  }
+
+  return undefined;
+}
+
+function extractErrorMessage(value: unknown): string | undefined {
+  if (typeof value === 'string') {
+    return extractErrorMessageFromText(value);
+  }
+  if (!value || typeof value !== 'object') {
+    return value === undefined || value === null ? undefined : String(value);
+  }
+  if (Array.isArray(value)) {
+    return extractErrorMessageFromText(extractToolText(value)) ?? formatJson(value);
+  }
+
+  const record = value as Record<string, unknown>;
+  for (const key of ['error', 'message', 'status', 'reason', 'detail', 'details']) {
+    const nested = record[key];
+    const message = extractErrorMessage(nested);
+    if (message) {
+      return message;
+    }
+  }
+
+  return formatJson(record);
+}
+
+function extractErrorMessageFromText(text: string | undefined): string | undefined {
+  const trimmed = text?.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+
+  try {
+    const parsed = JSON.parse(trimmed);
+    const message = extractErrorMessage(parsed);
+    return message || trimmed;
+  } catch {
+    return trimmed;
+  }
+}
+
+function hasUsefulErrorContent(content: unknown, message: string) {
+  if (content === undefined || content === null) {
+    return false;
+  }
+  const contentText = extractToolText(content);
+  return !contentText || contentText.trim() !== message.trim();
+}
+
 const TOOL_ICONS: Record<string, IconName> = {
   list_datasources: 'database',
   grafana_get_datasources: 'database',
@@ -826,6 +1091,7 @@ const TOOL_ICONS: Record<string, IconName> = {
   run_support_agent: 'question-circle',
   run_navigation_agent: 'compass',
   navigate: 'compass',
+  read_artifact: 'file-alt',
   write_jsonnet: 'brackets-curly',
   grafana_write_jsonnet_file: 'brackets-curly',
   edit_jsonnet: 'file-edit-alt',
@@ -946,6 +1212,8 @@ function SubagentToolCallRow({ call }: { call: SubagentToolCall }) {
   const resultContent = toolResult?.content ?? contentFromLegacyToolText(call.text);
   const resultDetails = toolResult?.details;
   const isStreaming = call.status === 'running';
+  const artifactResult = call.isError ? undefined : asArtifactResult(resultDetails);
+  const error = call.isError ? extractToolError(call.name, resultDetails, resultContent) : undefined;
 
   return (
     <details className={cx(styles.toolStep, call.status === 'failed' && styles.toolStepError)} open={isOpen}>
@@ -964,18 +1232,24 @@ function SubagentToolCallRow({ call }: { call: SubagentToolCall }) {
           {renderStructuredToolCall(call.name, call.args, undefined, isStreaming) ?? (
             <pre className={styles.toolCallJson}>{formatJson(call.args)}</pre>
           )}
-          {resultContent && (
+          {(resultContent || error) && (
             <div className={cx(styles.toolStepResult, call.isError && styles.toolStepResultError)}>
-              {renderStructuredToolResult(call.name, resultDetails, resultContent) ?? (
-                <>
-                  <ContentBlocks content={resultContent} isStreaming={isStreaming} />
-                  {hasDetails(resultDetails) && (
-                    <details className={styles.collapsible}>
-                      <summary>Details</summary>
-                      <pre>{formatJson(resultDetails)}</pre>
-                    </details>
-                  )}
-                </>
+              {artifactResult && <ArtifactResultView artifact={artifactResult.ref} preview={artifactResult.preview} />}
+              {error ? (
+                <ToolErrorView content={resultContent} details={resultDetails} error={error} />
+              ) : (
+                (renderStructuredToolResult(call.name, resultDetails, resultContent) ??
+                  (!artifactResult ? (
+                    <>
+                      <ContentBlocks content={resultContent} isStreaming={isStreaming} />
+                      {hasDetails(resultDetails) && (
+                        <details className={styles.collapsible}>
+                          <summary>Details</summary>
+                          <pre>{formatJson(resultDetails)}</pre>
+                        </details>
+                      )}
+                    </>
+                  ) : null))
               )}
             </div>
           )}
@@ -1007,6 +1281,11 @@ function renderStructuredToolResult(
   const metricSeries = asMetricSeriesInspection(toolName, details, content);
   if (metricSeries) {
     return <MetricSeriesInspectionView result={metricSeries} />;
+  }
+
+  const metricSeriesBatch = asMetricSeriesInspectionBatch(toolName, details, content);
+  if (metricSeriesBatch) {
+    return <MetricSeriesInspectionBatchView result={metricSeriesBatch} />;
   }
 
   const prometheusBatchQuery = asPrometheusBatchQuerySummary(toolName, details, content);
@@ -1179,6 +1458,77 @@ type MetricSeriesInspection = {
   truncated: boolean;
   examples: Array<Record<string, string>>;
 };
+
+type MetricSeriesInspectionBatch = {
+  datasourceUid?: string;
+  matchCount: number;
+  truncatedMatches: boolean;
+  totalSeries: number;
+  results: MetricSeriesInspection[];
+  contentAvailable: boolean;
+};
+
+function MetricSeriesInspectionBatchView({ result }: { result: MetricSeriesInspectionBatch }) {
+  const styles = useStyles2(getToolStyles);
+  return (
+    <div className={styles.structuredResult}>
+      <div className={styles.resultSummary}>
+        {formatCount(result.results.length || result.matchCount)} of {formatCount(result.matchCount)} metric selectors
+        inspected
+      </div>
+      <ResultMetaGrid
+        items={[
+          { label: 'Datasource', value: result.datasourceUid },
+          { label: 'Selectors', value: formatCount(result.matchCount) },
+          { label: 'Series', value: formatCount(result.totalSeries) },
+          {
+            label: 'Shown',
+            value: result.truncatedMatches
+              ? `${formatCount(result.results.length)} of ${formatCount(result.matchCount)}`
+              : formatCount(result.results.length || result.matchCount),
+          },
+        ]}
+      />
+      {!result.contentAvailable && (
+        <div className={styles.emptyState}>
+          The metric series inspection completed, but the detailed result text was unavailable.
+        </div>
+      )}
+      {result.results.length > 0 && (
+        <div className={styles.queryResultList}>
+          {result.results.map((inspection, index) => (
+            <MetricSeriesInspectionBatchItem
+              index={index}
+              key={`${inspection.match}:${index}`}
+              result={inspection}
+            />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function MetricSeriesInspectionBatchItem({ index, result }: { index: number; result: MetricSeriesInspection }) {
+  const styles = useStyles2(getToolStyles);
+  const [isOpen, setIsOpen] = useState(index === 0);
+
+  return (
+    <details className={styles.queryResultItem} open={isOpen} onToggle={(event) => setIsOpen(event.currentTarget.open)}>
+      <summary className={styles.queryResultSummary}>
+        <Icon aria-hidden className={styles.queryResultChevron} name={isOpen ? 'angle-down' : 'angle-right'} />
+        <span className={styles.queryResultIndex}>Selector {index + 1}</span>
+        <code className={styles.queryResultExpression} title={result.match}>
+          {result.match}
+        </code>
+        <span className={styles.queryResultMeta}>
+          {formatCount(result.totalSeries)} series | {formatCount(result.labelNames.length)} labels
+        </span>
+      </summary>
+      <MetricSeriesInspectionView result={result} />
+    </details>
+  );
+}
 
 function MetricSeriesInspectionView({ result }: { result: MetricSeriesInspection }) {
   const styles = useStyles2(getToolStyles);
@@ -1986,6 +2336,53 @@ function DashboardActionView({ action }: { action: DashboardAction }) {
   );
 }
 
+function ArtifactResultView({ artifact, preview }: { artifact: ArtifactRef; preview?: ArtifactPreview }) {
+  const styles = useStyles2(getToolStyles);
+
+  return (
+    <div className={styles.artifactCard} data-testid="artifact-result">
+      <div className={styles.artifactHeader}>
+        <Icon aria-hidden className={styles.toolTypeIcon} name={artifactIcon(artifact.kind)} />
+        <div className={styles.artifactTitleGroup}>
+          <div className={styles.artifactTitle}>{artifact.title}</div>
+          <div className={styles.resultSummary}>{artifact.summary}</div>
+        </div>
+        <Badge text={artifact.kind} color="blue" />
+      </div>
+      <ResultMetaGrid
+        items={[
+          { label: 'ID', value: <code>{artifact.id}</code> },
+          { label: 'Tool', value: artifact.toolName },
+          { label: 'Size', value: formatBytes(artifact.bytes) },
+          { label: 'Read', value: <code>{`read_artifact {"id":"${artifact.id}"}`}</code> },
+        ]}
+      />
+      {preview?.type === 'image' && (
+        <img
+          alt={artifact.title}
+          className={styles.artifactImagePreview}
+          src={`data:${preview.mimeType};base64,${preview.data}`}
+        />
+      )}
+    </div>
+  );
+}
+
+function artifactIcon(kind: ArtifactRef['kind']): IconName {
+  switch (kind) {
+    case 'dashboard':
+      return 'dashboard';
+    case 'image':
+      return 'camera';
+    case 'table':
+      return 'table';
+    case 'text':
+      return 'file-alt';
+    case 'json':
+      return 'brackets-curly';
+  }
+}
+
 function ResultMetaGrid({ items }: { items: Array<{ label: string; value?: React.ReactNode }> }) {
   const styles = useStyles2(getToolStyles);
   const visible = items.filter((item) => item.value !== undefined && item.value !== '');
@@ -2142,6 +2539,81 @@ function asSubagentDetails(details: unknown): SubagentRunDetails | undefined {
   return record.type === 'subagent' ? (details as SubagentRunDetails) : undefined;
 }
 
+function asArtifactResult(details: unknown): { ref: ArtifactRef; preview?: ArtifactPreview } | undefined {
+  if (!isRecord(details)) {
+    return undefined;
+  }
+  const ref = asArtifactRef(recordField(details, 'artifactRef'));
+  if (!ref) {
+    return undefined;
+  }
+  return {
+    ref,
+    preview: asArtifactPreview(recordField(details, 'artifactPreview')),
+  };
+}
+
+function asArtifactRef(value: unknown): ArtifactRef | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const id = stringField(value, 'id');
+  const kind = stringField(value, 'kind');
+  const title = stringField(value, 'title');
+  const toolName = stringField(value, 'toolName');
+  const createdAt = stringField(value, 'createdAt');
+  const summary = stringField(value, 'summary');
+  const bytes = numberField(value, 'bytes');
+  if (
+    !id ||
+    !title ||
+    !toolName ||
+    !createdAt ||
+    !summary ||
+    bytes === undefined ||
+    (kind !== 'json' && kind !== 'table' && kind !== 'dashboard' && kind !== 'image' && kind !== 'text')
+  ) {
+    return undefined;
+  }
+  return {
+    id,
+    kind,
+    title,
+    toolName,
+    createdAt,
+    bytes,
+    summary,
+  };
+}
+
+function asArtifactPreview(value: unknown): ArtifactPreview | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  if (value.type === 'text' && typeof value.text === 'string') {
+    return {
+      type: 'text',
+      text: value.text,
+      truncated: value.truncated === true,
+    };
+  }
+  if (value.type === 'json') {
+    return {
+      type: 'json',
+      data: value.data,
+      truncated: value.truncated === true,
+    };
+  }
+  if (value.type === 'image' && typeof value.mimeType === 'string' && typeof value.data === 'string') {
+    return {
+      type: 'image',
+      mimeType: value.mimeType,
+      data: value.data,
+    };
+  }
+  return undefined;
+}
+
 function asDatasourceResult(
   toolName: string | undefined,
   details: unknown,
@@ -2241,6 +2713,57 @@ function asMetricSeriesInspection(
     return undefined;
   }
 
+  return metricSeriesInspectionFromRecord(record);
+}
+
+function asMetricSeriesInspectionBatch(
+  toolName: string | undefined,
+  details: unknown,
+  content: unknown
+): MetricSeriesInspectionBatch | undefined {
+  if (toolName !== 'inspect_metric_series') {
+    return undefined;
+  }
+
+  const record = parseJsonRecord(content);
+  if (record) {
+    const resultRecords = recordsField(record, 'results');
+    const matchCount = numberField(record, 'matchCount');
+    if (matchCount !== undefined && resultRecords.length > 0) {
+      const results = resultRecords
+        .map(metricSeriesInspectionFromRecord)
+        .filter((result): result is MetricSeriesInspection => Boolean(result));
+      return {
+        datasourceUid: stringField(record, 'datasourceUid'),
+        matchCount,
+        truncatedMatches: booleanField(record, 'truncatedMatches') ?? false,
+        totalSeries: results.reduce((sum, result) => sum + result.totalSeries, 0),
+        results,
+        contentAvailable: true,
+      };
+    }
+  }
+
+  if (!isRecord(details) || booleanField(details, 'batch') !== true) {
+    return undefined;
+  }
+
+  const matchCount = numberField(details, 'matches') ?? numberField(details, 'matchCount');
+  if (matchCount === undefined) {
+    return undefined;
+  }
+
+  return {
+    datasourceUid: stringField(details, 'datasourceUid'),
+    matchCount,
+    truncatedMatches: booleanField(details, 'truncatedMatches') ?? false,
+    totalSeries: numberField(details, 'totalSeries') ?? 0,
+    results: [],
+    contentAvailable: false,
+  };
+}
+
+function metricSeriesInspectionFromRecord(record: Record<string, unknown>): MetricSeriesInspection | undefined {
   const match = stringField(record, 'match');
   const labelNames = stringArrayField(record, 'labelNames');
   const examples = recordsField(record, 'examples').map(stringRecord);
@@ -2985,7 +3508,7 @@ function countBy(values: string[]) {
 
 function formatJson(value: unknown) {
   try {
-    return JSON.stringify(value, null, 2);
+    return JSON.stringify(value, null, 2) ?? String(value);
   } catch {
     return String(value);
   }
@@ -3105,6 +3628,58 @@ const getToolStyles = (theme: GrafanaTheme2) => ({
   structuredResult: css({
     display: 'grid',
     gap: theme.spacing(1),
+  }),
+  artifactCard: css({
+    display: 'grid',
+    gap: theme.spacing(1),
+    padding: theme.spacing(1),
+    border: `1px solid ${theme.colors.border.weak}`,
+    borderRadius: theme.shape.radius.default,
+    background: theme.colors.background.secondary,
+  }),
+  artifactHeader: css({
+    display: 'grid',
+    gridTemplateColumns: 'auto minmax(0, 1fr) auto',
+    alignItems: 'center',
+    gap: theme.spacing(1),
+    minWidth: 0,
+  }),
+  artifactTitleGroup: css({
+    display: 'grid',
+    gap: theme.spacing(0.25),
+    minWidth: 0,
+  }),
+  artifactTitle: css({
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
+    fontWeight: theme.typography.fontWeightMedium,
+  }),
+  artifactImagePreview: css({
+    display: 'block',
+    maxWidth: '100%',
+    maxHeight: 420,
+    objectFit: 'contain',
+    border: `1px solid ${theme.colors.border.weak}`,
+    borderRadius: theme.shape.radius.default,
+    background: theme.colors.background.primary,
+  }),
+  errorCard: css({
+    display: 'grid',
+    gap: theme.spacing(0.75),
+    padding: theme.spacing(1),
+    border: `1px solid ${theme.colors.error.border}`,
+    borderRadius: theme.shape.radius.default,
+    background: theme.colors.error.transparent,
+  }),
+  errorTitle: css({
+    color: theme.colors.error.text,
+    fontWeight: theme.typography.fontWeightMedium,
+  }),
+  errorMessage: css({
+    color: theme.colors.text.primary,
+    whiteSpace: 'pre-wrap',
+    overflowWrap: 'anywhere',
   }),
   resultSummary: css({
     color: theme.colors.text.secondary,

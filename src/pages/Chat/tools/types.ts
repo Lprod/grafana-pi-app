@@ -1,8 +1,16 @@
-import type { AgentTool, BeforeToolCallContext, BeforeToolCallResult, StreamFn } from '@earendil-works/pi-agent-core';
+import type {
+  AfterToolCallContext,
+  AfterToolCallResult,
+  AgentTool,
+  BeforeToolCallContext,
+  BeforeToolCallResult,
+  StreamFn,
+} from '@earendil-works/pi-agent-core';
 import type { Model } from '@earendil-works/pi-ai';
 import type { DataSourceApi, DataSourceInstanceSettings } from '@grafana/data';
 import type { PiAppJsonData, PiAppThinkingLevel } from '../../../types';
 import type { SkillToolGroup } from '../skills/types';
+import type { ArtifactRuntime } from './artifacts';
 
 export type GrafanaToolConfig = Pick<PiAppJsonData, 'allowedPrometheusDatasourceUids' | 'allowedRqliteDatasourceUids'>;
 
@@ -11,6 +19,7 @@ export type GrafanaToolRuntime = {
   streamFn: StreamFn;
   thinkingLevel: PiAppThinkingLevel;
   beforeToolCall?: (context: BeforeToolCallContext, signal?: AbortSignal) => Promise<BeforeToolCallResult | undefined>;
+  afterToolCall?: (context: AfterToolCallContext, signal?: AbortSignal) => Promise<AfterToolCallResult | undefined>;
 };
 
 export type InvestigationReportStatus = 'active' | 'complete';
@@ -61,6 +70,7 @@ export type CreateGrafanaToolsOptions = GrafanaToolConfig & {
   runtime?: GrafanaToolRuntime;
   virtualJsonnetFiles?: VirtualJsonnetFileRuntime;
   investigationReport?: InvestigationReportRuntime;
+  artifacts?: ArtifactRuntime;
   skillTools?: AgentTool[];
   includeAdHocDashboardTools?: boolean;
   includeJsonnetLibraryTools?: boolean;
@@ -248,6 +258,7 @@ export type GrafanaToolRegistry = {
   jsonnetFiles: JsonnetFileToolSet;
   investigation: AgentTool[];
   jsonnet: JsonnetLibToolSet;
+  artifacts: AgentTool[];
   subagents: AgentTool[];
   skills: AgentTool[];
   all: AgentTool[];

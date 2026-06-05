@@ -1,20 +1,33 @@
 import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
+import type { Page } from '@playwright/test';
 import { test, expect } from './fixtures';
 import { ROUTES } from '../src/constants';
 import { testIds } from '../src/components/testIds';
-import type { Page } from '@playwright/test';
 
+const JQ_FILTER = '.results[] | {query, validationError, totalSeries, series: [.series[]? | {name, labels, last}]}';
+const QUERY_AGENT_TASK = [
+  'Run one batched query_prometheus call that creates a JSON artifact for the artifact registry.',
+  'Use these PromQL queries in the batch:',
+  '1. sum by (vm, route) (increase(http_requests_total{status="500"}[6h]))',
+  '2. sum by (vm) (increase(http_requests_total{status="500"}[6h]))',
+  '3. topk(6, sum by (vm, route) (rate(http_requests_total{status="500"}[5m])))',
+  '4. histogram_quantile(0.95, sum by (vm, route, le) (rate(http_request_duration_seconds_bucket[5m])))',
+  '5. histogram_quantile(0.95, sum by (route, le) (rate(http_request_duration_seconds_bucket[5m])))',
+  '6. node_load1{job="node"}',
+  '7. avg_over_time(node_load1{job="node"}[5m])',
+  '8. 100 - (avg by(instance) (rate(node_cpu_seconds_total{mode="idle"}[5m])) * 100)',
+  'Return a compact note that the query batch ran. Do not call read_artifact yourself.',
+].join('\n');
 const BENCHMARK_PROMPT = [
-  'Use exactly one run_query_agent tool call to discover the demo Prometheus metrics for HTTP request errors, HTTP latency histograms, node load, and CPU usage.',
-  'Do not call list_datasources, list_metrics, inspect_metric_series, list_label_values, query_prometheus, or any dashboard tool directly; this benchmark is measuring run_query_agent as the only top-level tool call.',
-  'Call run_query_agent with this task: Find HTTP error rate (500s), latency, node_load1, and CPU usage metrics in the default Prometheus datasource. Search by prefixes http, node_load, and node_cpu. List exact metric names and labels for HTTP requests by status code, route, and vm; histogram latency by route and vm; node load; and CPU utilization. Validate candidate PromQL with query_prometheus before returning.',
-  'After the tool returns, answer with exactly four short bullets: metric coverage, labels/values, useful PromQL, caveats.',
-  'Do not create, render, sync, upload, or modify dashboards.',
-].join(' ');
-const DEFAULT_TIMEOUT_MS = 120_000;
-const DEFAULT_EXPLORE_MAX_TOOL_MS = 120_000;
-const DEFAULT_EXPLORE_MAX_NESTED_CALLS = 14;
+  'This is an artifact registry jq e2e check.',
+  'Use exactly two top-level tool calls in this order: run_query_agent, then read_artifact.',
+  `For run_query_agent, use this exact task:\n${QUERY_AGENT_TASK}`,
+  `After run_query_agent returns, call read_artifact with id "artifact_1", mode "jq", and jq filter: ${JQ_FILTER}`,
+  'Do not call dashboard tools. Do not use read_artifact mode "full".',
+  'Final answer must be one short sentence that says the jq-mode artifact read completed.',
+].join('\n\n');
+const DEFAULT_TIMEOUT_MS = 180_000;
 const FORBIDDEN_WRITE_TOOLS = new Set([
   'write_jsonnet',
   'edit_jsonnet',
@@ -39,7 +52,6 @@ type BenchmarkEvent = {
     stopReason?: unknown;
     errorMessage?: unknown;
     content?: unknown;
-    usage?: unknown;
   };
   messageCount?: number;
 };
@@ -56,7 +68,6 @@ type ToolCallSummary = {
   nestedToolCalls?: NestedToolCallSummary[];
   errorText?: string;
   resultText?: string;
-  resultTextBytes?: number;
 };
 
 type NestedToolCallSummary = {
@@ -64,15 +75,7 @@ type NestedToolCallSummary = {
   status?: string;
   isError?: boolean;
   args?: unknown;
-};
-
-type BenchmarkUsage = {
-  input: number;
-  output: number;
-  cacheRead: number;
-  cacheWrite: number;
-  totalTokens: number;
-  cost: number;
+  result?: unknown;
 };
 
 type LiveBenchmarkState = {
@@ -83,8 +86,8 @@ type LiveBenchmarkState = {
 test.describe.configure({ mode: 'serial' });
 test.setTimeout(readPositiveInteger(process.env.BENCH_TEST_TIMEOUT_MS, DEFAULT_TIMEOUT_MS + 60_000));
 
-test.describe('agent query specialist benchmark', () => {
-  test('uses run_query_agent to discover demo Prometheus metrics', async ({ gotoPage, page }, testInfo) => {
+test.describe('agent artifact jq benchmark', () => {
+  test('reads a stored Prometheus artifact with jq-wasm', async ({ gotoPage, page }, testInfo) => {
     const timeoutMs = readPositiveInteger(process.env.BENCH_TIMEOUT_MS, DEFAULT_TIMEOUT_MS);
     const liveState: LiveBenchmarkState = {
       toolStarts: new Map(),
@@ -143,36 +146,35 @@ test.describe('agent query specialist benchmark', () => {
 
     const events = await readBenchmarkEvents(page);
     const finalAnswer = findFinalAssistantText(events);
-    await testInfo.attach('agent-explore-metrics-benchmark-events.json', {
+    const report = formatBenchmarkReport(events, { promptStartedAt, timeoutMs, timedOut, finalAnswer });
+    await testInfo.attach('agent-artifact-jq-benchmark-events.json', {
       body: JSON.stringify(events, null, 2),
       contentType: 'application/json',
     });
-    await testInfo.attach('agent-explore-metrics-benchmark-answer.md', {
-      body: finalAnswer,
-      contentType: 'text/markdown',
-    });
-
-    const report = formatBenchmarkReport(events, { promptStartedAt, timeoutMs, timedOut, finalAnswer });
-    await testInfo.attach('agent-explore-metrics-benchmark-report.txt', {
+    await testInfo.attach('agent-artifact-jq-benchmark-report.txt', {
       body: report,
       contentType: 'text/plain',
+    });
+    await testInfo.attach('agent-artifact-jq-benchmark-answer.md', {
+      body: finalAnswer,
+      contentType: 'text/markdown',
     });
     await writeBenchmarkArtifacts(events, report, finalAnswer);
 
     console.log(report);
 
     if (timedOut) {
-      throw new Error(`Agent run_query_agent benchmark timed out after ${timeoutMs}ms.`);
+      throw new Error(`Agent artifact jq benchmark timed out after ${timeoutMs}ms.`);
     }
 
     const finalAssistantError = findFinalAssistantError(events);
     if (finalAssistantError) {
-      throw new Error(`Agent run_query_agent benchmark ended with assistant error: ${finalAssistantError}`);
+      throw new Error(`Agent artifact jq benchmark ended with assistant error: ${finalAssistantError}`);
     }
 
-    const qualityError = findExploreMetricsQualityError(events);
+    const qualityError = findArtifactJqQualityError(events);
     if (qualityError) {
-      throw new Error(`Agent run_query_agent benchmark failed quality gate: ${qualityError}`);
+      throw new Error(`Agent artifact jq benchmark failed quality gate: ${qualityError}`);
     }
   });
 });
@@ -187,11 +189,11 @@ async function readBenchmarkEvents(page: Page): Promise<BenchmarkEvent[]> {
 function formatLiveBenchmarkEvent(event: BenchmarkEvent, state: LiveBenchmarkState) {
   if (event.type === 'tool_execution_start' && event.toolCallId && event.toolName) {
     state.toolStarts.set(event.toolCallId, event);
-    return `[query-benchmark:live] tool_start ${event.toolName} args=${summarizeJson(event.args)}`;
+    return `[artifact-jq-benchmark:live] tool_start ${event.toolName} args=${summarizeJson(event.args)}`;
   }
 
   if (event.type === 'tool_execution_update' && event.toolCallId && event.toolName) {
-    const nestedCalls = extractNestedToolCallCount(event.partialResult);
+    const nestedCalls = extractNestedToolCalls(event.partialResult)?.length;
     const resultText = truncateOneLine(extractResultText(event.partialResult) ?? '', 240);
     if (nestedCalls === undefined && !resultText) {
       return undefined;
@@ -203,7 +205,7 @@ function formatLiveBenchmarkEvent(event: BenchmarkEvent, state: LiveBenchmarkSta
     }
     state.toolUpdates.set(event.toolCallId, updateKey);
 
-    const parts = [`[query-benchmark:live] tool_update ${event.toolName}`];
+    const parts = [`[artifact-jq-benchmark:live] tool_update ${event.toolName}`];
     if (nestedCalls !== undefined) {
       parts.push(`nested=${nestedCalls}`);
     }
@@ -217,9 +219,9 @@ function formatLiveBenchmarkEvent(event: BenchmarkEvent, state: LiveBenchmarkSta
     const start = state.toolStarts.get(event.toolCallId);
     const duration = start ? formatDuration(event.timestamp - start.timestamp) : 'unknown';
     const status = event.isError ? 'failed' : 'completed';
-    const nestedCalls = extractNestedToolCallCount(event.result);
+    const nestedCalls = extractNestedToolCalls(event.result)?.length;
     const resultText = truncateOneLine(extractResultText(event.result) ?? '', event.isError ? 600 : 240);
-    const parts = [`[query-benchmark:live] tool_end ${event.toolName} ${status} duration=${duration}`];
+    const parts = [`[artifact-jq-benchmark:live] tool_end ${event.toolName} ${status} duration=${duration}`];
     if (nestedCalls !== undefined) {
       parts.push(`nested=${nestedCalls}`);
     }
@@ -229,15 +231,8 @@ function formatLiveBenchmarkEvent(event: BenchmarkEvent, state: LiveBenchmarkSta
     return parts.join(' ');
   }
 
-  if (event.type === 'message_end' && event.message?.role === 'assistant') {
-    const error = event.message.errorMessage;
-    if (typeof error === 'string' && error) {
-      return `[query-benchmark:live] assistant_error ${truncateOneLine(error, 600)}`;
-    }
-  }
-
   if (event.type === 'agent_end') {
-    return '[query-benchmark:live] agent_end';
+    return '[artifact-jq-benchmark:live] agent_end';
   }
 
   return undefined;
@@ -251,47 +246,20 @@ function formatBenchmarkReport(
   const agentEnd = [...events].reverse().find((event) => event.type === 'agent_end')?.timestamp;
   const elapsedMs = (agentEnd ?? Date.now()) - agentStart;
   const toolCalls = summarizeToolCalls(events);
-  const exploreCall = toolCalls.find((call) => call.name === 'run_query_agent');
-  const toolWallMs = toolCalls.reduce((total, call) => total + (call.durationMs ?? 0), 0);
-  const firstToolStart = toolCalls[0]?.startedAt;
-  const assistantTurns = events.filter(
-    (event) => event.type === 'message_end' && event.message?.role === 'assistant'
-  ).length;
-  const messageCount = [...events].reverse().find((event) => typeof event.messageCount === 'number')?.messageCount;
-  const usage = summarizeUsage(events);
-  const finalAssistantError = findFinalAssistantError(events);
-  const qualityError = options.timedOut ? undefined : findExploreMetricsQualityError(events);
-  const nestedCalls = exploreCall?.nestedToolCalls ?? [];
-  const nestedErrors = nestedCalls.filter((call) => call.isError || call.status === 'failed').length;
+  const qualityError = options.timedOut ? undefined : findArtifactJqQualityError(events);
   const lines = [
     '',
-    'Agent run_query_agent benchmark report',
+    'Agent artifact jq benchmark report',
     `Prompt: ${BENCHMARK_PROMPT}`,
     `Grafana URL: ${process.env.GRAFANA_URL ?? 'http://localhost:3000'}`,
     `Model URL: ${process.env.BENCH_LLM_BASE_URL ?? 'http://127.0.0.1:8080/v1'}`,
     `Timeout: ${formatDuration(options.timeoutMs)}`,
-    `Query agent max duration: ${formatDuration(readPositiveInteger(process.env.BENCH_EXPLORE_MAX_TOOL_MS, DEFAULT_EXPLORE_MAX_TOOL_MS))}`,
-    `Query agent max nested calls: ${readPositiveInteger(process.env.BENCH_EXPLORE_MAX_NESTED_CALLS, DEFAULT_EXPLORE_MAX_NESTED_CALLS)}`,
-    `Status: ${options.timedOut ? 'timed out' : finalAssistantError ? 'failed' : 'completed'}`,
+    `Status: ${options.timedOut ? 'timed out' : qualityError ? 'failed' : 'completed'}`,
     `Elapsed: ${formatDuration(elapsedMs)}`,
-    `Time to first tool: ${firstToolStart ? formatDuration(firstToolStart - agentStart) : 'none'}`,
-    `Tool wall time: ${formatDuration(toolWallMs)}`,
-    `Non-tool time: ${formatDuration(Math.max(0, elapsedMs - toolWallMs))}`,
-    `Query agent duration: ${exploreCall?.durationMs === undefined ? 'missing' : formatDuration(exploreCall.durationMs)}`,
-    `Query agent nested calls: ${nestedCalls.length}`,
-    `Query agent nested errors: ${nestedErrors}`,
-    `Query agent nested tools: ${formatToolNameCounts(nestedCalls)}`,
-    `Assistant turns: ${assistantTurns}`,
-    `Messages: ${messageCount ?? 'unknown'}`,
-    `Token usage: input=${usage.input}, output=${usage.output}, cacheRead=${usage.cacheRead}, cacheWrite=${usage.cacheWrite}, total=${usage.totalTokens}`,
     `Quality gate: ${options.timedOut ? 'not run' : qualityError ? `failed: ${qualityError}` : 'passed'}`,
     `Events: ${events.length}`,
     `Tool calls: ${toolCalls.length}`,
   ];
-
-  if (finalAssistantError) {
-    lines.push(`Assistant error: ${finalAssistantError}`);
-  }
 
   if (toolCalls.length > 0) {
     lines.push('', 'Tool call timeline');
@@ -304,9 +272,6 @@ function formatBenchmarkReport(
       if (call.nestedToolCalls?.length) {
         parts.push(`${call.nestedToolCalls.length} nested calls`);
       }
-      if (call.resultTextBytes !== undefined) {
-        parts.push(`${call.resultTextBytes} result bytes`);
-      }
       if (call.isError) {
         parts.push('error');
       }
@@ -317,18 +282,17 @@ function formatBenchmarkReport(
       if (call.nestedToolCalls?.length) {
         lines.push(`   nested=${call.nestedToolCalls.map(formatNestedToolCall).join(', ')}`);
       }
+      if (call.resultText) {
+        lines.push(`   result=${truncateReportText(call.resultText, 1000)}`);
+      }
       if (call.errorText) {
         lines.push(`   error=${call.errorText}`);
       }
     }
   }
 
-  if (exploreCall?.resultText?.trim()) {
-    lines.push('', 'Query agent result excerpt', truncateReportText(exploreCall.resultText, 2500));
-  }
-
   if (options.finalAnswer.trim()) {
-    lines.push('', 'Final answer', truncateReportText(options.finalAnswer, 2000));
+    lines.push('', 'Final answer', truncateReportText(options.finalAnswer, 1500));
   }
 
   return lines.join('\n');
@@ -374,7 +338,6 @@ function summarizeToolCalls(events: BenchmarkEvent[]): ToolCallSummary[] {
 
     if (event.type === 'tool_execution_end') {
       const durationMs = event.timestamp - existing.startedAt;
-      const resultText = extractResultText(event.result);
       calls.set(event.toolCallId, {
         ...existing,
         status: event.isError ? 'failed' : 'completed',
@@ -382,9 +345,8 @@ function summarizeToolCalls(events: BenchmarkEvent[]): ToolCallSummary[] {
         durationMs,
         isError: event.isError,
         nestedToolCalls: extractNestedToolCalls(event.result) ?? existing.nestedToolCalls,
-        errorText: event.isError ? resultText : undefined,
-        resultText,
-        resultTextBytes: resultText?.length,
+        errorText: event.isError ? extractResultText(event.result) : undefined,
+        resultText: extractResultText(event.result),
       });
     }
   }
@@ -392,90 +354,35 @@ function summarizeToolCalls(events: BenchmarkEvent[]): ToolCallSummary[] {
   return [...calls.values()].sort((left, right) => left.startedAt - right.startedAt);
 }
 
-async function writeBenchmarkArtifacts(events: BenchmarkEvent[], report: string, finalAnswer: string) {
-  const outputDir = path.join(process.cwd(), 'test-results', 'explore-metrics-benchmark');
-  const runSuffix = process.env.BENCH_RUN_INDEX ? `-run-${process.env.BENCH_RUN_INDEX}` : '';
-  await mkdir(outputDir, { recursive: true });
-  await Promise.all([
-    writeFile(path.join(outputDir, 'latest-events.json'), JSON.stringify(events, null, 2)),
-    writeFile(path.join(outputDir, 'latest-report.txt'), report),
-    writeFile(path.join(outputDir, 'latest-answer.md'), finalAnswer),
-    writeFile(path.join(outputDir, `events${runSuffix}.json`), JSON.stringify(events, null, 2)),
-    writeFile(path.join(outputDir, `report${runSuffix}.txt`), report),
-    writeFile(path.join(outputDir, `answer${runSuffix}.md`), finalAnswer),
-  ]);
-}
-
-function findExploreMetricsQualityError(events: BenchmarkEvent[]) {
+function findArtifactJqQualityError(events: BenchmarkEvent[]) {
   const toolCalls = summarizeToolCalls(events);
-  const exploreCalls = toolCalls.filter((call) => call.name === 'run_query_agent');
-  if (exploreCalls.length !== 1) {
-    return `expected exactly one top-level run_query_agent call, got ${exploreCalls.length}`;
-  }
-
-  const unexpectedTopLevelCall = toolCalls.find((call) => call.name !== 'run_query_agent');
-  if (unexpectedTopLevelCall) {
-    return `unexpected top-level tool call: ${unexpectedTopLevelCall.name}`;
-  }
-
-  const exploreCall = exploreCalls[0];
-  if (exploreCall.status !== 'completed' || exploreCall.isError) {
+  const queryAgent = toolCalls.find((call) => call.name === 'run_query_agent');
+  if (!queryAgent || queryAgent.status !== 'completed' || queryAgent.isError) {
     return 'run_query_agent did not complete successfully';
   }
 
-  const maxToolMs = readPositiveInteger(process.env.BENCH_EXPLORE_MAX_TOOL_MS, DEFAULT_EXPLORE_MAX_TOOL_MS);
-  if ((exploreCall.durationMs ?? Number.POSITIVE_INFINITY) > maxToolMs) {
-    return `run_query_agent exceeded ${formatDuration(maxToolMs)} duration budget`;
+  const jqRead = toolCalls.find((call) => call.name === 'read_artifact' && isJqArtifactReadArgs(call.args));
+  if (!jqRead || jqRead.status !== 'completed' || jqRead.isError) {
+    return 'read_artifact jq call did not complete successfully';
   }
 
-  const nestedCalls = exploreCall.nestedToolCalls ?? [];
-  const maxNestedCalls = readPositiveInteger(
-    process.env.BENCH_EXPLORE_MAX_NESTED_CALLS,
-    DEFAULT_EXPLORE_MAX_NESTED_CALLS
-  );
-  if (nestedCalls.length === 0) {
-    return 'run_query_agent did not report nested tool calls';
-  }
-  if (nestedCalls.length > maxNestedCalls) {
-    return `run_query_agent used ${nestedCalls.length} nested calls, over budget ${maxNestedCalls}`;
-  }
-
-  const nestedError = nestedCalls.find((call) => call.isError || call.status === 'failed');
-  if (nestedError) {
-    return `nested tool call failed: ${nestedError.name}`;
-  }
-
-  const nestedNames = new Set(nestedCalls.map((call) => call.name));
-  for (const required of ['list_metrics', 'inspect_metric_series', 'query_prometheus']) {
-    if (!nestedNames.has(required)) {
-      return `run_query_agent did not use nested ${required}`;
-    }
+  const unexpected = toolCalls.find((call) => call.name !== 'run_query_agent' && call.name !== 'read_artifact');
+  if (unexpected) {
+    return `unexpected top-level tool call: ${unexpected.name}`;
   }
 
   const forbidden = findForbiddenToolCall(toolCalls);
   if (forbidden) {
-    return `read-only benchmark used dashboard write tool: ${forbidden}`;
+    return `read-only jq benchmark used dashboard write tool: ${forbidden}`;
   }
 
-  const evidenceText = `${exploreCall.resultText ?? ''}\n${findFinalAssistantText(events)}`;
-  const expectations = [
-    { label: 'http_requests_total', pattern: /\bhttp_requests_total\b/i },
-    { label: 'http_request_duration_seconds_bucket', pattern: /\bhttp_request_duration_seconds_bucket\b/i },
-    { label: 'node_load1', pattern: /\bnode_load1\b/i },
-    { label: 'node_cpu_seconds_total', pattern: /\bnode_cpu_seconds_total\b/i },
-    { label: 'HTTP route/status/vm labels', pattern: /\broute\b[\s\S]*\bstatus\b[\s\S]*\bvm\b/i },
-    { label: 'histogram le label', pattern: /\ble\b/i },
-    { label: 'CPU mode label', pattern: /\bmode\b/i },
-    {
-      label: 'demo route values',
-      pattern: /\/api\/orders[\s\S]*\/render\/report|\/render\/report[\s\S]*\/api\/orders/i,
-    },
-    { label: 'HTTP 500 status evidence', pattern: /\bstatus\b[\s\S]*(?:"500"|'500'|500|5xx)/i },
-    { label: 'validated PromQL', pattern: /rate\(|histogram_quantile|node_load1\{|\bavg by\b/i },
-  ];
-  const missing = expectations.filter((expectation) => !expectation.pattern.test(evidenceText));
-  if (missing.length > 0) {
-    return `run_query_agent evidence is missing ${missing.map((item) => item.label).join(', ')}`;
+  if (!hasArtifactizedPrometheusQuery(queryAgent)) {
+    return 'run_query_agent did not produce an artifactized query_prometheus result';
+  }
+
+  const jqText = jqRead.resultText ?? '';
+  if (!/query/.test(jqText) || !/totalSeries|validationError|series/.test(jqText)) {
+    return 'jq read result did not contain projected artifact fields';
   }
 
   return undefined;
@@ -493,6 +400,32 @@ function findForbiddenToolCall(toolCalls: ToolCallSummary[]) {
     }
   }
   return undefined;
+}
+
+function hasArtifactizedPrometheusQuery(call: ToolCallSummary) {
+  return call.nestedToolCalls?.some((nested) => {
+    const details = getRecord(getRecord(nested.result)?.details);
+    return nested.name === 'query_prometheus' && nested.status === 'completed' && Boolean(details?.artifactRef);
+  });
+}
+
+function isJqArtifactReadArgs(args: unknown) {
+  const record = getRecord(args);
+  return record?.mode === 'jq' || typeof record?.jq === 'string';
+}
+
+async function writeBenchmarkArtifacts(events: BenchmarkEvent[], report: string, finalAnswer: string) {
+  const outputDir = path.join(process.cwd(), 'test-results', 'artifact-jq-benchmark');
+  const runSuffix = process.env.BENCH_RUN_INDEX ? `-run-${process.env.BENCH_RUN_INDEX}` : '';
+  await mkdir(outputDir, { recursive: true });
+  await Promise.all([
+    writeFile(path.join(outputDir, 'latest-events.json'), JSON.stringify(events, null, 2)),
+    writeFile(path.join(outputDir, 'latest-report.txt'), report),
+    writeFile(path.join(outputDir, 'latest-answer.md'), finalAnswer),
+    writeFile(path.join(outputDir, `events${runSuffix}.json`), JSON.stringify(events, null, 2)),
+    writeFile(path.join(outputDir, `report${runSuffix}.txt`), report),
+    writeFile(path.join(outputDir, `answer${runSuffix}.md`), finalAnswer),
+  ]);
 }
 
 function findFinalAssistantError(events: BenchmarkEvent[]) {
@@ -523,12 +456,9 @@ function extractNestedToolCalls(result: unknown): NestedToolCallSummary[] | unde
       status: stringField(record, 'status'),
       isError: booleanField(record, 'isError'),
       args: record?.args,
+      result: record?.result,
     };
   });
-}
-
-function extractNestedToolCallCount(result: unknown) {
-  return extractNestedToolCalls(result)?.length;
 }
 
 function extractResultText(result: unknown) {
@@ -568,46 +498,6 @@ function readPositiveInteger(value: string | undefined, fallback: number) {
   return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
 }
 
-function summarizeUsage(events: BenchmarkEvent[]): BenchmarkUsage {
-  const total = zeroUsage();
-  for (const event of events) {
-    if (event.type !== 'message_end' || event.message?.role !== 'assistant') {
-      continue;
-    }
-    const usage = getRecord(event.message.usage);
-    if (!usage) {
-      continue;
-    }
-    total.input += numericField(usage, 'input');
-    total.output += numericField(usage, 'output');
-    total.cacheRead += numericField(usage, 'cacheRead');
-    total.cacheWrite += numericField(usage, 'cacheWrite');
-    total.totalTokens += numericField(usage, 'totalTokens');
-    const cost = usage.cost;
-    total.cost += typeof cost === 'number' ? cost : numericField(getRecord(cost), 'total');
-  }
-  if (total.totalTokens === 0) {
-    total.totalTokens = total.input + total.output + total.cacheRead + total.cacheWrite;
-  }
-  return total;
-}
-
-function zeroUsage(): BenchmarkUsage {
-  return {
-    input: 0,
-    output: 0,
-    cacheRead: 0,
-    cacheWrite: 0,
-    totalTokens: 0,
-    cost: 0,
-  };
-}
-
-function numericField(record: Record<string, unknown> | undefined, field: string) {
-  const value = record?.[field];
-  return typeof value === 'number' && Number.isFinite(value) ? value : 0;
-}
-
 function stringField(record: Record<string, unknown> | undefined, field: string) {
   const value = record?.[field];
   return typeof value === 'string' ? value : undefined;
@@ -632,22 +522,6 @@ function truncateOneLine(value: string, maxLength: number) {
 
 function formatNestedToolCall(call: NestedToolCallSummary) {
   return `${call.name}${call.status ? `:${call.status}` : ''}${call.isError ? ':error' : ''}`;
-}
-
-function formatToolNameCounts(calls: NestedToolCallSummary[]) {
-  if (calls.length === 0) {
-    return 'none';
-  }
-
-  const counts = new Map<string, number>();
-  for (const call of calls) {
-    counts.set(call.name, (counts.get(call.name) ?? 0) + 1);
-  }
-
-  return [...counts.entries()]
-    .sort(([left], [right]) => left.localeCompare(right))
-    .map(([name, count]) => `${name}=${count}`)
-    .join(', ');
 }
 
 function summarizeJson(value: unknown) {

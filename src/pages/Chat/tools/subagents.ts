@@ -23,6 +23,7 @@ type SpecialistToolOptions = {
   managedDashboardTools?: AgentTool[];
   investigationTools?: AgentTool[];
   navigationTools?: AgentTool[];
+  artifactTools?: AgentTool[];
   skillTools?: AgentTool[];
 };
 
@@ -35,7 +36,11 @@ export function createSubagentTools(options: SpecialistToolOptions): AgentTool[]
         'Delegate Prometheus metric discovery, PromQL validation, and read-only rqlite SQL analysis to a focused query specialist.',
       kind: 'query',
       runtime: options.runtime,
-      tools: dedupeTools([...(options.metricsTools ?? []), ...(options.rqliteTools ?? [])]),
+      tools: dedupeTools([
+        ...(options.metricsTools ?? []),
+        ...(options.rqliteTools ?? []),
+        ...(options.artifactTools ?? []),
+      ]),
       systemPrompt: QUERY_AGENT_PROMPT,
       params: queryAgentParameters(),
       taskPrefix: queryTaskPrefix,
@@ -52,6 +57,7 @@ export function createSubagentTools(options: SpecialistToolOptions): AgentTool[]
         ...(options.dashboardReadTools ?? []),
         ...(options.jsonnetFileTools ?? []),
         ...(options.managedDashboardTools ?? []),
+        ...(options.artifactTools ?? []),
         ...(options.skillTools ?? []),
       ]),
       systemPrompt: DASHBOARD_AGENT_PROMPT,
@@ -69,6 +75,7 @@ export function createSubagentTools(options: SpecialistToolOptions): AgentTool[]
         ...(options.metricsTools ?? []),
         ...(options.rqliteTools ?? []),
         ...(options.investigationTools ?? []),
+        ...(options.artifactTools ?? []),
         ...(options.skillTools ?? []),
       ]),
       systemPrompt: INVESTIGATION_AGENT_PROMPT,
@@ -82,7 +89,7 @@ export function createSubagentTools(options: SpecialistToolOptions): AgentTool[]
         'Delegate Grafana and observability explanation, best-practice, and skill-reference questions to a support specialist.',
       kind: 'support',
       runtime: options.runtime,
-      tools: dedupeTools(options.skillTools ?? []),
+      tools: dedupeTools([...(options.skillTools ?? []), ...(options.artifactTools ?? [])]),
       systemPrompt: SUPPORT_AGENT_PROMPT,
       params: supportAgentParameters(),
       taskPrefix: supportTaskPrefix,
@@ -94,7 +101,7 @@ export function createSubagentTools(options: SpecialistToolOptions): AgentTool[]
         'Delegate Grafana navigation and link-building tasks to a navigation specialist that can open safe Grafana-relative destinations.',
       kind: 'navigation',
       runtime: options.runtime,
-      tools: dedupeTools(options.navigationTools ?? []),
+      tools: dedupeTools([...(options.navigationTools ?? []), ...(options.artifactTools ?? [])]),
       systemPrompt: NAVIGATION_AGENT_PROMPT,
       params: navigationAgentParameters(),
       taskPrefix: navigationTaskPrefix,
@@ -239,6 +246,7 @@ Tool execution protocol:
 - Batch related Prometheus discovery in one call: use list_metrics.prefixes, inspect_metric_series.matches, and query_prometheus.queries when checking multiple metrics or PromQL expressions.
 - When multiple tool calls are independent, request them in the same assistant turn so the runtime can execute them concurrently.
 - Use sequential calls only when one result determines the exact arguments for the next call.
+- Bulky tool results may be stored as [artifact: id]; use read_artifact with field, slice, or jq mode to inspect only the needed part.
 - Never repeat identical tool calls with the same parameters.
 - Keep tool output focused on the evidence needed for the requested answer.`;
 

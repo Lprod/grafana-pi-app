@@ -1,10 +1,13 @@
 export {
   buildDashboardBootstrapDigest,
   buildNavigationPath,
+  artifactByteSize,
+  artifactizeToolResult,
   createGrafanaToolRegistry,
   createGrafanaSupervisorTools,
   createGrafanaTools,
   createGrafanaToolsForSkillGroups,
+  createArtifactTools,
   createSkillTools,
   DEFAULT_JSONNET_FILE_PATH,
   filterAllowedPrometheusDatasourceSettings,
@@ -14,6 +17,10 @@ export {
 } from './tools';
 export type { DashboardBootstrapDigest } from './tools';
 export type {
+  Artifact,
+  ArtifactPreview,
+  ArtifactRef,
+  ArtifactRuntime,
   CreateGrafanaToolsOptions,
   GrafanaToolConfig,
   GrafanaToolRegistry,
