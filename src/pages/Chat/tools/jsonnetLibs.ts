@@ -24,7 +24,12 @@ function makeSearchJsonnetLibsTool(): AgentTool {
     description: 'Search vendored Grafonnet/Jsonnet library and documentation files for API names and examples.',
     parameters: Type.Object({
       pattern: Type.String({ description: 'Plain text search pattern, at least 2 characters.' }),
-      path: Type.Optional(Type.String({ description: 'Optional vendored library path prefix, such as github.com/grafana/grafonnet/gen/grafonnet-v11.4.0/panel.' })),
+      path: Type.Optional(
+        Type.String({
+          description:
+            'Optional vendored library path prefix, such as github.com/grafana/grafonnet/gen/grafonnet-v11.4.0/panel.',
+        })
+      ),
     }),
     async execute(_toolCallId, params, signal) {
       const args = params as JsonnetLibSearchParams;
@@ -41,7 +46,10 @@ function makeReadJsonnetLibTool(): AgentTool {
     label: 'Read Jsonnet library file',
     description: 'Read a range of lines from a vendored Grafonnet/Jsonnet library or documentation file.',
     parameters: Type.Object({
-      path: Type.String({ description: 'Vendored library path, such as github.com/grafana/grafonnet/gen/grafonnet-v11.4.0/docs/panel/timeSeries/index.md.' }),
+      path: Type.String({
+        description:
+          'Vendored library path, such as github.com/grafana/grafonnet/gen/grafonnet-v11.4.0/docs/panel/timeSeries/index.md.',
+      }),
       offset: Type.Optional(Type.Number({ description: '1-based start line. Defaults to 1.' })),
       limit: Type.Optional(Type.Number({ description: 'Maximum number of lines. Defaults to 200 and caps at 500.' })),
     }),
@@ -60,7 +68,9 @@ function makeListJsonnetLibsTool(): AgentTool {
     label: 'List Jsonnet library files',
     description: 'List vendored .libsonnet files under a Grafonnet/Jsonnet library path.',
     parameters: Type.Object({
-      path: Type.Optional(Type.String({ description: 'Optional vendored library path prefix. Defaults to Grafonnet v11.4.0.' })),
+      path: Type.Optional(
+        Type.String({ description: 'Optional vendored library path prefix. Defaults to Grafonnet v11.4.0.' })
+      ),
     }),
     async execute(_toolCallId, params, signal) {
       const args = params as JsonnetLibListParams;

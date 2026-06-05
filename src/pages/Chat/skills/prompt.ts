@@ -17,11 +17,7 @@ export function renderGrafanaSystemPrompt({
   const modelVisibleSkills = skills.filter((skill) => !skill.disableModelInvocation);
   const activeSkills = modelVisibleSkills.filter((skill) => activeSkillNameSet.has(skill.name));
 
-  return [
-    basePrompt.trim(),
-    renderAvailableSkills(modelVisibleSkills),
-    renderActiveSkills(activeSkills),
-  ]
+  return [basePrompt.trim(), renderAvailableSkills(modelVisibleSkills), renderActiveSkills(activeSkills)]
     .filter(Boolean)
     .join('\n\n');
 }
@@ -31,9 +27,7 @@ function renderAvailableSkills(skills: readonly GrafanaSkill[]) {
     return '';
   }
 
-  const rows = skills
-    .map((skill) => `- ${skill.name}: ${skill.description} (${skill.filePath})`)
-    .join('\n');
+  const rows = skills.map((skill) => `- ${skill.name}: ${skill.description} (${skill.filePath})`).join('\n');
 
   return `## Available Skills\n${rows}\n\nUse a skill when the user's request matches its description or when the user names it with $skill-name. Active skill reference files can be opened with read_skill_resource.`;
 }
@@ -43,18 +37,13 @@ function renderActiveSkills(skills: readonly GrafanaSkill[]) {
     return '';
   }
 
-  return [
-    '## Active Skills',
-    ...skills.map((skill) => renderSkill(skill)),
-  ].join('\n\n');
+  return ['## Active Skills', ...skills.map((skill) => renderSkill(skill))].join('\n\n');
 }
 
 function renderSkill(skill: GrafanaSkill) {
   const resources = Object.keys(skill.resources);
   const resourceList =
-    resources.length > 0
-      ? resources.map((resourcePath) => `- ${resourcePath}`).join('\n')
-      : '- No bundled resources';
+    resources.length > 0 ? resources.map((resourcePath) => `- ${resourcePath}`).join('\n') : '- No bundled resources';
 
   return [`### ${skill.name}`, `Source: ${skill.filePath}`, 'Resources:', resourceList, skill.content].join('\n');
 }

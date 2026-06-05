@@ -2,7 +2,10 @@ import type { AgentToolResult } from '@earendil-works/pi-agent-core';
 
 export type TextToolResult<TDetails = Record<string, unknown>> = AgentToolResult<TDetails>;
 
-export function textResult<TDetails extends Record<string, unknown>>(text: string, details: TDetails): TextToolResult<TDetails> {
+export function textResult<TDetails extends Record<string, unknown>>(
+  text: string,
+  details: TDetails
+): TextToolResult<TDetails> {
   return {
     content: [{ type: 'text', text }],
     details,

@@ -20,7 +20,9 @@ function makeReadSkillResourceTool(skills: readonly GrafanaSkill[]): AgentTool {
       'Read a bundled text resource referenced by an active skill. Use this for examples, templates, and detailed workflow notes before applying a skill.',
     parameters: Type.Object({
       skill: Type.String({ description: 'Skill name, for example grafana-dashboard.' }),
-      path: Type.String({ description: 'Resource path listed in the active skill, for example references/example.md.' }),
+      path: Type.String({
+        description: 'Resource path listed in the active skill, for example references/example.md.',
+      }),
     }),
     async execute(_toolCallId, params, signal) {
       const args = params as SkillResourceReadParams;

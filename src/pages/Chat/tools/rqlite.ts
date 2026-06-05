@@ -16,12 +16,7 @@ import { isObservable, lastValueFrom, type Observable } from 'rxjs';
 import { Type } from 'typebox';
 import { backendFetch } from './client';
 import { textResult, throwIfAborted, truncateText } from './result';
-import type {
-  GrafanaToolConfig,
-  QueryRqliteParams,
-  ResourceCapableDataSource,
-  RqliteColumnsParams,
-} from './types';
+import type { GrafanaToolConfig, QueryRqliteParams, ResourceCapableDataSource, RqliteColumnsParams } from './types';
 
 const RQLITE_DATASOURCE_TYPE = 'g42-rqlite-datasource';
 const RQLITE_QUERY_INTERVAL = '1m';
@@ -206,16 +201,15 @@ function getRqliteDatasourceSettings(toolConfig: GrafanaToolConfig) {
   );
 }
 
-async function getRqliteDatasource(
-  toolConfig: GrafanaToolConfig,
-  uid?: string
-): Promise<ResourceCapableDataSource> {
+async function getRqliteDatasource(toolConfig: GrafanaToolConfig, uid?: string): Promise<ResourceCapableDataSource> {
   const available = getRqliteDatasourceSettings(toolConfig);
   const selected = uid ? available.find((ds) => ds.uid === uid) : available[0];
 
   if (!selected) {
     throw new Error(
-      uid ? `rqlite datasource is not available to the assistant: ${uid}` : 'No rqlite datasource is available to the assistant'
+      uid
+        ? `rqlite datasource is not available to the assistant: ${uid}`
+        : 'No rqlite datasource is available to the assistant'
     );
   }
 
@@ -243,7 +237,8 @@ async function getRqliteDatasourceResource<T>(
 }
 
 async function runRqliteQuery(ds: ResourceCapableDataSource, args: QueryRqliteParams): Promise<DataQueryResponse> {
-  const timeRange = args.start || args.end ? makeTimeRange(args.start ?? 'now-1h', args.end ?? 'now') : getDefaultTimeRange();
+  const timeRange =
+    args.start || args.end ? makeTimeRange(args.start ?? 'now-1h', args.end ?? 'now') : getDefaultTimeRange();
   const target = {
     refId: 'A',
     datasource: { uid: ds.uid, type: ds.type },

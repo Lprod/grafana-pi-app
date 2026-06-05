@@ -59,7 +59,10 @@ export function formatAssistantError(errorMessage?: string, stopReason?: string)
 }
 
 function normalizeProxyError(errorMessage: string): string {
-  let message = errorMessage.trim().replace(/^Proxy error:\s*/i, '').trim();
+  let message = errorMessage
+    .trim()
+    .replace(/^Proxy error:\s*/i, '')
+    .trim();
   const parsed = parseJSONErrorMessage(message);
   if (parsed) {
     message = parsed;
