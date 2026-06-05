@@ -1,3 +1,10 @@
+# [2.5.0](https://github.com/elohmeier/grafana-pi-app/compare/v2.4.1...v2.5.0) (2026-06-05)
+
+
+### Features
+
+* **chat:** replace dashboard bootstrap ([7cf7ac8](https://github.com/elohmeier/grafana-pi-app/commit/7cf7ac8040f422cf6e2a335ab6bd788d18aa6618))
+
 ## [2.4.1](https://github.com/elohmeier/grafana-pi-app/compare/v2.4.0...v2.4.1) (2026-06-05)
 
 
