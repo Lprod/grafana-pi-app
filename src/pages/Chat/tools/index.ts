@@ -11,10 +11,8 @@ import { createRqliteTools, filterAllowedRqliteDatasourceSettings } from './rqli
 import { createSubagentTools } from './subagents';
 import type { CreateGrafanaToolsOptions, GrafanaToolRegistry, SkillToolGroup } from './types';
 
-export { buildDashboardBootstrapDigest } from './dashboardBootstrap';
 export { artifactByteSize, artifactizeToolResult, createArtifactTools, readArtifact } from './artifacts';
 export type { Artifact, ArtifactPreview, ArtifactRef, ArtifactRuntime } from './artifacts';
-export type { DashboardBootstrapDigest } from './dashboardBootstrap';
 export { getUnavailableDashboardDatasourceUids } from './dashboardPolicy';
 export { DEFAULT_JSONNET_FILE_PATH, normalizeJsonnetPath } from './jsonnetFiles';
 export { filterAllowedPrometheusDatasourceSettings, filterAllowedRqliteDatasourceSettings };

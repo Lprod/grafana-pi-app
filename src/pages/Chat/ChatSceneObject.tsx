@@ -12,7 +12,7 @@ import {
 } from '@earendil-works/pi-agent-core';
 import type { Message } from '@earendil-works/pi-ai';
 import { SceneComponentProps, SceneObjectBase, SceneObjectState } from '@grafana/scenes';
-import { Alert, Badge, Button, EmptyState, FilterInput, Icon, Modal, Spinner, TextArea, useStyles2 } from '@grafana/ui';
+import { Alert, Badge, Button, EmptyState, Icon, Modal, Spinner, TextArea, useStyles2 } from '@grafana/ui';
 import { usePluginUserStorage } from '@grafana/runtime';
 import type { GrafanaTheme2 } from '@grafana/data';
 import { PLUGIN_ID } from '../../constants';
@@ -23,18 +23,15 @@ import {
   createSkillTools,
   artifactByteSize,
   artifactizeToolResult,
-  buildDashboardBootstrapDigest,
   normalizeJsonnetPath,
   type Artifact,
   type ArtifactRuntime,
-  type DashboardBootstrapDigest,
   type InvestigationReport,
   type VirtualJsonnetFileSnapshot,
 } from './grafanaTools';
 import { formatAssistantError, type AssistantErrorView } from './llmErrors';
 import { createOpenAICompatibleModel, getConfiguredThinkingLevel, type PiAppJsonData } from './model';
 import { getGrafanaSkills, renderGrafanaSystemPrompt, selectGrafanaSkills } from './skills';
-import { backendFetch } from './tools/client';
 import { ContentBlocks, ToolActivityPanel, ToolResultMessageBody, type ToolRunView } from './ToolRenderer';
 
 type ChatSceneObjectState = SceneObjectState;
@@ -57,24 +54,6 @@ type StoredSession = SessionIndexItem & {
 
 type ToolRunState = Record<string, ToolRunView>;
 
-type PendingBootstrapDashboard = {
-  uid: string;
-  title: string;
-  folderTitle?: string;
-  folderUid?: string;
-};
-
-type BootstrapUserMessage = {
-  role: 'bootstrapUser';
-  content: Array<{ type: 'text'; text: string }>;
-  bootstrap: DashboardBootstrapDigest;
-  timestamp: number;
-};
-
-type DashboardPickerItem = PendingBootstrapDashboard & {
-  url?: string;
-};
-
 type ToolConfirmationView = {
   id: string;
   toolName: string;
@@ -83,12 +62,6 @@ type ToolConfirmationView = {
   fields: Array<{ label: string; value: string }>;
   args: unknown;
 };
-
-declare module '@earendil-works/pi-agent-core' {
-  interface CustomAgentMessages {
-    bootstrapUser: BootstrapUserMessage;
-  }
-}
 
 const SESSION_INDEX_KEY = 'sessions:index';
 const CHAT_SESSION_EXPORT_KIND = 'g42-pi-app.chat-session';
@@ -236,9 +209,6 @@ function ChatApp() {
   const agentRef = useRef<Agent>();
   const { revision, flushRevision, scheduleRevision } = useFrameRevision();
   const [input, setInput] = useState('');
-  const [pendingBootstrap, setPendingBootstrap] = useState<PendingBootstrapDashboard>();
-  const [isBootstrapPickerOpen, setIsBootstrapPickerOpen] = useState(false);
-  const [isPreparingBootstrap, setIsPreparingBootstrap] = useState(false);
   const [pendingToolConfirmation, setPendingToolConfirmation] = useState<ToolConfirmationView>();
   const [sessions, setSessions] = useState<SessionIndexItem[]>([]);
   const [currentSessionId, setCurrentSessionId] = useState<string>();
@@ -458,11 +428,8 @@ function ChatApp() {
     setCurrentTitle('New chat');
     setError(undefined);
     setToolRuns({});
-    setPendingBootstrap(undefined);
     setInvestigationReport(undefined);
     settleToolConfirmation(false);
-    setIsBootstrapPickerOpen(false);
-    setIsPreparingBootstrap(false);
     buildAgent([]);
   }, [buildAgent, clearArtifacts, settleToolConfirmation]);
 
@@ -592,30 +559,14 @@ function ChatApp() {
   }, [agent]);
 
   const isStreaming = Boolean(agent?.state.isStreaming);
-  const isBusy = isStreaming || isPreparingBootstrap;
+  const isBusy = isStreaming;
 
   const keepAutoScrollEnabled = useCallback(() => {
     setAutoScrollEnabled(true);
   }, [setAutoScrollEnabled]);
 
-  const openBootstrapPicker = useCallback(() => {
-    if (!isBusy) {
-      setIsBootstrapPickerOpen(true);
-    }
-  }, [isBusy]);
-
   const handleInputChange = useCallback((value: string) => {
-    if (/^\/bootstrap(?:\s+)?$/i.test(value.trim())) {
-      setInput('');
-      setIsBootstrapPickerOpen(true);
-      return;
-    }
     setInput(value);
-  }, []);
-
-  const handleBootstrapSelected = useCallback((dashboard: PendingBootstrapDashboard) => {
-    setPendingBootstrap(dashboard);
-    setIsBootstrapPickerOpen(false);
   }, []);
 
   useLayoutEffect(() => {
@@ -628,7 +579,7 @@ function ChatApp() {
     event.preventDefault();
     const prompt = input.trim();
     const currentAgent = agentRef.current;
-    if (!currentAgent || (!prompt && !pendingBootstrap) || currentAgent.state.isStreaming || isPreparingBootstrap) {
+    if (!currentAgent || !prompt || currentAgent.state.isStreaming) {
       return;
     }
 
@@ -640,7 +591,7 @@ function ChatApp() {
     }
 
     if (titleRef.current === 'New chat') {
-      const title = generateTitle(prompt || `Bootstrap ${pendingBootstrap?.title ?? 'dashboard'}`);
+      const title = generateTitle(prompt);
       titleRef.current = title;
       setCurrentTitle(title);
     }
@@ -649,34 +600,13 @@ function ChatApp() {
     setError(undefined);
     keepAutoScrollEnabled();
     try {
-      setIsPreparingBootstrap(Boolean(pendingBootstrap));
-      const runtimePrompt = pendingBootstrap ? `${prompt}\n/bootstrap dashboard ${pendingBootstrap.title}` : prompt;
-      const runtime = buildSkillRuntime(runtimePrompt);
+      const runtime = buildSkillRuntime(prompt);
       currentAgent.state.systemPrompt = runtime.systemPrompt;
       currentAgent.state.tools = runtime.tools;
-      if (pendingBootstrap) {
-        const digest = await buildDashboardBootstrapDigest({
-          uid: pendingBootstrap.uid,
-          toolConfig: jsonData,
-        });
-        const message: BootstrapUserMessage = {
-          role: 'bootstrapUser',
-          content: [{ type: 'text', text: prompt || 'Use the selected dashboard as bootstrap context.' }],
-          bootstrap: digest,
-          timestamp: Date.now(),
-        };
-        setPendingBootstrap(undefined);
-        await currentAgent.prompt(message);
-      } else {
-        await currentAgent.prompt(prompt);
-      }
+      await currentAgent.prompt(prompt);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
-      if (pendingBootstrap) {
-        setInput(prompt);
-      }
     } finally {
-      setIsPreparingBootstrap(false);
       flushRevision();
     }
   };
@@ -700,11 +630,8 @@ function ChatApp() {
     setCurrentTitle(stored.title);
     setError(undefined);
     setToolRuns({});
-    setPendingBootstrap(undefined);
     setInvestigationReport(stored.investigationReport);
     settleToolConfirmation(false);
-    setIsBootstrapPickerOpen(false);
-    setIsPreparingBootstrap(false);
     buildAgent(stored.messages);
   };
 
@@ -722,7 +649,7 @@ function ChatApp() {
 
       const currentAgent = agentRef.current;
       const sessionId = sessionIdRef.current;
-      if (!currentAgent || !sessionId || currentAgent.state.isStreaming || isPreparingBootstrap) {
+      if (!currentAgent || !sessionId || currentAgent.state.isStreaming) {
         return;
       }
 
@@ -761,16 +688,16 @@ function ChatApp() {
         setError(err instanceof Error ? err.message : String(err));
       }
     },
-    [isPreparingBootstrap, llmModel.id]
+    [llmModel.id]
   );
 
   const openImportSessionPicker = useCallback(() => {
-    if (agentRef.current?.state.isStreaming || isPreparingBootstrap) {
+    if (agentRef.current?.state.isStreaming) {
       return;
     }
 
     importSessionInputRef.current?.click();
-  }, [isPreparingBootstrap]);
+  }, []);
 
   const importSessionFromFile = useCallback(
     async (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -781,7 +708,7 @@ function ChatApp() {
         return;
       }
 
-      if (agentRef.current?.state.isStreaming || isPreparingBootstrap) {
+      if (agentRef.current?.state.isStreaming) {
         setError('Cannot import a session while the assistant is streaming.');
         return;
       }
@@ -802,11 +729,8 @@ function ChatApp() {
         setCurrentTitle(title);
         setError(undefined);
         setToolRuns({});
-        setPendingBootstrap(undefined);
         setInvestigationReport(imported.investigationReport);
         settleToolConfirmation(false);
-        setIsBootstrapPickerOpen(false);
-        setIsPreparingBootstrap(false);
         buildAgent(imported.messages);
         await saveSession(id, title, imported.messages);
       } catch (err) {
@@ -814,7 +738,7 @@ function ChatApp() {
         setError(`Could not import chat session: ${message}`);
       }
     },
-    [buildAgent, isPreparingBootstrap, keepAutoScrollEnabled, saveSession, setArtifactSnapshots, settleToolConfirmation]
+    [buildAgent, keepAutoScrollEnabled, saveSession, setArtifactSnapshots, settleToolConfirmation]
   );
 
   const visibleMessages = agent
@@ -831,11 +755,6 @@ function ChatApp() {
 
   return (
     <div className={styles.container} data-testid={testIds.chat.container}>
-      <BootstrapDashboardPicker
-        isOpen={isBootstrapPickerOpen}
-        onDismiss={() => setIsBootstrapPickerOpen(false)}
-        onSelect={handleBootstrapSelected}
-      />
       <ToolConfirmationModal
         confirmation={pendingToolConfirmation}
         onApprove={() => settleToolConfirmation(true)}
@@ -891,10 +810,7 @@ function ChatApp() {
         <div className={styles.toolbar}>
           <div className={styles.titleGroup}>
             <h2 className={styles.title}>{currentTitle}</h2>
-            <Badge
-              text={isPreparingBootstrap ? 'Preparing' : isStreaming ? 'Streaming' : 'Ready'}
-              color={isPreparingBootstrap || isStreaming ? 'blue' : 'green'}
-            />
+            <Badge text={isStreaming ? 'Streaming' : 'Ready'} color={isStreaming ? 'blue' : 'green'} />
           </div>
           <div className={styles.toolbarActions}>
             {isStreaming && (
@@ -980,9 +896,9 @@ function ChatApp() {
               ))
             )}
             <ToolActivityPanel runs={activeToolRuns} />
-            {(isStreaming || isPreparingBootstrap) && (
+            {isStreaming && (
               <div className={styles.streaming} role="status" aria-live="polite">
-                <Spinner /> {isPreparingBootstrap ? 'Preparing dashboard bootstrap' : 'Working'}
+                <Spinner /> Working
               </div>
             )}
           </section>
@@ -1004,15 +920,12 @@ function ChatApp() {
 
         <form className={styles.composer} onSubmit={submitPrompt}>
           <div className={styles.composerInputGroup}>
-            {pendingBootstrap && (
-              <BootstrapChip dashboard={pendingBootstrap} onRemove={() => setPendingBootstrap(undefined)} />
-            )}
             <TextArea
               data-testid={testIds.chat.composer}
               rows={3}
               value={input}
               disabled={!agent || isBusy || !hasLLMConfig}
-              placeholder="Ask about metrics, PromQL, or type /bootstrap..."
+              placeholder="Ask about metrics, PromQL, or dashboards..."
               onChange={(event) => handleInputChange(event.currentTarget.value)}
               onKeyDown={(event) => {
                 if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
@@ -1022,15 +935,6 @@ function ChatApp() {
             />
           </div>
           <div className={styles.composerActions}>
-            <Button
-              icon="dashboard"
-              type="button"
-              variant="secondary"
-              disabled={!agent || isBusy}
-              onClick={openBootstrapPicker}
-            >
-              Bootstrap
-            </Button>
             {isStreaming && (
               <Button icon="pause" type="button" variant="secondary" onClick={abortAgent}>
                 Stop
@@ -1040,7 +944,7 @@ function ChatApp() {
               data-testid={testIds.chat.send}
               icon="message"
               type="submit"
-              disabled={!agent || (!input.trim() && !pendingBootstrap) || isBusy || !hasLLMConfig}
+              disabled={!agent || !input.trim() || isBusy || !hasLLMConfig}
             >
               Send
             </Button>
@@ -1048,181 +952,6 @@ function ChatApp() {
         </form>
       </main>
     </div>
-  );
-}
-
-function BootstrapChip({ dashboard, onRemove }: { dashboard: PendingBootstrapDashboard; onRemove?: () => void }) {
-  const styles = useStyles2(getStyles);
-  return (
-    <div className={styles.bootstrapChip}>
-      <Icon name="dashboard" />
-      <span className={styles.bootstrapChipText}>
-        {dashboard.folderTitle ? `${dashboard.folderTitle}/` : ''}
-        {dashboard.title}
-      </span>
-      {onRemove && (
-        <Button
-          aria-label="Remove bootstrap dashboard"
-          icon="times"
-          size="sm"
-          variant="secondary"
-          fill="text"
-          onClick={onRemove}
-        />
-      )}
-    </div>
-  );
-}
-
-function BootstrapUserMessageView({ message }: { message: BootstrapUserMessage }) {
-  const styles = useStyles2(getStyles);
-  return (
-    <div className={styles.bootstrapMessage}>
-      <BootstrapChip
-        dashboard={{
-          uid: message.bootstrap.uid,
-          title: message.bootstrap.title,
-          folderTitle: message.bootstrap.folderTitle,
-        }}
-      />
-      <ContentBlocks content={message.content} markdown={false} />
-    </div>
-  );
-}
-
-function BootstrapDashboardPicker({
-  isOpen,
-  onDismiss,
-  onSelect,
-}: {
-  isOpen: boolean;
-  onDismiss: () => void;
-  onSelect: (dashboard: PendingBootstrapDashboard) => void;
-}) {
-  const styles = useStyles2(getStyles);
-  const [query, setQuery] = useState('');
-  const [dashboards, setDashboards] = useState<DashboardPickerItem[]>([]);
-  const [isLoading, setIsLoading] = useState(false);
-  const [pickerError, setPickerError] = useState<string>();
-
-  const resetPicker = useCallback(() => {
-    setQuery('');
-    setPickerError(undefined);
-  }, []);
-
-  const dismissPicker = useCallback(() => {
-    resetPicker();
-    onDismiss();
-  }, [onDismiss, resetPicker]);
-
-  const selectDashboard = useCallback(
-    (dashboard: PendingBootstrapDashboard) => {
-      resetPicker();
-      onSelect(dashboard);
-    },
-    [onSelect, resetPicker]
-  );
-
-  useEffect(() => {
-    if (!isOpen) {
-      return;
-    }
-
-    let mounted = true;
-    const timeout = window.setTimeout(() => {
-      setIsLoading(true);
-      setPickerError(undefined);
-      backendFetch<DashboardPickerItem[]>('/api/search', {
-        params: {
-          type: 'dash-db',
-          query,
-          limit: 100,
-        },
-      })
-        .then((items) => {
-          if (!mounted) {
-            return;
-          }
-          setDashboards(
-            items
-              .filter((item) => item.uid && item.title)
-              .map((item) => ({
-                uid: item.uid,
-                title: item.title,
-                folderTitle: item.folderTitle,
-                folderUid: item.folderUid,
-                url: item.url,
-              }))
-          );
-        })
-        .catch((error) => {
-          if (!mounted) {
-            return;
-          }
-          setPickerError(error instanceof Error ? error.message : String(error));
-          setDashboards([]);
-        })
-        .finally(() => {
-          if (mounted) {
-            setIsLoading(false);
-          }
-        });
-    }, 200);
-
-    return () => {
-      mounted = false;
-      window.clearTimeout(timeout);
-    };
-  }, [isOpen, query]);
-
-  const groupedDashboards = useMemo(() => groupDashboardsByFolder(dashboards), [dashboards]);
-
-  return (
-    <Modal
-      title="Bootstrap from dashboard"
-      isOpen={isOpen}
-      closeOnEscape
-      onDismiss={dismissPicker}
-      className={styles.bootstrapModal}
-      contentClassName={styles.bootstrapModalContent}
-    >
-      <div className={styles.bootstrapPicker}>
-        <FilterInput value={query} placeholder="Search dashboards" onChange={setQuery} />
-        {pickerError && (
-          <Alert severity="error" title="Could not search dashboards">
-            {pickerError}
-          </Alert>
-        )}
-        <div className={styles.bootstrapPickerList}>
-          {isLoading && (
-            <div className={styles.bootstrapPickerLoading}>
-              <Spinner /> Loading dashboards
-            </div>
-          )}
-          {!isLoading && dashboards.length === 0 && <div className={styles.sidebarSubtle}>No dashboards found.</div>}
-          {!isLoading &&
-            groupedDashboards.map((group) => (
-              <section className={styles.bootstrapFolderGroup} key={group.folder}>
-                <div className={styles.bootstrapFolderTitle}>
-                  <Icon name="folder-open" />
-                  <span>{group.folder}</span>
-                </div>
-                {group.items.map((dashboard) => (
-                  <button
-                    className={styles.bootstrapDashboardRow}
-                    key={dashboard.uid}
-                    type="button"
-                    onClick={() => selectDashboard(dashboard)}
-                  >
-                    <span className={styles.bootstrapDashboardTitle}>{dashboard.title}</span>
-                    <span className={styles.bootstrapDashboardUid}>{dashboard.uid}</span>
-                  </button>
-                ))}
-              </section>
-            ))}
-        </div>
-      </div>
-    </Modal>
   );
 }
 
@@ -1352,10 +1081,9 @@ const MessageView = memo(function MessageView({
   isStreaming?: boolean;
 }) {
   const styles = useStyles2(getStyles);
-  const isBootstrap = isBootstrapUserMessage(message);
-  const isUser = message.role === 'user' || isBootstrap;
+  const isUser = message.role === 'user';
   const isTool = message.role === 'toolResult';
-  const roleLabel = isTool ? undefined : isBootstrap ? 'user' : message.role;
+  const roleLabel = isTool ? undefined : message.role;
 
   return (
     <article
@@ -1373,9 +1101,6 @@ const MessageView = memo(function MessageView({
 });
 
 function renderMessageContent(message: AgentMessage, isStreaming: boolean) {
-  if (isBootstrapUserMessage(message)) {
-    return <BootstrapUserMessageView message={message} />;
-  }
   if (message.role === 'user') {
     return <ContentBlocks content={message.content} markdown={false} />;
   }
@@ -1411,58 +1136,12 @@ function messageKey(message: AgentMessage, index: number, isStreaming: boolean) 
 
 function convertChatMessagesToLlm(messages: AgentMessage[]): Message[] {
   return messages.flatMap((message) => {
-    if (isBootstrapUserMessage(message)) {
-      return [
-        {
-          role: 'user',
-          content: [{ type: 'text', text: bootstrapMessageToLlmText(message) }],
-          timestamp: message.timestamp,
-        },
-      ];
-    }
-
     if (message.role === 'user' || message.role === 'assistant' || message.role === 'toolResult') {
       return [message];
     }
 
     return [];
   });
-}
-
-function bootstrapMessageToLlmText(message: BootstrapUserMessage) {
-  const prompt = getTextBlocks(message.content).join('\n').trim() || 'Use this dashboard bootstrap context.';
-  return `${prompt}\n\n## Dashboard bootstrap context\n${message.bootstrap.markdown}`;
-}
-
-function isBootstrapUserMessage(message: AgentMessage): message is BootstrapUserMessage {
-  return isRecord(message) && message.role === 'bootstrapUser' && isRecord(message.bootstrap);
-}
-
-function getTextBlocks(content: unknown) {
-  if (typeof content === 'string') {
-    return [content];
-  }
-  if (!Array.isArray(content)) {
-    return [];
-  }
-  return content
-    .map((block) => (isRecord(block) && typeof block.text === 'string' ? block.text : undefined))
-    .filter((value): value is string => Boolean(value));
-}
-
-function groupDashboardsByFolder(items: DashboardPickerItem[]) {
-  const groups = new Map<string, DashboardPickerItem[]>();
-  for (const item of items) {
-    const folder = item.folderTitle || 'Dashboards';
-    groups.set(folder, [...(groups.get(folder) ?? []), item]);
-  }
-
-  return [...groups.entries()]
-    .sort(([left], [right]) => left.localeCompare(right))
-    .map(([folder, groupItems]) => ({
-      folder,
-      items: groupItems.slice().sort((left, right) => left.title.localeCompare(right.title)),
-    }));
 }
 
 function AssistantErrorNotice({ error }: { error: AssistantErrorView }) {
@@ -2451,95 +2130,6 @@ const getStyles = (theme: GrafanaTheme2) => ({
     justifyContent: 'flex-end',
     gap: theme.spacing(1),
     flexWrap: 'wrap',
-  }),
-  bootstrapChip: css({
-    display: 'inline-flex',
-    alignItems: 'center',
-    gap: theme.spacing(0.75),
-    width: 'fit-content',
-    maxWidth: '100%',
-    minHeight: 32,
-    padding: theme.spacing(0.5, 0.75),
-    border: `1px solid ${theme.colors.border.weak}`,
-    borderRadius: theme.shape.radius.default,
-    background: theme.colors.background.secondary,
-    color: theme.colors.text.primary,
-  }),
-  bootstrapChipText: css({
-    minWidth: 0,
-    overflow: 'hidden',
-    textOverflow: 'ellipsis',
-    whiteSpace: 'nowrap',
-  }),
-  bootstrapMessage: css({
-    display: 'grid',
-    gap: theme.spacing(1),
-    justifyItems: 'start',
-  }),
-  bootstrapModal: css({
-    width: 'min(760px, calc(100vw - 32px))',
-  }),
-  bootstrapModalContent: css({
-    minHeight: 420,
-  }),
-  bootstrapPicker: css({
-    display: 'grid',
-    gap: theme.spacing(2),
-    minHeight: 380,
-  }),
-  bootstrapPickerList: css({
-    display: 'grid',
-    alignContent: 'start',
-    gap: theme.spacing(1.5),
-    maxHeight: 440,
-    overflow: 'auto',
-    paddingRight: theme.spacing(0.5),
-  }),
-  bootstrapPickerLoading: css({
-    display: 'flex',
-    alignItems: 'center',
-    gap: theme.spacing(1),
-    color: theme.colors.text.secondary,
-  }),
-  bootstrapFolderGroup: css({
-    display: 'grid',
-    gap: theme.spacing(0.5),
-  }),
-  bootstrapFolderTitle: css({
-    display: 'flex',
-    alignItems: 'center',
-    gap: theme.spacing(0.75),
-    color: theme.colors.text.secondary,
-    fontSize: theme.typography.bodySmall.fontSize,
-    fontWeight: theme.typography.fontWeightMedium,
-  }),
-  bootstrapDashboardRow: css({
-    display: 'grid',
-    gridTemplateColumns: 'minmax(0, 1fr) auto',
-    alignItems: 'center',
-    gap: theme.spacing(1),
-    width: '100%',
-    minHeight: 38,
-    padding: theme.spacing(0.75, 1),
-    border: `1px solid ${theme.colors.border.weak}`,
-    borderRadius: theme.shape.radius.default,
-    background: theme.colors.background.primary,
-    color: theme.colors.text.primary,
-    textAlign: 'left',
-    cursor: 'pointer',
-    '&:hover': {
-      borderColor: theme.colors.border.medium,
-      background: theme.colors.action.hover,
-    },
-  }),
-  bootstrapDashboardTitle: css({
-    overflow: 'hidden',
-    textOverflow: 'ellipsis',
-    whiteSpace: 'nowrap',
-  }),
-  bootstrapDashboardUid: css({
-    color: theme.colors.text.secondary,
-    fontSize: theme.typography.bodySmall.fontSize,
   }),
   toolConfirmationModal: css({
     width: 'min(620px, calc(100vw - 32px))',

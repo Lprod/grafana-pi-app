@@ -1113,7 +1113,7 @@ describe('grafana datasource tool policy', () => {
     expect(names).toContain('read_jsonnet');
     expect(names).toContain('sync_dashboard');
     expect(names).toContain('get_dashboard_source');
-    expect(names).toContain('bootstrap_dashboard_context');
+    expect(names).toContain('inspect_dashboard_context');
     expect(names).toContain('screenshot_dashboard');
     expect(names).toContain('run_query_agent');
     expect(names).toContain('run_dashboard_agent');
@@ -1149,80 +1149,82 @@ describe('grafana datasource tool policy', () => {
     expect(names).toContain('upload_dashboard');
     expect(names).toContain('delete_dashboard');
     expect(names).toContain('get_dashboard_source');
-    expect(names).toContain('bootstrap_dashboard_context');
+    expect(names).toContain('inspect_dashboard_context');
     expect(names).toContain('search_grafonnet');
     expect(names).toContain('run_query_agent');
     expect(names).toContain('run_dashboard_agent');
     expect(names).not.toContain('explore_jsonnet');
   });
 
-  it('bootstraps an existing dashboard as compact markdown with variable values and panel queries', async () => {
-    const metricFindQuery = jest.fn().mockResolvedValue([{ text: 'api' }, { text: 'worker' }, { text: 'frontend' }]);
-    mockDataSourceSrv.get.mockResolvedValue({
+  it('inspects typed dashboard context and validates interpolated Prometheus panel queries', async () => {
+    const frame = makePrometheusFrame({
+      displayName: 'request rate{route="/render/report"}',
+      labels: { route: '/render/report' },
+      times: [Date.UTC(2026, 0, 1, 0, 0, 0), Date.UTC(2026, 0, 1, 0, 5, 0)],
+      values: [1, 2],
+    });
+    const dataSource = {
       uid: 'prom-a',
       type: 'prometheus',
-      metricFindQuery,
-    });
+      query: jest
+        .fn()
+        .mockResolvedValueOnce({ state: 'Done', data: [frame] })
+        .mockResolvedValueOnce({
+          state: 'Error',
+          errors: [{ message: 'bad_data: unknown metric http_request_total' }],
+        }),
+    };
+    mockDataSourceSrv.get.mockResolvedValue(dataSource);
     const fetch = jest.fn().mockReturnValue(
       of({
         data: {
           dashboard: {
-            uid: 'service-red',
-            title: 'Service RED',
-            tags: ['service', 'red'],
+            uid: 'stale-http',
+            title: 'Stale HTTP Review',
+            tags: ['stale'],
             time: { from: 'now-6h', to: 'now' },
-            refresh: '30s',
             templating: {
               list: [
                 {
-                  name: 'service',
-                  type: 'query',
-                  datasource: { uid: 'prom-a', type: 'prometheus' },
-                  query: 'label_values(http_requests_total, service)',
-                  current: { text: 'api', value: 'api' },
-                  options: [{ text: 'api', value: 'api' }],
-                },
-                {
-                  name: 'env',
+                  name: 'route',
                   type: 'custom',
-                  query: 'prod,stage',
-                  current: { text: 'prod', value: 'prod' },
-                  options: [
-                    { text: 'prod', value: 'prod' },
-                    { text: 'stage', value: 'stage' },
-                  ],
+                  query: '/,/api/orders,/render/report',
+                  current: { text: '/render/report', value: '/render/report' },
                 },
               ],
             },
             panels: [
               {
                 id: 1,
-                type: 'row',
-                title: 'RED',
-                panels: [
+                title: 'Healthy rate',
+                type: 'timeseries',
+                datasource: { uid: 'prom-a', type: 'prometheus' },
+                gridPos: { x: 0, y: 0, w: 12, h: 8 },
+                fieldConfig: { defaults: { unit: 'reqps' } },
+                targets: [
                   {
-                    id: 2,
-                    title: 'Request rate',
-                    type: 'timeseries',
-                    description: 'Incoming requests by service.',
-                    datasource: { uid: 'prom-a', type: 'prometheus' },
-                    repeat: 'service',
-                    targets: [
-                      {
-                        refId: 'A',
-                        expr: 'sum(rate(http_requests_total{service="$service"}[$__rate_interval]))',
-                      },
-                    ],
-                    transformations: [{ id: 'renameByRegex' }],
-                    links: [{ title: 'Explore', url: '/explore' }],
+                    refId: 'A',
+                    expr: 'sum(rate(http_requests_total{route="$route"}[$__rate_interval]))',
+                  },
+                ],
+              },
+              {
+                id: 2,
+                title: 'Stale error rate',
+                type: 'timeseries',
+                datasource: { uid: 'prom-a', type: 'prometheus' },
+                targets: [
+                  {
+                    refId: 'A',
+                    expr: 'sum(rate(http_request_total{path="$route",status=~"5.."}[$__rate_interval]))',
                   },
                 ],
               },
             ],
           },
           meta: {
-            folderTitle: 'Services',
-            url: '/d/service-red/service-red',
+            folderTitle: 'Reviews',
+            url: '/d/stale-http/stale-http-review',
           },
         },
       })
@@ -1230,81 +1232,53 @@ describe('grafana datasource tool policy', () => {
     (getBackendSrv as jest.Mock).mockReturnValue({ fetch });
     const tool = getTool(
       createGrafanaTools({ allowedPrometheusDatasourceUids: ['prom-a'] }),
-      'bootstrap_dashboard_context'
+      'inspect_dashboard_context'
     );
 
-    const result = await tool.execute('call-1', { uid: 'service-red' }, undefined);
-    const text = result.content[0].text;
+    const result = await tool.execute('call-1', { uid: 'stale-http', validateQueries: true }, undefined);
+    const body = JSON.parse(result.content[0].text);
 
-    expect(fetch).toHaveBeenCalledWith(
-      expect.objectContaining({
-        url: '/api/dashboards/uid/service-red',
-        method: 'GET',
-        showErrorAlert: false,
-      })
+    expect(dataSource.query).toHaveBeenCalledTimes(2);
+    expect(body.dashboard).toMatchObject({
+      uid: 'stale-http',
+      title: 'Stale HTTP Review',
+      folderTitle: 'Reviews',
+      time: { from: 'now-6h', to: 'now' },
+    });
+    expect(body.variables[0]).toMatchObject({ name: 'route', current: '/render/report' });
+    expect(body.panels[0]).toMatchObject({
+      id: '1',
+      title: 'Healthy rate',
+      gridPos: { x: 0, y: 0, w: 12, h: 8 },
+      fieldConfig: { unit: 'reqps' },
+    });
+    expect(body.panels[0].targets[0].validationQuery).toBe(
+      'sum(rate(http_requests_total{route="/render/report"}[5m]))'
     );
-    expect(metricFindQuery).toHaveBeenCalledWith(
-      'label_values(http_requests_total, service)',
-      expect.objectContaining({ variable: { name: 'service' } })
+    expect(body.panels[1].targets[0].validationQuery).toBe(
+      'sum(rate(http_request_total{path="/render/report",status=~"5.."}[5m]))'
     );
-    expect(text).toContain('# Dashboard bootstrap: Service RED');
-    expect(text).toContain('uid: service-red | folder: Services | time: now-6h -> now | refresh: 30s');
-    expect(text).toContain('- service: query ds=prom-a current=`api`');
-    expect(text).toContain('values=`api`, `worker`, `frontend`');
-    expect(text).toContain('1. Request rate [timeseries] id=2 ds=prom-a repeat=service');
-    expect(text).toContain('desc: Incoming requests by service.');
-    expect(text).toContain('A: sum(rate(http_requests_total{service="$service"}[$__rate_interval]))');
-    expect(text).toContain('transformations: renameByRegex');
-    expect(text).not.toContain('"panels"');
+    expect(body.validation).toMatchObject({
+      queryCount: 2,
+      failedQueries: 1,
+      zeroSeriesQueries: 0,
+      truncatedQueries: false,
+    });
+    expect(body.validation.results[1]).toMatchObject({
+      panelTitle: 'Stale error rate',
+      validationError: 'bad_data: unknown metric http_request_total',
+    });
     expect(result.details).toMatchObject({
-      uid: 'service-red',
-      title: 'Service RED',
-      folderTitle: 'Services',
-      panelCount: 1,
-      variableCount: 2,
-      queryCount: 1,
+      uid: 'stale-http',
+      panelCount: 2,
+      variableCount: 1,
+      queryCount: 2,
+      validation: {
+        queryCount: 2,
+        failedQueries: 1,
+      },
       summarized: true,
     });
-  });
-
-  it('keeps bootstrap variable lookup best-effort when a datasource is disallowed', async () => {
-    mockDataSourceSrv.get.mockResolvedValue({
-      uid: 'prom-a',
-      type: 'prometheus',
-      metricFindQuery: jest.fn(),
-    });
-    const fetch = jest.fn().mockReturnValue(
-      of({
-        data: {
-          dashboard: {
-            uid: 'node',
-            title: 'Node',
-            templating: {
-              list: [
-                {
-                  name: 'instance',
-                  type: 'query',
-                  datasource: { uid: 'prom-a', type: 'prometheus' },
-                  query: 'label_values(up, instance)',
-                },
-              ],
-            },
-            panels: [],
-          },
-          meta: {},
-        },
-      })
-    );
-    (getBackendSrv as jest.Mock).mockReturnValue({ fetch });
-    const tool = getTool(
-      createGrafanaTools({ allowedPrometheusDatasourceUids: ['prom-b'] }),
-      'bootstrap_dashboard_context'
-    );
-
-    const result = await tool.execute('call-1', { uid: 'node' }, undefined);
-
-    expect(result.content[0].text).toContain('warning=datasource prom-a is outside the assistant allow-list');
-    expect(result.details.warnings).toEqual(['instance: datasource prom-a is outside the assistant allow-list']);
   });
 
   it('exposes narrow read-only subagent tools for skill-selected turns', () => {
@@ -1357,6 +1331,7 @@ describe('grafana datasource tool policy', () => {
     expect(names).toContain('sync_dashboard');
     expect(names).toContain('get_dashboard_source');
     expect(names).toContain('get_dashboard');
+    expect(names).toContain('inspect_dashboard_context');
     expect(names).toContain('screenshot_dashboard');
     expect(names).toContain('run_dashboard_agent');
     expect(names).not.toContain('design_dashboard');
@@ -1411,7 +1386,7 @@ describe('grafana datasource tool policy', () => {
         'sync_dashboard',
         'get_dashboard',
         'list_dashboards',
-        'bootstrap_dashboard_context',
+        'inspect_dashboard_context',
         'screenshot_dashboard',
         'read_skill_resource',
       ])

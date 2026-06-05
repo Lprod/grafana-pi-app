@@ -25,3 +25,5 @@ The default chat toolset exposes supervisor delegation tools (`run_query_agent`,
 The assistant page does not expose model, thinking, system prompt, datasource policy, or custom skill controls; all requests use the model, thinking mode, prompt addendum, datasource allow-list, and custom skill catalog configured in the plugin settings.
 
 Managed dashboards are compiled from model-authored Jsonnet source in the backend. During chat, the assistant keeps that source in a session-scoped virtual Jsonnet file so it can render, edit, auto-repair common invalid Grafonnet-style constructor output during render, and sync dashboards without resending unchanged source. The source is stored on the plugin-managed dashboard resource and should be changed by fetching, editing, and re-syncing through the app.
+
+For existing dashboards, the dashboard specialist uses `inspect_dashboard_context` to read typed dashboard structure, current-variable-substituted panel queries, layout and field config, and best-effort Prometheus validation summaries.

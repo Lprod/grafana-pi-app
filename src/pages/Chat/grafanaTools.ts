@@ -1,5 +1,4 @@
 export {
-  buildDashboardBootstrapDigest,
   buildNavigationPath,
   artifactByteSize,
   artifactizeToolResult,
@@ -15,7 +14,6 @@ export {
   getUnavailableDashboardDatasourceUids,
   normalizeJsonnetPath,
 } from './tools';
-export type { DashboardBootstrapDigest } from './tools';
 export type {
   Artifact,
   ArtifactPreview,

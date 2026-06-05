@@ -277,6 +277,7 @@ Scope:
 - Create, update, review, render, and sync Grafana dashboards when the user explicitly asks for dashboard or persistent artifact work.
 - Discover Prometheus datasources, metric names, labels, and label values before selecting panel queries.
 - Inspect existing dashboards when a dashboard UID is provided or the task is an update or review.
+- Use inspect_dashboard_context for existing-dashboard review/update work because it returns typed panel/layout context and validates current-variable-substituted PromQL.
 - Validate PromQL with query_prometheus before using panel queries.
 - Prefer managed Jsonnet dashboards for durable changes.
 - Read active skill resources when examples or detailed dashboard workflow notes are needed.

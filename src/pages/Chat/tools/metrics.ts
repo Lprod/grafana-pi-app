@@ -457,11 +457,11 @@ function querySpecsFromParams(args: QueryPrometheusParams): PrometheusQuerySpec[
     : [];
 }
 
-type PrometheusQueryValidationSummary = PrometheusQuerySummary & {
+export type PrometheusQueryValidationSummary = PrometheusQuerySummary & {
   validationError?: string;
 };
 
-async function runPrometheusQuerySummaryOrValidationError(
+export async function runPrometheusQuerySummaryOrValidationError(
   ds: ResourceCapableDataSource,
   querySpec: PrometheusQuerySpec,
   signal?: AbortSignal
@@ -532,7 +532,7 @@ function getPrometheusDatasourceSettings(toolConfig: GrafanaToolConfig) {
   );
 }
 
-async function getPrometheusDatasource(
+export async function getPrometheusDatasource(
   toolConfig: GrafanaToolConfig,
   uid?: string
 ): Promise<ResourceCapableDataSource> {
@@ -642,7 +642,7 @@ function frameToJson(frame: DataFrame) {
   return dataFrameToJSON(frame);
 }
 
-type PrometheusQuerySummary = {
+export type PrometheusQuerySummary = {
   datasourceUid: string;
   query: string;
   queryType: 'instant' | 'range';
@@ -811,7 +811,9 @@ function summarizeNumberField(frame: DataFrame, field: Field, timeField?: Field)
   return summary;
 }
 
-function compactBatchPrometheusSummary(summary: PrometheusQueryValidationSummary): PrometheusQueryValidationSummary {
+export function compactBatchPrometheusSummary(
+  summary: PrometheusQueryValidationSummary
+): PrometheusQueryValidationSummary {
   const selected = selectProminentSeries(summary.series, MAX_BATCH_SERIES_SUMMARIES);
 
   return {

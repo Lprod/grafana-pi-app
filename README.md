@@ -176,6 +176,14 @@ npm run benchmark:analysis
 
 This benchmark asks the assistant to investigate the six-hour synthetic data set without creating dashboards. It writes reports to `test-results/analysis-benchmark/latest-report.txt`, `latest-answer.md`, and `latest-events.json`.
 
+To benchmark the typed dashboard context repair path, run:
+
+```bash
+npm run benchmark:dashboard-context
+```
+
+This benchmark seeds a stale dashboard, then runs a rich-context repair that must use `inspect_dashboard_context`, render, and sync a managed dashboard copy. It writes the report to `test-results/dashboard-context-benchmark/latest-report.txt` with separate event and answer files for the run.
+
 To benchmark only the `explore_metrics` discovery path, run:
 
 ```bash

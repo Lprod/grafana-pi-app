@@ -2,7 +2,7 @@ import type { AgentTool } from '@earendil-works/pi-agent-core';
 import { config } from '@grafana/runtime';
 import { Type } from 'typebox';
 import { backendFetch } from './client';
-import { createDashboardBootstrapTools } from './dashboardBootstrap';
+import { createDashboardContextTools } from './dashboardContext';
 import { getUnavailableDashboardDatasourceUids } from './dashboardPolicy';
 import { textResult, throwIfAborted, truncateText } from './result';
 import type {
@@ -18,7 +18,7 @@ const REQUIRED_DASHBOARD_TAG = 'genai';
 
 export function createDashboardTools(toolConfig: GrafanaToolConfig, includeAdHocWrites = false): AgentTool[] {
   const readTools = [
-    ...createDashboardBootstrapTools(toolConfig),
+    ...createDashboardContextTools(toolConfig),
     grafanaGetDashboardTool,
     grafanaListDashboardsTool,
     grafanaScreenshotTool,

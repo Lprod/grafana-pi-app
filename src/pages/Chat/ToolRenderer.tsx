@@ -525,8 +525,8 @@ function asSimpleToolCallSummary(
     case 'get_dashboard':
     case 'grafana_get_dashboard':
       return dashboardToolCallSummary('Get dashboard', record);
-    case 'bootstrap_dashboard_context':
-      return dashboardToolCallSummary('Bootstrap dashboard context', record);
+    case 'inspect_dashboard_context':
+      return dashboardToolCallSummary('Inspect dashboard context', record);
     case 'get_dashboard_source':
     case 'grafana_get_managed_dashboard_source':
       return dashboardToolCallSummary('Read managed dashboard source', record);
@@ -1109,7 +1109,7 @@ const TOOL_ICONS: Record<string, IconName> = {
   list_managed_dashboards: 'dashboard',
   get_dashboard: 'dashboard',
   grafana_get_dashboard: 'dashboard',
-  bootstrap_dashboard_context: 'dashboard',
+  inspect_dashboard_context: 'dashboard',
   get_dashboard_source: 'file-alt',
   grafana_get_managed_dashboard_source: 'file-alt',
   render_dashboard: 'dashboard',
@@ -1321,11 +1321,6 @@ function renderStructuredToolResult(
   const screenshot = asScreenshotResult(toolName, details);
   if (screenshot) {
     return <ScreenshotResultView content={artifactResult ? undefined : content} result={screenshot} />;
-  }
-
-  const bootstrapSummary = asDashboardBootstrapSummary(toolName, details, content, Boolean(artifactResult));
-  if (bootstrapSummary) {
-    return <DashboardBootstrapSummaryView result={bootstrapSummary} />;
   }
 
   const dashboardList = asDashboardList(toolName, details, content);
@@ -2349,67 +2344,6 @@ function ManagedDashboardSourceView({ result }: { result: ManagedDashboardSource
         ]}
       />
       <CodeViewer lines={textToCodeLines(result.dashboardJsonnet)} />
-    </div>
-  );
-}
-
-type DashboardBootstrapSummaryResult = {
-  uid?: string;
-  title?: string;
-  folderTitle?: string;
-  url?: string;
-  panelCount?: number;
-  variableCount?: number;
-  queryCount?: number;
-  truncated?: boolean;
-  warnings: string[];
-  contextText?: string;
-};
-
-function DashboardBootstrapSummaryView({ result }: { result: DashboardBootstrapSummaryResult }) {
-  const styles = useStyles2(getToolStyles);
-  const title = result.title ?? result.uid ?? 'Dashboard context';
-  const summaryParts = [
-    title,
-    result.panelCount === undefined ? undefined : `${formatCount(result.panelCount)} panels`,
-    result.variableCount === undefined ? undefined : `${formatCount(result.variableCount)} variables`,
-    result.queryCount === undefined ? undefined : `${formatCount(result.queryCount)} queries`,
-    result.truncated ? 'truncated' : undefined,
-  ].filter(Boolean);
-
-  return (
-    <div className={styles.structuredResult}>
-      <div className={styles.resultSummary}>{summaryParts.join(' | ')}</div>
-      <ResultMetaGrid
-        items={[
-          { label: 'Title', value: result.title },
-          { label: 'UID', value: result.uid ? <code>{result.uid}</code> : undefined },
-          { label: 'Folder', value: result.folderTitle },
-          { label: 'Panels', value: result.panelCount === undefined ? undefined : formatCount(result.panelCount) },
-          {
-            label: 'Variables',
-            value: result.variableCount === undefined ? undefined : formatCount(result.variableCount),
-          },
-          { label: 'Queries', value: result.queryCount === undefined ? undefined : formatCount(result.queryCount) },
-          { label: 'Open', value: result.url ? <ExternalLink href={result.url}>Open</ExternalLink> : undefined },
-        ]}
-      />
-      {result.warnings.length > 0 && (
-        <div className={styles.noticeList}>
-          {result.warnings.slice(0, 5).map((warning, index) => (
-            <div className={styles.notice} key={`${index}:${warning}`}>
-              <strong>warning</strong>
-              <span>{warning}</span>
-            </div>
-          ))}
-        </div>
-      )}
-      {result.contextText && (
-        <details className={styles.collapsible} open>
-          <summary>Context preview</summary>
-          <ContentBlocks content={[{ type: 'text', text: result.contextText }]} />
-        </details>
-      )}
     </div>
   );
 }
@@ -3536,36 +3470,6 @@ function asManagedDashboardSource(
   };
 }
 
-function asDashboardBootstrapSummary(
-  toolName: string | undefined,
-  details: unknown,
-  content: unknown,
-  artifactized: boolean
-): DashboardBootstrapSummaryResult | undefined {
-  if (toolName !== 'bootstrap_dashboard_context') {
-    return undefined;
-  }
-
-  const detailRecord = isRecord(details) ? details : undefined;
-  const contextText = artifactized ? undefined : (artifactPreviewText(details) ?? getSingleTextContent(content));
-  if (!detailRecord && !contextText) {
-    return undefined;
-  }
-
-  return {
-    uid: stringField(detailRecord, 'uid'),
-    title: stringField(detailRecord, 'title'),
-    folderTitle: stringField(detailRecord, 'folderTitle'),
-    url: stringField(detailRecord, 'url'),
-    panelCount: numberField(detailRecord, 'panelCount'),
-    variableCount: numberField(detailRecord, 'variableCount'),
-    queryCount: numberField(detailRecord, 'queryCount'),
-    truncated: booleanField(detailRecord, 'truncated'),
-    warnings: detailRecord ? (stringArrayField(detailRecord, 'warnings') ?? []) : [],
-    contextText,
-  };
-}
-
 function asJsonnetFileResult(
   toolName: string | undefined,
   details: unknown,
@@ -3757,14 +3661,6 @@ function artifactPreviewJsonRecord(details: unknown): Record<string, unknown> | 
 function artifactPreviewJsonArray(details: unknown): unknown[] | undefined {
   const data = artifactPreviewData(details);
   return Array.isArray(data) ? data : undefined;
-}
-
-function artifactPreviewText(details: unknown): string | undefined {
-  if (!isRecord(details)) {
-    return undefined;
-  }
-  const preview = recordField(details, 'artifactPreview');
-  return preview?.type === 'text' && typeof preview.text === 'string' ? preview.text : undefined;
 }
 
 function artifactPreviewData(details: unknown): unknown {

@@ -19,6 +19,7 @@
     "benchmark:agent": "node scripts/benchmark-agent.mjs",
     "benchmark:analysis": "node scripts/benchmark-analysis.mjs",
     "benchmark:artifact-jq": "node scripts/benchmark-artifact-jq.mjs",
+    "benchmark:dashboard-context": "node scripts/benchmark-dashboard-context.mjs",
     "benchmark:explore-metrics": "node scripts/benchmark-explore-metrics.mjs",
     "server": "docker compose up --build",
     "sign": "npx --yes @grafana/sign-plugin@latest",

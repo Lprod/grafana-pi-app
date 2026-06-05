@@ -269,7 +269,7 @@ describe('ToolRenderer', () => {
           },
           {
             type: 'toolCall',
-            name: 'bootstrap_dashboard_context',
+            name: 'inspect_dashboard_context',
             arguments: {
               uid: 'service-health',
             },
@@ -296,7 +296,7 @@ describe('ToolRenderer', () => {
 
     expect(container.textContent).toContain('Render dashboard | service-health');
     expect(container.textContent).toContain('Capture dashboard screenshot | service-health');
-    expect(container.textContent).toContain('Bootstrap dashboard context | service-health');
+    expect(container.textContent).toContain('Inspect dashboard context | service-health');
     expect(container.textContent).toContain('1200 x 800');
     expect(container.textContent).toContain('Search Jsonnet libraries | timeseries panel');
     expect(container.textContent).toContain('Edit Jsonnet source | dashboards/service.jsonnet');
@@ -1288,48 +1288,6 @@ describe('ToolRenderer', () => {
     expect(container.textContent).toContain('Service Health');
     expect(container.textContent).toContain('service-health');
     expect(container.textContent).toContain('1.2 KiB Jsonnet');
-    expect(container.textContent).not.toContain('Stored artifact [artifact: artifact_1]');
-  });
-
-  it('renders artifactized dashboard bootstrap context metadata and text preview', () => {
-    const contextMarkdown = '# Service Dashboard\n\n## Variables\n- job: api';
-    const { container } = render(
-      <ToolResultMessageBody
-        toolName="bootstrap_dashboard_context"
-        content={[{ type: 'text', text: 'Stored artifact [artifact: artifact_1] bootstrap_dashboard_context' }]}
-        details={{
-          uid: 'service-dashboard',
-          title: 'Service Dashboard',
-          folderTitle: 'Operations',
-          url: '/d/service-dashboard/service-dashboard',
-          panelCount: 3,
-          variableCount: 2,
-          queryCount: 4,
-          truncated: true,
-          warnings: ['1 panel omitted'],
-          summarized: true,
-          artifactRef: {
-            id: 'artifact_1',
-            kind: 'text',
-            title: 'bootstrap_dashboard_context: Service Dashboard',
-            toolName: 'bootstrap_dashboard_context',
-            createdAt: '2026-06-05T00:00:00.000Z',
-            bytes: 8192,
-            summary: 'bootstrap_dashboard_context result stored as artifact.',
-          },
-          artifactPreview: {
-            type: 'text',
-            text: contextMarkdown,
-            truncated: true,
-          },
-        }}
-      />
-    );
-
-    expect(container.textContent).toContain('Service Dashboard | 3 panels | 2 variables | 4 queries | truncated');
-    expect(container.textContent).toContain('Operations');
-    expect(container.textContent).toContain('1 panel omitted');
-    expect(container.textContent).toContain('Variables');
     expect(container.textContent).not.toContain('Stored artifact [artifact: artifact_1]');
   });
 
