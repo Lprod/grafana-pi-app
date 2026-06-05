@@ -487,15 +487,33 @@ function previewQueryResult(value: unknown) {
         return {
           name: item.name,
           labels: item.labels,
+          points: item.points,
+          nonNullPoints: item.nonNullPoints,
+          nullPoints: item.nullPoints,
           last: item.last,
+          min: item.min,
+          max: item.max,
+          mean: item.mean,
+          delta: item.delta,
+          deltaPercent: item.deltaPercent,
         };
       })
     : undefined;
 
   return {
+    datasourceUid: value.datasourceUid,
     query: value.query,
+    queryType: value.queryType,
+    interval: value.interval,
+    range: value.range,
+    frameCount: value.frameCount,
     validationError: value.validationError,
     totalSeries: value.totalSeries,
+    truncatedSeries: value.truncatedSeries,
+    notices: Array.isArray(value.notices) ? value.notices.slice(0, 3) : value.notices,
+    executedQueryStrings: Array.isArray(value.executedQueryStrings)
+      ? value.executedQueryStrings.slice(0, 3)
+      : value.executedQueryStrings,
     series,
   };
 }

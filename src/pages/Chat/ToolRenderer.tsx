@@ -687,7 +687,10 @@ function readArtifactToolCallSummary(record: Record<string, unknown>): SimpleToo
       { label: 'Artifact', value: id ? <code>{id}</code> : undefined },
       { label: 'Mode', value: mode },
       { label: 'Path', value: path ? <code>{path}</code> : undefined },
-      { label: 'Slice', value: offset !== undefined || limit !== undefined ? `${offset ?? 0}:${limit ?? ''}` : undefined },
+      {
+        label: 'Slice',
+        value: offset !== undefined || limit !== undefined ? `${offset ?? 0}:${limit ?? ''}` : undefined,
+      },
       { label: 'jq', value: jq ? <code>{jq}</code> : undefined },
     ],
     code: jq,
@@ -974,11 +977,7 @@ function ToolErrorView({
   );
 }
 
-function extractToolError(
-  toolName: string | undefined,
-  details: unknown,
-  content: unknown
-): ToolErrorViewModel {
+function extractToolError(toolName: string | undefined, details: unknown, content: unknown): ToolErrorViewModel {
   const message =
     extractExplicitErrorMessage(details) ??
     extractErrorMessageFromText(extractToolText(content)) ??
@@ -1238,18 +1237,18 @@ function SubagentToolCallRow({ call }: { call: SubagentToolCall }) {
               {error ? (
                 <ToolErrorView content={resultContent} details={resultDetails} error={error} />
               ) : (
-                (renderStructuredToolResult(call.name, resultDetails, resultContent) ??
-                  (!artifactResult ? (
-                    <>
-                      <ContentBlocks content={resultContent} isStreaming={isStreaming} />
-                      {hasDetails(resultDetails) && (
-                        <details className={styles.collapsible}>
-                          <summary>Details</summary>
-                          <pre>{formatJson(resultDetails)}</pre>
-                        </details>
-                      )}
-                    </>
-                  ) : null))
+                (renderStructuredToolResult(call.name, resultDetails, resultContent, call.args) ??
+                (!artifactResult ? (
+                  <>
+                    <ContentBlocks content={resultContent} isStreaming={isStreaming} />
+                    {hasDetails(resultDetails) && (
+                      <details className={styles.collapsible}>
+                        <summary>Details</summary>
+                        <pre>{formatJson(resultDetails)}</pre>
+                      </details>
+                    )}
+                  </>
+                ) : null))
               )}
             </div>
           )}
@@ -1266,7 +1265,8 @@ function contentFromLegacyToolText(text: string | undefined) {
 function renderStructuredToolResult(
   toolName: string | undefined,
   details: unknown,
-  content: unknown
+  content: unknown,
+  args?: unknown
 ): React.ReactNode | undefined {
   const datasources = asDatasourceResult(toolName, details, content);
   if (datasources) {
@@ -1288,17 +1288,18 @@ function renderStructuredToolResult(
     return <MetricSeriesInspectionBatchView result={metricSeriesBatch} />;
   }
 
-  const prometheusBatchQuery = asPrometheusBatchQuerySummary(toolName, details, content);
+  const prometheusBatchQuery = asPrometheusBatchQuerySummary(toolName, details, content, args);
   if (prometheusBatchQuery) {
     return <PrometheusBatchQueryResultView result={prometheusBatchQuery} />;
   }
 
-  const prometheusQuery = asPrometheusQuerySummary(toolName, content);
+  const prometheusQuery = asPrometheusQuerySummary(toolName, details, content, args);
   if (prometheusQuery) {
     return (
       <PrometheusQueryResultView
         result={prometheusQuery}
         visualization={
+          prometheusQuery.visualization ??
           asPrometheusTimeseriesVisualization(toolName, details) ??
           prometheusTimeseriesVisualizationFromSummary(prometheusQuery)
         }
@@ -1497,11 +1498,7 @@ function MetricSeriesInspectionBatchView({ result }: { result: MetricSeriesInspe
       {result.results.length > 0 && (
         <div className={styles.queryResultList}>
           {result.results.map((inspection, index) => (
-            <MetricSeriesInspectionBatchItem
-              index={index}
-              key={`${inspection.match}:${index}`}
-              result={inspection}
-            />
+            <MetricSeriesInspectionBatchItem index={index} key={`${inspection.match}:${index}`} result={inspection} />
           ))}
         </div>
       )}
@@ -1589,6 +1586,7 @@ type PrometheusQuerySummaryView = {
   notices: QueryNoticeView[];
   executedQueryStrings: string[];
   series: SeriesSummaryView[];
+  visualization?: PrometheusTimeseriesVisualization;
 };
 
 type QueryNoticeView = {
@@ -1678,7 +1676,9 @@ function PrometheusBatchQueryResultView({ result }: { result: PrometheusBatchQue
 function PrometheusBatchQueryResultItem({ index, result }: { index: number; result: PrometheusQuerySummaryView }) {
   const styles = useStyles2(getToolStyles);
   const [isOpen, setIsOpen] = useState(index === 0);
-  const visualization = isOpen ? prometheusTimeseriesVisualizationFromSummary(result) : undefined;
+  const visualization = isOpen
+    ? (result.visualization ?? prometheusTimeseriesVisualizationFromSummary(result))
+    : undefined;
   const summaryMeta = formatQueryResultSummaryMeta(result);
 
   return (
@@ -2783,42 +2783,55 @@ function metricSeriesInspectionFromRecord(record: Record<string, unknown>): Metr
 
 function asPrometheusQuerySummary(
   toolName: string | undefined,
-  content: unknown
+  details: unknown,
+  content: unknown,
+  args?: unknown
 ): PrometheusQuerySummaryView | undefined {
   if (toolName !== 'query_prometheus') {
     return undefined;
   }
 
-  const record = parseJsonRecord(content);
+  const record = parseToolJsonRecord(content, details);
   if (!record) {
     return undefined;
   }
 
-  return prometheusQuerySummaryFromRecord(record);
+  const summary = prometheusQuerySummaryFromRecord(record);
+  if (!summary) {
+    return undefined;
+  }
+
+  return enrichPrometheusQuerySummaryFromArgs(summary, args);
 }
 
 function asPrometheusBatchQuerySummary(
   toolName: string | undefined,
   details: unknown,
-  content: unknown
+  content: unknown,
+  args?: unknown
 ): PrometheusBatchQuerySummaryView | undefined {
   if (toolName !== 'query_prometheus') {
     return undefined;
   }
 
-  const record = parseJsonRecord(content);
+  const record = parseToolJsonRecord(content, details);
   if (record) {
     const datasourceUid = stringField(record, 'datasourceUid');
     const queryCount = numberField(record, 'queryCount');
     const resultRecords = recordsField(record, 'results');
     if (datasourceUid && queryCount !== undefined && resultRecords.length > 0) {
+      const results = resultRecords
+        .map((resultRecord) => {
+          const summary = prometheusQuerySummaryFromRecord(resultRecord, { datasourceUid });
+          return summary ? enrichPrometheusQuerySummaryFromArgs(summary, args) : undefined;
+        })
+        .filter((result): result is PrometheusQuerySummaryView => Boolean(result));
+
       return {
         datasourceUid,
         queryCount,
         truncatedQueries: booleanField(record, 'truncatedQueries') ?? false,
-        results: resultRecords
-          .map(prometheusQuerySummaryFromRecord)
-          .filter((result): result is PrometheusQuerySummaryView => Boolean(result)),
+        results,
         contentAvailable: true,
       };
     }
@@ -2843,8 +2856,11 @@ function asPrometheusBatchQuerySummary(
   };
 }
 
-function prometheusQuerySummaryFromRecord(record: Record<string, unknown>): PrometheusQuerySummaryView | undefined {
-  const datasourceUid = stringField(record, 'datasourceUid');
+function prometheusQuerySummaryFromRecord(
+  record: Record<string, unknown>,
+  defaults?: { datasourceUid?: string }
+): PrometheusQuerySummaryView | undefined {
+  const datasourceUid = stringField(record, 'datasourceUid') ?? defaults?.datasourceUid;
   const query = stringField(record, 'query');
   const seriesRecords = recordsField(record, 'series');
   if (!datasourceUid || !query) {
@@ -2882,6 +2898,25 @@ function prometheusQuerySummaryFromRecord(record: Record<string, unknown>): Prom
   };
 }
 
+function enrichPrometheusQuerySummaryFromArgs(
+  summary: PrometheusQuerySummaryView,
+  args: unknown
+): PrometheusQuerySummaryView {
+  const queryArg = prometheusQueryToolCallQueryForSummary(args, summary);
+  const enriched = {
+    ...summary,
+    queryType: summary.queryType === 'query' ? (queryArg?.type ?? summary.queryType) : summary.queryType,
+    interval: summary.interval === '-' ? (queryArg?.interval ?? '1m') : summary.interval,
+  };
+
+  return {
+    ...enriched,
+    visualization:
+      prometheusTimeseriesVisualizationFromSummary(enriched) ??
+      prometheusTimeseriesVisualizationFromArgs(args, enriched),
+  };
+}
+
 function prometheusTimeseriesVisualizationFromSummary(
   result: PrometheusQuerySummaryView
 ): PrometheusTimeseriesVisualization | undefined {
@@ -2900,6 +2935,89 @@ function prometheusTimeseriesVisualizationFromSummary(
       raw: result.range.raw,
     },
   };
+}
+
+function prometheusTimeseriesVisualizationFromArgs(
+  args: unknown,
+  result: PrometheusQuerySummaryView
+): PrometheusTimeseriesVisualization | undefined {
+  const queryArg = prometheusQueryToolCallQueryForSummary(args, result);
+  if (!queryArg) {
+    return undefined;
+  }
+
+  const range = prometheusVisualizationRangeFromQueryArg(queryArg, result);
+  const interval = queryArg.interval ?? (result.interval !== '-' ? result.interval : '1m');
+
+  return {
+    kind: 'prometheus-timeseries',
+    datasourceUid: result.datasourceUid,
+    query: result.query,
+    interval,
+    range,
+  };
+}
+
+function prometheusQueryToolCallQueryForSummary(
+  args: unknown,
+  result: PrometheusQuerySummaryView
+): PrometheusQueryToolCallQuery | undefined {
+  const call = prometheusQueryToolCallFromArgs(args, false);
+  if (!call) {
+    return undefined;
+  }
+
+  return (
+    call.queries.find((query) => query.query === result.query) ??
+    (call.queries.length === 1 ? call.queries[0] : undefined)
+  );
+}
+
+function prometheusVisualizationRangeFromQueryArg(
+  query: PrometheusQueryToolCallQuery,
+  result: PrometheusQuerySummaryView
+): PrometheusTimeseriesVisualization['range'] {
+  if (query.start && query.end) {
+    return {
+      from: query.start,
+      to: query.end,
+      raw: { from: query.start, to: query.end },
+    };
+  }
+  if (result.range?.from && result.range.to) {
+    return {
+      from: result.range.from,
+      to: result.range.to,
+      raw: result.range.raw,
+    };
+  }
+
+  const latestTime = latestPrometheusSummaryTime(result);
+  if (latestTime) {
+    return {
+      from: new Date(latestTime.getTime() - 6 * 60 * 60 * 1000).toISOString(),
+      to: latestTime.toISOString(),
+    };
+  }
+
+  return {
+    from: 'now-6h',
+    to: 'now',
+    raw: { from: 'now-6h', to: 'now' },
+  };
+}
+
+function latestPrometheusSummaryTime(result: PrometheusQuerySummaryView): Date | undefined {
+  const times = result.series
+    .flatMap((series) => [series.last?.time, series.min?.time, series.max?.time])
+    .filter((time): time is string => Boolean(time))
+    .map((time) => new Date(time))
+    .filter((time) => Number.isFinite(time.getTime()));
+
+  return times.reduce<Date | undefined>(
+    (latest, time) => (!latest || time.getTime() > latest.getTime() ? time : latest),
+    undefined
+  );
 }
 
 function asPrometheusTimeseriesVisualization(
@@ -3320,6 +3438,20 @@ function getSingleTextContent(content: unknown) {
 function parseJsonRecord(content: unknown): Record<string, unknown> | undefined {
   const parsed = parseSingleJsonContent(content);
   return isRecord(parsed) ? parsed : undefined;
+}
+
+function parseToolJsonRecord(content: unknown, details: unknown): Record<string, unknown> | undefined {
+  return parseJsonRecord(content) ?? artifactPreviewJsonRecord(details);
+}
+
+function artifactPreviewJsonRecord(details: unknown): Record<string, unknown> | undefined {
+  if (!isRecord(details)) {
+    return undefined;
+  }
+
+  const preview = recordField(details, 'artifactPreview');
+  const data = preview?.data;
+  return isRecord(data) ? data : undefined;
 }
 
 function parseJsonArray(content: unknown): unknown[] | undefined {

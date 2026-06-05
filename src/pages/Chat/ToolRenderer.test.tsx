@@ -535,6 +535,226 @@ describe('ToolRenderer', () => {
     expect(container.textContent).not.toContain('"queryCount"');
   });
 
+  it('renders artifactized nested query-agent Prometheus range batches with a live panel', () => {
+    const rangeQuery = 'rate(http_requests_total[5m])';
+    const instantQuery = 'up';
+    const artifactPreviewData = {
+      datasourceUid: 'prometheus',
+      queryCount: 2,
+      truncatedQueries: false,
+      results: [
+        {
+          query: rangeQuery,
+          queryType: 'range',
+          interval: '30s',
+          range: {
+            from: '2026-05-28T10:00:00.000Z',
+            to: '2026-05-28T11:00:00.000Z',
+            raw: { from: 'now-1h', to: 'now' },
+          },
+          frameCount: 1,
+          totalSeries: 1,
+          truncatedSeries: false,
+          notices: [],
+          executedQueryStrings: [],
+          series: [
+            {
+              name: 'http_requests_total',
+              labels: { job: 'api' },
+              points: 120,
+              nonNullPoints: 120,
+              nullPoints: 0,
+              last: { value: 2 },
+            },
+          ],
+        },
+        {
+          query: instantQuery,
+          queryType: 'instant',
+          interval: '1m',
+          frameCount: 1,
+          totalSeries: 1,
+          truncatedSeries: false,
+          notices: [],
+          executedQueryStrings: [],
+          series: [
+            {
+              name: 'up{job="api"}',
+              labels: { job: 'api' },
+              points: 1,
+              nonNullPoints: 1,
+              nullPoints: 0,
+              last: { value: 1 },
+            },
+          ],
+        },
+      ],
+    };
+    const details = {
+      type: 'subagent',
+      agent: 'query',
+      status: 'completed',
+      task: 'Validate PromQL.',
+      toolNames: ['query_prometheus'],
+      toolCalls: [
+        {
+          id: 'tool-1',
+          name: 'query_prometheus',
+          args: {
+            datasourceUid: 'prometheus',
+            queries: [
+              { query: rangeQuery, type: 'range', start: 'now-1h', end: 'now' },
+              { query: instantQuery, type: 'instant' },
+            ],
+          },
+          status: 'completed',
+          result: {
+            content: [{ type: 'text', text: 'Stored artifact [artifact: artifact_1] query_prometheus' }],
+            details: {
+              datasourceUid: 'prometheus',
+              queries: 2,
+              summarized: true,
+              batch: true,
+              artifactRef: {
+                id: 'artifact_1',
+                kind: 'json',
+                title: 'query_prometheus',
+                toolName: 'query_prometheus',
+                createdAt: '2026-06-05T00:00:00.000Z',
+                bytes: 8192,
+                summary: '2 Prometheus queries summarized.',
+              },
+              artifactPreview: {
+                type: 'json',
+                data: artifactPreviewData,
+                truncated: true,
+              },
+            },
+          },
+          isError: false,
+        },
+      ],
+      usage: {
+        turns: 1,
+        input: 10,
+        output: 4,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 14,
+        cost: 0,
+      },
+      finalOutput: 'PromQL validated.',
+    };
+
+    const { container } = render(
+      <ToolResultMessageBody
+        toolName="run_query_agent"
+        content={[{ type: 'text', text: 'PromQL validated.' }]}
+        details={details}
+      />
+    );
+
+    expect(screen.queryByTestId('prometheus-timeseries-panel')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByText('query_prometheus'));
+
+    expect(screen.getByTestId('artifact-result')).toBeInTheDocument();
+    expect(container.textContent).toContain('2 of 2 Prometheus queries summarized');
+    expect(container.textContent).toContain('Query 1');
+    expect(container.textContent).toContain(rangeQuery);
+    expect(container.textContent).toContain('range | 1 series | 30s');
+    expect(screen.getByTestId('prometheus-timeseries-panel')).toBeInTheDocument();
+    expect(container.textContent).not.toContain('Stored artifact [artifact: artifact_1]');
+  });
+
+  it('renders artifactized nested query-agent instant batches with live panels from tool args', () => {
+    const instantQuery = 'up';
+    const details = {
+      type: 'subagent',
+      agent: 'query',
+      status: 'completed',
+      task: 'Validate PromQL.',
+      toolNames: ['query_prometheus'],
+      toolCalls: [
+        {
+          id: 'tool-1',
+          name: 'query_prometheus',
+          args: {
+            datasourceUid: 'prometheus',
+            queries: [{ query: instantQuery, type: 'instant' }],
+          },
+          status: 'completed',
+          result: {
+            content: [{ type: 'text', text: 'Stored artifact [artifact: artifact_1] query_prometheus' }],
+            details: {
+              datasourceUid: 'prometheus',
+              queries: 1,
+              summarized: true,
+              batch: true,
+              artifactRef: {
+                id: 'artifact_1',
+                kind: 'json',
+                title: 'query_prometheus',
+                toolName: 'query_prometheus',
+                createdAt: '2026-06-05T00:00:00.000Z',
+                bytes: 4096,
+                summary: '1 Prometheus query summarized.',
+              },
+              artifactPreview: {
+                type: 'json',
+                data: {
+                  datasourceUid: 'prometheus',
+                  queryCount: 1,
+                  truncatedQueries: false,
+                  results: [
+                    {
+                      query: instantQuery,
+                      totalSeries: 1,
+                      series: [
+                        {
+                          name: 'up{job="api"}',
+                          labels: { job: 'api' },
+                          last: { value: 1 },
+                        },
+                      ],
+                    },
+                  ],
+                },
+                truncated: true,
+              },
+            },
+          },
+          isError: false,
+        },
+      ],
+      usage: {
+        turns: 1,
+        input: 10,
+        output: 4,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 14,
+        cost: 0,
+      },
+      finalOutput: 'PromQL validated.',
+    };
+
+    const { container } = render(
+      <ToolResultMessageBody
+        toolName="run_query_agent"
+        content={[{ type: 'text', text: 'PromQL validated.' }]}
+        details={details}
+      />
+    );
+
+    fireEvent.click(screen.getByText('query_prometheus'));
+
+    expect(container.textContent).toContain('1 of 1 Prometheus queries summarized');
+    expect(container.textContent).toContain('instant | 1 series | 1m');
+    expect(screen.getByTestId('prometheus-timeseries-panel')).toBeInTheDocument();
+    expect(container.textContent).not.toContain('Stored artifact [artifact: artifact_1]');
+  });
+
   it('renders failed sync_dashboard results as error text instead of a successful action card', () => {
     const errorText =
       'Grafana request failed (502 Bad Gateway) while calling POST api/plugins/g42-pi-app/resources/managed-dashboards/sync: PluginAppClientSecret not set in config';
