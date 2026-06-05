@@ -21,11 +21,11 @@ services:
     entrypoint: ["/bin/sh", "-c"]
     command:
       - |
-        if find /prometheus -mindepth 1 -maxdepth 1 | read; then
-          echo "Prometheus data already exists; skipping historical import."
-        else
-          promtool tsdb create-blocks-from openmetrics /demo/history.openmetrics /prometheus
-        fi
+          if find /prometheus -mindepth 1 -maxdepth 1 | read; then
+            echo "Prometheus data already exists; skipping historical import."
+          else
+            promtool tsdb create-blocks-from openmetrics /demo/history.openmetrics /prometheus
+          fi
     volumes:
       - demo-data:/demo:ro
       - prometheus-data:/prometheus
@@ -53,7 +53,7 @@ services:
     extends:
       file: .config/docker-compose-base.yaml
       service: grafana
-    container_name: 'g42-pi-app'
+    container_name: "g42-pi-app"
     build:
       args:
         grafana_version: ${GRAFANA_VERSION:-13.0.1}
@@ -68,15 +68,20 @@ services:
       GF_LOG_FILTERS: plugin.g42-pi-app:debug
       GF_PLUGINS_ALLOW_LOADING_UNSIGNED_PLUGINS: g42-pi-app
       GF_FEATURE_TOGGLES_ENABLE: externalServiceAccounts
-      GF_AUTH_MANAGED_SERVICE_ACCOUNTS_ENABLED: 'true'
+      GF_AUTH_MANAGED_SERVICE_ACCOUNTS_ENABLED: "true"
       GF_RENDERING_SERVER_URL: http://renderer:8081/render
       GF_RENDERING_CALLBACK_URL: http://grafana:3000/
       OPENAI_API_KEY: ${OPENAI_API_KEY:-local-dev-key}
+      PI_OPENAI_BASE_URL: ${PI_OPENAI_BASE_URL:-http://host.docker.internal:8080/v1}
+      PI_DEFAULT_MODEL: ${PI_DEFAULT_MODEL:-unsloth/Qwen3.6-35B-A3B-MTP-GGUF:UD-Q4_K_XL}
+      PI_THINKING_LEVEL: ${PI_THINKING_LEVEL:-medium}
+      PI_THINKING_FORMAT: ${PI_THINKING_FORMAT:-qwen-chat-template}
+      PI_PROMETHEUS_URL: ${PI_PROMETHEUS_URL:-http://prometheus:9090}
 
   renderer:
     image: grafana/grafana-image-renderer:${GRAFANA_IMAGE_RENDERER_VERSION:-latest}
     environment:
-      ENABLE_METRICS: 'true'
+      ENABLE_METRICS: "true"
 
 volumes:
   demo-data:

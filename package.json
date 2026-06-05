@@ -3,7 +3,12 @@
   "version": "2.4.0",
   "scripts": {
     "generate:skills": "node scripts/generate-bundled-skills.mjs",
-    "build": "npm run generate:skills && webpack -c ./.config/webpack/webpack.config.ts --env production",
+    "frontend:build": "npm run generate:skills && webpack -c ./.config/webpack/webpack.config.ts --env production",
+    "build": "npm run frontend:build",
+    "backend:build:linux-amd64": "go run github.com/magefile/mage -v build:linux",
+    "backend:build:linux-arm64": "go run github.com/magefile/mage -v build:linuxARM64",
+    "build:linux-amd64": "npm run frontend:build && npm run backend:build:linux-amd64",
+    "build:linux-arm64": "npm run frontend:build && npm run backend:build:linux-arm64",
     "dev": "npm run generate:skills && webpack -w -c ./.config/webpack/webpack.config.ts --env development",
     "test": "npm run generate:skills && jest --watch --onlyChanged",
     "test:ci": "npm run generate:skills && jest --passWithNoTests --maxWorkers 4",

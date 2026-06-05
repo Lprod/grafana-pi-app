@@ -2,7 +2,7 @@
 description = "Rebuild frontend/backend plugin artifacts and start or reload the local Docker stack."
 run = [
   "npm run build",
-  "go run github.com/magefile/mage -v build:linux",
+  "npm run backend:build:linux-arm64",
   "docker compose up -d --build --remove-orphans",
   "docker compose restart grafana",
 ]

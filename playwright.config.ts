@@ -1,14 +1,14 @@
 import type { PluginOptions } from '@grafana/plugin-e2e';
 import { defineConfig, devices } from '@playwright/test';
+import { existsSync } from 'node:fs';
 import { dirname } from 'node:path';
+import { loadEnvFile } from 'node:process';
 
 const pluginE2eAuth = `${dirname(require.resolve('@grafana/plugin-e2e'))}/auth`;
 
-/**
- * Read environment variables from file.
- * https://github.com/motdotla/dotenv
- */
-// require('dotenv').config();
+if (existsSync('.env')) {
+  loadEnvFile('.env');
+}
 
 /**
  * See https://playwright.dev/docs/test-configuration.

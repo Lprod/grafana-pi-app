@@ -8,6 +8,10 @@ yarn-error.log*
 
 node_modules/
 
+# Local secrets
+.env
+.env.local
+
 # yarn
 .pnp.*
 .yarn/*

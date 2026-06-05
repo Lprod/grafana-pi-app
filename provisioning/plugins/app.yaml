@@ -6,10 +6,10 @@ apps:
     org_name: 'elohmeier'
     disabled: false
     jsonData:
-      openAIBaseUrl: http://host.docker.internal:8080/v1
-      defaultModel: unsloth/Qwen3.6-35B-A3B-MTP-GGUF:UD-Q4_K_XL
-      thinkingLevel: medium
-      thinkingFormat: qwen-chat-template
+      openAIBaseUrl: $__env{PI_OPENAI_BASE_URL}
+      defaultModel: $__env{PI_DEFAULT_MODEL}
+      thinkingLevel: $__env{PI_THINKING_LEVEL}
+      thinkingFormat: $__env{PI_THINKING_FORMAT}
       accessMode: all
       allowedUsers: []
       systemPromptAddendum: ''

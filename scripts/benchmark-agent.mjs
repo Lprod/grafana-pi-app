@@ -1,10 +1,16 @@
 #!/usr/bin/env node
 
 import { spawn } from 'node:child_process';
+import { existsSync } from 'node:fs';
 import process from 'node:process';
+import { loadEnvFile } from 'node:process';
 import { setTimeout as delay } from 'node:timers/promises';
 
-const LLM_BASE_URL = process.env.BENCH_LLM_BASE_URL ?? 'http://127.0.0.1:8080/v1';
+if (existsSync('.env')) {
+  loadEnvFile('.env');
+}
+
+const LLM_BASE_URL = process.env.BENCH_LLM_BASE_URL ?? process.env.PI_OPENAI_BASE_URL ?? 'http://127.0.0.1:8080/v1';
 const GRAFANA_URL = process.env.GRAFANA_URL ?? 'http://localhost:3000';
 const GRAFANA_START_TIMEOUT_MS = readPositiveInteger(process.env.GRAFANA_START_TIMEOUT_MS, 120_000);
 const LLAMA_START_TIMEOUT_MS = readPositiveInteger(process.env.LLAMA_START_TIMEOUT_MS, 15 * 60_000);
@@ -13,6 +19,10 @@ const BENCH_RUNS = readPositiveInteger(process.env.BENCH_RUNS, 1);
 const BENCH_TEST_FILE = process.env.BENCH_TEST_FILE ?? 'tests/agentBenchmark.spec.ts';
 const BENCH_LABEL = process.env.BENCH_LABEL ?? 'agent benchmark';
 const BENCH_LOG_PREFIX = process.env.BENCH_LOG_PREFIX ?? 'agent-benchmark';
+const MANAGE_LOCAL_LLAMA =
+  process.env.BENCH_MANAGE_LLAMA === undefined
+    ? isLocalModelEndpoint(LLM_BASE_URL)
+    : process.env.BENCH_MANAGE_LLAMA !== '0';
 
 const LLAMA_COMMAND = 'llama-server';
 const LLAMA_ARGS = [
@@ -51,8 +61,10 @@ try {
   await runCommand('mise', ['run', 'dev:reload']);
   await waitForGrafana();
 
-  if (await isModelServerReady()) {
-    log(`Reusing existing OpenAI-compatible model server at ${LLM_BASE_URL}.`);
+  if (!MANAGE_LOCAL_LLAMA) {
+    log(`Using externally configured OpenAI-compatible endpoint at ${LLM_BASE_URL}; not starting llama-server.`);
+  } else if (await isModelServerReady()) {
+    log(`Reusing existing local OpenAI-compatible model server at ${LLM_BASE_URL}.`);
   } else {
     log(`Starting llama-server at ${LLM_BASE_URL}.`);
     llamaProcess = spawn(LLAMA_COMMAND, LLAMA_ARGS, {
@@ -80,6 +92,7 @@ try {
           RUN_AGENT_BENCHMARKS: '1',
           BENCH_TIMEOUT_MS: String(BENCH_TIMEOUT_MS),
           BENCH_RUN_INDEX: String(runIndex),
+          BENCH_LLM_BASE_URL: LLM_BASE_URL,
           GRAFANA_URL,
         },
       }
@@ -117,6 +130,15 @@ async function isModelServerReady() {
       signal: AbortSignal.timeout(2000),
     });
     return response.ok;
+  } catch {
+    return false;
+  }
+}
+
+function isLocalModelEndpoint(rawURL) {
+  try {
+    const { hostname } = new URL(rawURL);
+    return hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '0.0.0.0' || hostname === 'host.docker.internal';
   } catch {
     return false;
   }
