@@ -8,7 +8,7 @@ const DASHBOARD_WRITE_INTENT =
   /\b(create|build|generate|make|add|update|edit|modify|change|sync|apply|render|write)\b[\s\S]{0,80}\b(dashboard|panel|jsonnet)\b/i;
 const RQLITE_INTENT = /\b(rqlite|sqlite|sql|pragma|database tables?|select\s+[\s\S]{1,120}\s+from)\b/i;
 const INVESTIGATION_INTENT =
-  /\b(investigat(?:e|ion)|diagnos(?:e|is|tic)|root cause|why (?:is|are|did)|incident|outage|failure|failing|error spike|latency spike|degradation|regression|what'?s causing)\b/i;
+  /\b(investigat(?:e|ion)|analy[sz](?:e|ing|is)|diagnos(?:e|is|tic)|root cause|why (?:is|are|did)|incident|outage|failure|failing|error spike|latency spike|degradation|regression|what'?s (?:wrong|causing))\b/i;
 const SKILL_REFERENCE = /\$([a-z0-9][a-z0-9-]{0,62}[a-z0-9])/gi;
 
 export function selectGrafanaSkills(

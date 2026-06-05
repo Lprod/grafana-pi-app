@@ -1,6 +1,8 @@
 export {
   buildDashboardBootstrapDigest,
+  buildNavigationPath,
   createGrafanaToolRegistry,
+  createGrafanaSupervisorTools,
   createGrafanaTools,
   createGrafanaToolsForSkillGroups,
   createSkillTools,

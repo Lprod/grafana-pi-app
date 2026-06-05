@@ -192,6 +192,37 @@ describe('ToolRenderer', () => {
     expect(container.textContent).not.toContain('"match"');
   });
 
+  it('renders batched metric discovery arguments as readable summaries', () => {
+    const { container } = render(
+      <ContentBlocks
+        content={[
+          {
+            type: 'toolCall',
+            name: 'list_metrics',
+            arguments: {
+              datasourceUid: 'prometheus',
+              prefixes: ['http', 'node_'],
+            },
+          },
+          {
+            type: 'toolCall',
+            name: 'inspect_metric_series',
+            arguments: {
+              matches: ['http_requests_total', 'node_load1'],
+            },
+          },
+        ]}
+      />
+    );
+
+    expect(container.textContent).toContain('List metric names | 2 prefixes | datasource prometheus');
+    expect(container.textContent).toContain('http, node_');
+    expect(container.textContent).toContain('Inspect metric series | 2 selectors | default datasource');
+    expect(container.textContent).toContain('http_requests_total, node_load1');
+    expect(container.textContent).not.toContain('"prefixes"');
+    expect(container.textContent).not.toContain('"matches"');
+  });
+
   it('renders query_prometheus_raw arguments with the Prometheus query plan', () => {
     const { container } = render(
       <ContentBlocks
@@ -345,10 +376,10 @@ describe('ToolRenderer', () => {
     expect(container.textContent).not.toContain('"content"');
   });
 
-  it('collapses completed explore subagent output by default', () => {
+  it('collapses completed query-agent output by default', () => {
     const details = {
       type: 'subagent',
-      agent: 'metrics',
+      agent: 'query',
       status: 'completed',
       task: 'Find availability metrics.',
       toolNames: ['list_metrics'],
@@ -375,7 +406,7 @@ describe('ToolRenderer', () => {
 
     const { container } = render(
       <ToolResultMessageBody
-        toolName="explore_metrics"
+        toolName="run_query_agent"
         content={[{ type: 'text', text: 'Use up for availability.' }]}
         details={details}
       />
@@ -383,18 +414,18 @@ describe('ToolRenderer', () => {
 
     const result = screen.getByTestId('subagent-result') as HTMLDetailsElement;
     expect(result.open).toBe(false);
-    expect(screen.getByText('Metrics explorer result')).toBeInTheDocument();
+    expect(screen.getByText('Query agent result')).toBeInTheDocument();
     expect(screen.getByTestId('angle-right')).toBeInTheDocument();
-    expect(container.textContent).toContain('Metrics explorer');
+    expect(container.textContent).toContain('Query agent');
     expect(container.textContent).toContain('list_metrics');
 
-    fireEvent.click(screen.getByText('Metrics explorer result'));
+    fireEvent.click(screen.getByText('Query agent result'));
 
     expect(result.open).toBe(true);
     expect(screen.getByTestId('angle-down')).toBeInTheDocument();
   });
 
-  it('renders nested explore_metrics Prometheus results with the structured renderer', () => {
+  it('renders nested query-agent Prometheus results with the structured renderer', () => {
     const rangeQuery = 'rate(http_requests_total[5m])';
     const instantQuery = 'up';
     const batchResult = {
@@ -453,7 +484,7 @@ describe('ToolRenderer', () => {
     };
     const details = {
       type: 'subagent',
-      agent: 'metrics',
+      agent: 'query',
       status: 'completed',
       task: 'Validate PromQL.',
       toolNames: ['query_prometheus'],
@@ -486,7 +517,7 @@ describe('ToolRenderer', () => {
 
     const { container } = render(
       <ToolResultMessageBody
-        toolName="explore_metrics"
+        toolName="run_query_agent"
         content={[{ type: 'text', text: 'PromQL validated.' }]}
         details={details}
       />

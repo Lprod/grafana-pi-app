@@ -6,12 +6,14 @@ import { testIds } from '../src/components/testIds';
 import type { Page } from '@playwright/test';
 
 const BENCHMARK_PROMPT = [
+  'Use exactly one run_investigation_agent tool call to analyze the demo Prometheus incident.',
+  'Do not call run_query_agent, query_prometheus, or any dashboard tool directly at top level; this benchmark is measuring run_investigation_agent as the top-level analysis tool.',
   'Analyze the last 6 hours of the demo Prometheus data and summarize what is wrong.',
   'Use at most eight tool calls; prefer batched query_prometheus calls for HTTP 500s by vm/route, latency, node_load1, and CPU.',
   'Final answer must be exactly five short bullets: finding, affected host, affected route/status, CPU/load/latency corroboration, validated PromQL.',
   'Do not create, render, sync, upload, or modify dashboards.',
 ].join(' ');
-const DEFAULT_TIMEOUT_MS = 120_000;
+const DEFAULT_TIMEOUT_MS = 180_000;
 const FORBIDDEN_WRITE_TOOLS = new Set([
   'write_jsonnet',
   'edit_jsonnet',
@@ -71,22 +73,40 @@ type BenchmarkUsage = {
   cost: number;
 };
 
+type LiveBenchmarkState = {
+  toolStarts: Map<string, BenchmarkEvent>;
+  toolUpdates: Map<string, string>;
+};
+
 test.describe.configure({ mode: 'serial' });
 test.setTimeout(readPositiveInteger(process.env.BENCH_TEST_TIMEOUT_MS, DEFAULT_TIMEOUT_MS + 60_000));
 
 test.describe('agent analysis benchmark', () => {
   test('analyzes the demo Prometheus incident without writing dashboards', async ({ gotoPage, page }, testInfo) => {
     const timeoutMs = readPositiveInteger(process.env.BENCH_TIMEOUT_MS, DEFAULT_TIMEOUT_MS);
+    const liveState: LiveBenchmarkState = {
+      toolStarts: new Map(),
+      toolUpdates: new Map(),
+    };
+
+    await page.exposeFunction('__PI_AGENT_BENCHMARK_STREAM_EVENT__', (event: BenchmarkEvent) => {
+      const line = formatLiveBenchmarkEvent(event, liveState);
+      if (line) {
+        console.log(line);
+      }
+    });
 
     await page.addInitScript(() => {
       const benchmarkWindow = window as typeof window & {
         __PI_AGENT_BENCHMARK_EVENTS__?: unknown[];
         __PI_AGENT_BENCHMARK_RECORD_EVENT__?: (event: unknown) => void;
+        __PI_AGENT_BENCHMARK_STREAM_EVENT__?: (event: unknown) => Promise<void>;
       };
 
       benchmarkWindow.__PI_AGENT_BENCHMARK_EVENTS__ = [];
       benchmarkWindow.__PI_AGENT_BENCHMARK_RECORD_EVENT__ = (event: unknown) => {
         benchmarkWindow.__PI_AGENT_BENCHMARK_EVENTS__?.push(event);
+        void benchmarkWindow.__PI_AGENT_BENCHMARK_STREAM_EVENT__?.(event);
       };
     });
 
@@ -160,6 +180,65 @@ async function readBenchmarkEvents(page: Page): Promise<BenchmarkEvent[]> {
     const benchmarkWindow = window as typeof window & { __PI_AGENT_BENCHMARK_EVENTS__?: BenchmarkEvent[] };
     return benchmarkWindow.__PI_AGENT_BENCHMARK_EVENTS__ ?? [];
   });
+}
+
+function formatLiveBenchmarkEvent(event: BenchmarkEvent, state: LiveBenchmarkState) {
+  if (event.type === 'tool_execution_start' && event.toolCallId && event.toolName) {
+    state.toolStarts.set(event.toolCallId, event);
+    return `[analysis-benchmark:live] tool_start ${event.toolName} args=${summarizeJson(event.args)}`;
+  }
+
+  if (event.type === 'tool_execution_update' && event.toolCallId && event.toolName) {
+    const nestedCalls = extractNestedToolCallCount(event.partialResult);
+    const resultText = truncateOneLine(extractResultText(event.partialResult) ?? '', 240);
+    if (nestedCalls === undefined && !resultText) {
+      return undefined;
+    }
+
+    const updateKey = `${nestedCalls ?? ''}|${resultText}`;
+    if (state.toolUpdates.get(event.toolCallId) === updateKey) {
+      return undefined;
+    }
+    state.toolUpdates.set(event.toolCallId, updateKey);
+
+    const parts = [`[analysis-benchmark:live] tool_update ${event.toolName}`];
+    if (nestedCalls !== undefined) {
+      parts.push(`nested=${nestedCalls}`);
+    }
+    if (resultText) {
+      parts.push(`text=${resultText}`);
+    }
+    return parts.join(' ');
+  }
+
+  if (event.type === 'tool_execution_end' && event.toolCallId && event.toolName) {
+    const start = state.toolStarts.get(event.toolCallId);
+    const duration = start ? formatDuration(event.timestamp - start.timestamp) : 'unknown';
+    const status = event.isError ? 'failed' : 'completed';
+    const nestedCalls = extractNestedToolCallCount(event.result);
+    const resultText = truncateOneLine(extractResultText(event.result) ?? '', event.isError ? 600 : 240);
+    const parts = [`[analysis-benchmark:live] tool_end ${event.toolName} ${status} duration=${duration}`];
+    if (nestedCalls !== undefined) {
+      parts.push(`nested=${nestedCalls}`);
+    }
+    if (resultText) {
+      parts.push(event.isError ? `error=${resultText}` : `text=${resultText}`);
+    }
+    return parts.join(' ');
+  }
+
+  if (event.type === 'message_end' && event.message?.role === 'assistant') {
+    const error = event.message.errorMessage;
+    if (typeof error === 'string' && error) {
+      return `[analysis-benchmark:live] assistant_error ${truncateOneLine(error, 600)}`;
+    }
+  }
+
+  if (event.type === 'agent_end') {
+    return '[analysis-benchmark:live] agent_end';
+  }
+
+  return undefined;
 }
 
 function formatBenchmarkReport(
@@ -311,6 +390,22 @@ async function writeBenchmarkArtifacts(events: BenchmarkEvent[], report: string,
 }
 
 function findAnalysisQualityError(events: BenchmarkEvent[]) {
+  const toolCalls = summarizeToolCalls(events);
+  const investigationCalls = toolCalls.filter((call) => call.name === 'run_investigation_agent');
+  if (investigationCalls.length !== 1) {
+    return `expected exactly one top-level run_investigation_agent call, got ${investigationCalls.length}`;
+  }
+
+  const unexpectedTopLevelCall = toolCalls.find((call) => call.name !== 'run_investigation_agent');
+  if (unexpectedTopLevelCall) {
+    return `unexpected top-level tool call: ${unexpectedTopLevelCall.name}`;
+  }
+
+  const investigationCall = investigationCalls[0];
+  if (investigationCall.status !== 'completed' || investigationCall.isError) {
+    return 'run_investigation_agent did not complete successfully';
+  }
+
   const forbidden = findForbiddenToolCall(events);
   if (forbidden) {
     return `read-only benchmark used dashboard write tool: ${forbidden}`;
@@ -396,6 +491,10 @@ function extractNestedToolCalls(result: unknown): NestedToolCallSummary[] | unde
       args: record?.args,
     };
   });
+}
+
+function extractNestedToolCallCount(result: unknown) {
+  return extractNestedToolCalls(result)?.length;
 }
 
 function extractResultText(result: unknown) {
@@ -490,6 +589,11 @@ function formatDuration(ms: number) {
     return `${ms}ms`;
   }
   return `${(ms / 1000).toFixed(1)}s`;
+}
+
+function truncateOneLine(value: string, maxLength: number) {
+  const oneLine = value.replace(/\s+/g, ' ').trim();
+  return oneLine.length > maxLength ? `${oneLine.slice(0, maxLength)}...` : oneLine;
 }
 
 function formatNestedToolCall(call: NestedToolCallSummary) {

@@ -11,7 +11,7 @@ Use this skill when the user asks to investigate, diagnose, explain why somethin
 
 1. Define the scope: affected service, host, route, symptom, datasource UID, and time range when available.
 2. Use `update_report` early to create a report with the initial scope and open hypotheses.
-3. Gather evidence with metric discovery and PromQL validation. Prefer `explore_metrics` for broad reconnaissance.
+3. Gather evidence with metric discovery and PromQL validation. Call `run_investigation_agent` for full diagnostic or "what is wrong" analysis; use `run_query_agent` only for narrow follow-up reconnaissance.
 4. Update the report after each material finding. Add evidence only when it came from a tool result or user-provided context.
 5. Keep hypotheses separate from evidence. Move invalidated ideas to ruled-out causes.
 6. End with current finding, confidence, remaining gaps, and next checks or remediation.

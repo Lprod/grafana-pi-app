@@ -17,7 +17,7 @@ import { PLUGIN_ID } from '../../constants';
 import { testIds } from '../../components/testIds';
 import { usePluginMeta } from '../../utils/utils.plugin';
 import {
-  createGrafanaToolsForSkillGroups,
+  createGrafanaSupervisorTools,
   createSkillTools,
   buildDashboardBootstrapDigest,
   normalizeJsonnetPath,
@@ -175,31 +175,6 @@ function ChatApp() {
     }),
     [setInvestigationReportSnapshot]
   );
-  const buildSkillRuntime = useCallback(
-    (prompt: string) => {
-      const selection = selectGrafanaSkills(prompt, skills);
-      const skillTools = createSkillTools(selection.activeSkills);
-      const tools = createGrafanaToolsForSkillGroups(
-        {
-          ...jsonData,
-          runtime: { model: llmModel, streamFn, thinkingLevel },
-          virtualJsonnetFiles: virtualJsonnetRuntime,
-          investigationReport: investigationReportRuntime,
-          skillTools,
-        },
-        selection.toolGroups
-      );
-
-      return {
-        systemPrompt: renderGrafanaSystemPrompt({
-          skills,
-          activeSkillNames: selection.activeSkillNames,
-        }),
-        tools,
-      };
-    },
-    [investigationReportRuntime, jsonData, llmModel, skills, streamFn, thinkingLevel, virtualJsonnetRuntime]
-  );
   const [agent, setAgent] = useState<Agent>();
   const agentRef = useRef<Agent>();
   const { revision, flushRevision, scheduleRevision } = useFrameRevision();
@@ -278,6 +253,44 @@ function ChatApp() {
       });
     },
     []
+  );
+
+  const buildSkillRuntime = useCallback(
+    (prompt: string) => {
+      const selection = selectGrafanaSkills(prompt, skills);
+      const skillTools = createSkillTools(selection.activeSkills);
+      const tools = createGrafanaSupervisorTools({
+        ...jsonData,
+        runtime: {
+          model: llmModel,
+          streamFn,
+          thinkingLevel,
+          beforeToolCall: async ({ toolCall, args }, signal) =>
+            requestToolConfirmation(toolCall.name, args, signal),
+        },
+        virtualJsonnetFiles: virtualJsonnetRuntime,
+        investigationReport: investigationReportRuntime,
+        skillTools,
+      });
+
+      return {
+        systemPrompt: renderGrafanaSystemPrompt({
+          skills,
+          activeSkillNames: selection.activeSkillNames,
+        }),
+        tools,
+      };
+    },
+    [
+      investigationReportRuntime,
+      jsonData,
+      llmModel,
+      requestToolConfirmation,
+      skills,
+      streamFn,
+      thinkingLevel,
+      virtualJsonnetRuntime,
+    ]
   );
 
   const persistIndex = useCallback(

@@ -460,10 +460,7 @@ function asSimpleToolCallSummary(
         code: stringField(record, 'sql'),
       };
     case 'list_metrics':
-      return {
-        summary: `List metric names | ${formatDatasourceSummary(record)}`,
-        items: [{ label: 'Datasource', value: formatDatasourceMetaValue(record) }],
-      };
+      return listMetricsToolCallSummary(record);
     case 'list_label_values':
       return labelValuesToolCallSummary(record);
     case 'inspect_metric_series':
@@ -533,19 +530,43 @@ function labelValuesToolCallSummary(record: Record<string, unknown>): SimpleTool
   };
 }
 
-function inspectMetricSeriesToolCallSummary(record: Record<string, unknown>): SimpleToolCallSummary {
-  const selector = stringField(record, 'match') ?? stringField(record, 'selector') ?? stringField(record, 'metric');
+function listMetricsToolCallSummary(record: Record<string, unknown>): SimpleToolCallSummary {
+  const prefix = stringField(record, 'prefix');
+  const prefixes = stringArrayField(record, 'prefixes') ?? [];
+  const prefixSummary =
+    prefixes.length > 0 ? `${formatCount(prefixes.length)} prefixes` : prefix ? `prefix ${prefix}` : undefined;
+  const prefixCode = prefixes.length > 0 ? prefixes.join('\n') : prefix;
+
   return {
-    summary: summaryLine([
-      'Inspect metric series',
-      selector ? 'selector provided' : undefined,
-      formatDatasourceSummary(record),
-    ]),
+    summary: summaryLine(['List metric names', prefixSummary, formatDatasourceSummary(record)]),
     items: [
       { label: 'Datasource', value: formatDatasourceMetaValue(record) },
-      { label: 'Selector', value: selector ? <code>{selector}</code> : undefined },
+      {
+        label: 'Prefixes',
+        value: prefixCode ? <code>{prefixes.length > 0 ? prefixes.join(', ') : prefix}</code> : undefined,
+      },
     ],
-    code: selector,
+    code: prefixCode,
+  };
+}
+
+function inspectMetricSeriesToolCallSummary(record: Record<string, unknown>): SimpleToolCallSummary {
+  const selector = stringField(record, 'match') ?? stringField(record, 'selector') ?? stringField(record, 'metric');
+  const selectors = stringArrayField(record, 'matches') ?? [];
+  const selectorSummary =
+    selectors.length > 0 ? `${formatCount(selectors.length)} selectors` : selector ? 'selector provided' : undefined;
+  const selectorCode = selectors.length > 0 ? selectors.join('\n') : selector;
+
+  return {
+    summary: summaryLine(['Inspect metric series', selectorSummary, formatDatasourceSummary(record)]),
+    items: [
+      { label: 'Datasource', value: formatDatasourceMetaValue(record) },
+      {
+        label: selectors.length > 0 ? 'Selectors' : 'Selector',
+        value: selectorCode ? <code>{selectors.length > 0 ? selectors.join(', ') : selector}</code> : undefined,
+      },
+    ],
+    code: selectorCode,
   };
 }
 
@@ -799,7 +820,12 @@ const TOOL_ICONS: Record<string, IconName> = {
   inspect_metric_series: 'search',
   query_prometheus: 'gf-prometheus',
   query_prometheus_raw: 'gf-prometheus',
-  explore_metrics: 'compass',
+  run_query_agent: 'database',
+  run_dashboard_agent: 'apps',
+  run_investigation_agent: 'search',
+  run_support_agent: 'question-circle',
+  run_navigation_agent: 'compass',
+  navigate: 'compass',
   write_jsonnet: 'brackets-curly',
   grafana_write_jsonnet_file: 'brackets-curly',
   edit_jsonnet: 'file-edit-alt',
@@ -862,7 +888,7 @@ function SubagentResultView({ content, details }: { content: unknown; details: S
 }
 
 function subagentResultLabel(details: SubagentRunDetails) {
-  const agentLabel = details.agent === 'metrics' ? 'Metrics explorer' : 'Jsonnet explorer';
+  const agentLabel = subagentLabel(details.agent);
   if (details.status === 'failed') {
     return `${agentLabel} error`;
   }
@@ -877,7 +903,7 @@ function SubagentDetailsView({ details, compact }: { details: SubagentRunDetails
   return (
     <div className={styles.subagent}>
       <div className={styles.subagentMeta}>
-        <span>{details.agent === 'metrics' ? 'Metrics explorer' : 'Jsonnet explorer'}</span>
+        <span>{subagentLabel(details.agent)}</span>
         <span>{formatUsage(details.usage)}</span>
         <span>{details.toolCalls.length} tool calls</span>
       </div>
@@ -894,6 +920,23 @@ function SubagentDetailsView({ details, compact }: { details: SubagentRunDetails
       </div>
     </div>
   );
+}
+
+function subagentLabel(agent: SubagentRunDetails['agent']) {
+  switch (agent) {
+    case 'query':
+      return 'Query agent';
+    case 'dashboard':
+      return 'Dashboard agent';
+    case 'investigation':
+      return 'Investigation agent';
+    case 'support':
+      return 'Support agent';
+    case 'navigation':
+      return 'Navigation agent';
+    default:
+      return 'Specialist agent';
+  }
 }
 
 function SubagentToolCallRow({ call }: { call: SubagentToolCall }) {

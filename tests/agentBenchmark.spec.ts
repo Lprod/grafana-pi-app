@@ -6,7 +6,7 @@ import { testIds } from '../src/components/testIds';
 import type { Page } from '@playwright/test';
 
 const BENCHMARK_PROMPT = 'Create a dashboard for HTTP request rate and errors';
-const DEFAULT_TIMEOUT_MS = 120_000;
+const DEFAULT_TIMEOUT_MS = 180_000;
 
 type BenchmarkEvent = {
   type: string;
@@ -37,8 +37,17 @@ type ToolCallSummary = {
   args?: unknown;
   isError?: boolean;
   subagentToolCalls?: number;
+  nestedToolCalls?: NestedToolCallSummary[];
   errorText?: string;
   resultTextBytes?: number;
+};
+
+type NestedToolCallSummary = {
+  name: string;
+  status?: string;
+  isError?: boolean;
+  args?: unknown;
+  result?: unknown;
 };
 
 type BenchmarkUsage = {
@@ -99,6 +108,8 @@ test.describe('agent benchmark', () => {
     await send.click();
 
     let timedOut = false;
+    let benchmarkFinished = false;
+    const approvalTask = autoApproveToolConfirmations(page, () => benchmarkFinished);
     try {
       await page.waitForFunction(
         () => {
@@ -114,6 +125,9 @@ test.describe('agent benchmark', () => {
         .getByRole('button', { name: /Stop/i })
         .click({ timeout: 1000 })
         .catch(() => undefined);
+    } finally {
+      benchmarkFinished = true;
+      await approvalTask;
     }
 
     const events = await readBenchmarkEvents(page);
@@ -152,6 +166,23 @@ async function readBenchmarkEvents(page: Page): Promise<BenchmarkEvent[]> {
     const benchmarkWindow = window as typeof window & { __PI_AGENT_BENCHMARK_EVENTS__?: BenchmarkEvent[] };
     return benchmarkWindow.__PI_AGENT_BENCHMARK_EVENTS__ ?? [];
   });
+}
+
+async function autoApproveToolConfirmations(page: Page, isDone: () => boolean) {
+  while (!isDone()) {
+    try {
+      const approve = page.getByTestId(testIds.chat.toolConfirmationApprove);
+      if (await approve.isVisible({ timeout: 500 }).catch(() => false)) {
+        await approve.click();
+        continue;
+      }
+      await page.waitForTimeout(250);
+    } catch {
+      if (!isDone()) {
+        await page.waitForTimeout(250).catch(() => undefined);
+      }
+    }
+  }
 }
 
 function formatLiveBenchmarkEvent(event: BenchmarkEvent, state: LiveBenchmarkState) {
@@ -318,6 +349,7 @@ function summarizeToolCalls(events: BenchmarkEvent[]): ToolCallSummary[] {
         ...existing,
         args: event.args ?? existing.args,
         subagentToolCalls: extractSubagentToolCallCount(event.partialResult) ?? existing.subagentToolCalls,
+        nestedToolCalls: extractNestedToolCalls(event.partialResult) ?? existing.nestedToolCalls,
       });
       continue;
     }
@@ -331,6 +363,7 @@ function summarizeToolCalls(events: BenchmarkEvent[]): ToolCallSummary[] {
         durationMs,
         isError: event.isError,
         subagentToolCalls: extractSubagentToolCallCount(event.result) ?? existing.subagentToolCalls,
+        nestedToolCalls: extractNestedToolCalls(event.result) ?? existing.nestedToolCalls,
         errorText: event.isError ? extractResultText(event.result) : undefined,
         resultTextBytes: extractResultText(event.result)?.length,
       });
@@ -358,6 +391,25 @@ function extractSubagentToolCallCount(result: unknown) {
   return Array.isArray(toolCalls) ? toolCalls.length : undefined;
 }
 
+function extractNestedToolCalls(result: unknown): NestedToolCallSummary[] | undefined {
+  const details = getRecord(getRecord(result)?.details);
+  const toolCalls = details?.toolCalls;
+  if (!Array.isArray(toolCalls)) {
+    return undefined;
+  }
+
+  return toolCalls.map((call) => {
+    const record = getRecord(call);
+    return {
+      name: stringField(record, 'name') ?? 'unknown',
+      status: stringField(record, 'status'),
+      isError: booleanField(record, 'isError'),
+      args: record?.args,
+      result: record?.result,
+    };
+  });
+}
+
 function extractResultText(result: unknown) {
   const content = getRecord(result)?.content;
   if (!Array.isArray(content)) {
@@ -380,27 +432,28 @@ function findFinalAssistantError(events: BenchmarkEvent[]) {
 }
 
 function findDashboardQualityError(events: BenchmarkEvent[]) {
-  const designed = [...events]
+  const dashboardCall = summarizeToolCalls(events)
     .reverse()
-    .find((event) => event.type === 'tool_execution_end' && event.toolName === 'design_dashboard' && !event.isError);
-  if (!designed) {
-    return 'design_dashboard did not complete successfully';
+    .find((call) => call.name === 'run_dashboard_agent' && call.status === 'completed' && !call.isError);
+  if (!dashboardCall) {
+    return 'run_dashboard_agent did not complete successfully';
   }
 
-  const synced = [...events]
+  const nestedCalls = dashboardCall.nestedToolCalls ?? [];
+  const synced = [...nestedCalls]
     .reverse()
-    .find((event) => event.type === 'tool_execution_end' && event.toolName === 'sync_dashboard' && !event.isError);
+    .find((call) => call.name === 'sync_dashboard' && call.status === 'completed' && !call.isError);
   if (!synced) {
-    return 'sync_dashboard did not complete successfully';
+    return 'dashboard agent did not complete nested sync_dashboard';
   }
 
-  const rendered = [...events]
+  const rendered = [...nestedCalls]
     .reverse()
-    .find((event) => event.type === 'tool_execution_end' && event.toolName === 'render_dashboard' && !event.isError);
+    .find((call) => call.name === 'render_dashboard' && call.status === 'completed' && !call.isError);
   const details = getRecord(getRecord(rendered?.result)?.details);
   const dashboard = getRecord(details?.dashboard);
   if (!dashboard) {
-    return 'render_dashboard did not return a dashboard summary';
+    return 'dashboard agent nested render_dashboard did not return a dashboard summary';
   }
 
   const panels = recordsField(dashboard, 'panels');
@@ -467,6 +520,16 @@ function zeroUsage(): BenchmarkUsage {
 function numericField(record: Record<string, unknown> | undefined, field: string) {
   const value = record?.[field];
   return typeof value === 'number' && Number.isFinite(value) ? value : 0;
+}
+
+function stringField(record: Record<string, unknown> | undefined, field: string) {
+  const value = record?.[field];
+  return typeof value === 'string' ? value : undefined;
+}
+
+function booleanField(record: Record<string, unknown> | undefined, field: string) {
+  const value = record?.[field];
+  return typeof value === 'boolean' ? value : undefined;
 }
 
 function recordsField(record: Record<string, unknown> | undefined, field: string) {

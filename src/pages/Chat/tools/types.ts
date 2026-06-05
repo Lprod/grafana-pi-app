@@ -1,4 +1,4 @@
-import type { AgentTool, StreamFn } from '@earendil-works/pi-agent-core';
+import type { AgentTool, BeforeToolCallContext, BeforeToolCallResult, StreamFn } from '@earendil-works/pi-agent-core';
 import type { Model } from '@earendil-works/pi-ai';
 import type { DataSourceApi, DataSourceInstanceSettings } from '@grafana/data';
 import type { PiAppJsonData, PiAppThinkingLevel } from '../../../types';
@@ -10,6 +10,7 @@ export type GrafanaToolRuntime = {
   model: Model<any>;
   streamFn: StreamFn;
   thinkingLevel: PiAppThinkingLevel;
+  beforeToolCall?: (context: BeforeToolCallContext, signal?: AbortSignal) => Promise<BeforeToolCallResult | undefined>;
 };
 
 export type InvestigationReportStatus = 'active' | 'complete';
@@ -64,7 +65,6 @@ export type CreateGrafanaToolsOptions = GrafanaToolConfig & {
   includeAdHocDashboardTools?: boolean;
   includeJsonnetLibraryTools?: boolean;
   includeRawPrometheusQueryTool?: boolean;
-  includeMetricsSubagentTool?: boolean;
 };
 
 export type ResourceCapableDataSource = DataSourceApi & {
@@ -91,6 +91,7 @@ export type DatasourceParams = {
 
 export type ListMetricsParams = DatasourceParams & {
   prefix?: string;
+  prefixes?: string[];
 };
 
 export type ListLabelValuesParams = DatasourceParams & {
@@ -99,7 +100,8 @@ export type ListLabelValuesParams = DatasourceParams & {
 };
 
 export type InspectMetricSeriesParams = DatasourceParams & {
-  match: string;
+  match?: string;
+  matches?: string[];
   limit?: number;
 };
 

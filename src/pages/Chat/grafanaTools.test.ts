@@ -16,6 +16,9 @@ jest.mock('@grafana/runtime', () => ({
   getBackendSrv: jest.fn(),
   isFetchError: (error: unknown) => Boolean(error && typeof error === 'object' && 'status' in error && 'data' in error),
   getDataSourceSrv: () => mockDataSourceSrv,
+  locationService: {
+    push: jest.fn(),
+  },
 }));
 
 jest.mock('typebox', () => ({
@@ -32,7 +35,7 @@ jest.mock('typebox', () => ({
 }));
 
 jest.mock('./tools/subagentRunner', () => ({
-  runGrafanaSubagent: jest.fn(async (options) => ({
+  runSpecialistAgent: jest.fn(async (options) => ({
     content: [{ type: 'text', text: 'mock subagent' }],
     details: {
       type: 'subagent',
@@ -61,16 +64,18 @@ import { getBackendSrv } from '@grafana/runtime';
 import { of, throwError } from 'rxjs';
 import {
   createGrafanaToolRegistry,
+  createGrafanaSupervisorTools,
   createGrafanaTools,
   createGrafanaToolsForSkillGroups,
   createSkillTools,
+  buildNavigationPath,
   filterAllowedPrometheusDatasourceSettings,
   filterAllowedRqliteDatasourceSettings,
   getUnavailableDashboardDatasourceUids,
   type VirtualJsonnetFileSnapshot,
 } from './grafanaTools';
 import { GRAFANA_SKILLS } from './skills';
-import { runGrafanaSubagent } from './tools/subagentRunner';
+import { runSpecialistAgent } from './tools/subagentRunner';
 
 const datasourceSettings = [
   { name: 'Prometheus A', uid: 'prom-a', type: 'prometheus', isDefault: true },
@@ -130,6 +135,38 @@ describe('grafana datasource tool policy', () => {
     expect(result.details.datasourceUid).toBe('prom-b');
   });
 
+  it('lists multiple metric prefixes with one Prometheus metadata request', async () => {
+    const dataSource = {
+      uid: 'prom-b',
+      type: 'prometheus',
+      getResource: jest.fn().mockResolvedValue({
+        data: ['http_requests_total', 'node_cpu_seconds_total', 'node_load1', 'process_cpu_seconds_total'],
+      }),
+    };
+    mockDataSourceSrv.get.mockResolvedValue(dataSource);
+    const tool = getTool(createGrafanaTools({ allowedPrometheusDatasourceUids: ['prom-b'] }), 'list_metrics');
+
+    const result = await tool.execute('call-1', { prefixes: ['http', 'node_'] }, undefined);
+    const body = JSON.parse(result.content[0].text);
+
+    expect(dataSource.getResource).toHaveBeenCalledTimes(1);
+    expect(body.results).toEqual([
+      {
+        prefix: 'http',
+        count: 1,
+        truncated: false,
+        metrics: ['http_requests_total'],
+      },
+      {
+        prefix: 'node_',
+        count: 2,
+        truncated: false,
+        metrics: ['node_cpu_seconds_total', 'node_load1'],
+      },
+    ]);
+    expect(result.details).toMatchObject({ datasourceUid: 'prom-b', batch: true, prefixes: ['http', 'node_'] });
+  });
+
   it('inspects metric series labels through the selected datasource', async () => {
     const dataSource = {
       uid: 'prom-b',
@@ -152,6 +189,50 @@ describe('grafana datasource tool policy', () => {
     expect(body.examples).toHaveLength(1);
     expect(body.truncated).toBe(true);
     expect(result.details.datasourceUid).toBe('prom-b');
+  });
+
+  it('inspects multiple metric series selectors in one tool call', async () => {
+    const dataSource = {
+      uid: 'prom-b',
+      type: 'prometheus',
+      getResource: jest
+        .fn()
+        .mockResolvedValueOnce({
+          data: [
+            { __name__: 'http_requests_total', route: '/', status: '200', vm: 'vm-web-01' },
+            { __name__: 'http_requests_total', route: '/', status: '500', vm: 'vm-web-01' },
+          ],
+        })
+        .mockResolvedValueOnce({
+          data: [{ __name__: 'node_load1', instance: 'vm-web-01:9100', vm: 'vm-web-01' }],
+        }),
+    };
+    mockDataSourceSrv.get.mockResolvedValue(dataSource);
+    const tool = getTool(createGrafanaTools({ allowedPrometheusDatasourceUids: ['prom-b'] }), 'inspect_metric_series');
+
+    const result = await tool.execute(
+      'call-1',
+      { matches: ['http_requests_total', 'node_load1'], limit: 1 },
+      undefined
+    );
+    const body = JSON.parse(result.content[0].text);
+
+    expect(dataSource.getResource).toHaveBeenCalledWith('api/v1/series', { 'match[]': 'http_requests_total' });
+    expect(dataSource.getResource).toHaveBeenCalledWith('api/v1/series', { 'match[]': 'node_load1' });
+    expect(body.results).toHaveLength(2);
+    expect(body.results[0]).toMatchObject({
+      match: 'http_requests_total',
+      labelNames: ['route', 'status', 'vm'],
+      totalSeries: 2,
+      truncated: true,
+    });
+    expect(body.results[1]).toMatchObject({
+      match: 'node_load1',
+      labelNames: ['instance', 'vm'],
+      totalSeries: 1,
+      truncated: false,
+    });
+    expect(result.details).toMatchObject({ datasourceUid: 'prom-b', batch: true, matches: 2, totalSeries: 3 });
   });
 
   it('derives range query interval instead of accepting a caller-selected coarse step', async () => {
@@ -264,6 +345,39 @@ describe('grafana datasource tool policy', () => {
         { query: 'sum(rate(http_requests_total[5m]))', totalSeries: 1 },
         { query: 'sum(rate(http_requests_total{status=~"5.."}[5m]))', totalSeries: 1 },
       ],
+    });
+  });
+
+  it('returns PromQL validation errors as query summaries instead of failed tool calls', async () => {
+    const dataSource = {
+      uid: 'prom-b',
+      type: 'prometheus',
+      query: jest.fn().mockResolvedValue({
+        state: 'Error',
+        errors: [{ message: 'bad_data: invalid parameter "query": parse error' }],
+      }),
+    };
+    mockDataSourceSrv.get.mockResolvedValue(dataSource);
+    const tool = getTool(createGrafanaTools({ allowedPrometheusDatasourceUids: ['prom-b'] }), 'query_prometheus');
+
+    const result = await tool.execute('call-1', { query: 'rate(node_load1[5m])' }, undefined);
+    const body = JSON.parse(result.content[0].text);
+
+    expect(body).toMatchObject({
+      datasourceUid: 'prom-b',
+      query: 'rate(node_load1[5m])',
+      frameCount: 0,
+      totalSeries: 0,
+      validationError: 'bad_data: invalid parameter "query": parse error',
+      notices: [{ severity: 'error', text: 'bad_data: invalid parameter "query": parse error' }],
+      series: [],
+    });
+    expect(result.details).toMatchObject({
+      datasourceUid: 'prom-b',
+      query: 'rate(node_load1[5m])',
+      series: 0,
+      validationError: 'bad_data: invalid parameter "query": parse error',
+      summarized: true,
     });
   });
 
@@ -884,7 +998,7 @@ describe('grafana datasource tool policy', () => {
     );
   });
 
-  it('keeps specialist subagents available and does not expose Jsonnet exploration', () => {
+  it('keeps specialist delegation tools available and does not expose Jsonnet exploration', () => {
     expect(createGrafanaToolRegistry().subagents).toEqual([]);
 
     const defaultRegistry = createGrafanaToolRegistry({
@@ -894,11 +1008,66 @@ describe('grafana datasource tool policy', () => {
         thinkingLevel: 'off',
       },
     });
-    expect(defaultRegistry.subagents.map((tool) => tool.name)).toEqual(['explore_metrics', 'design_dashboard']);
+    expect(defaultRegistry.subagents.map((tool) => tool.name)).toEqual([
+      'run_query_agent',
+      'run_dashboard_agent',
+      'run_investigation_agent',
+      'run_support_agent',
+      'run_navigation_agent',
+    ]);
     expect(defaultRegistry.all.map((tool) => tool.name)).toEqual(
-      expect.arrayContaining(['explore_metrics', 'design_dashboard'])
+      expect.arrayContaining(['run_query_agent', 'run_dashboard_agent', 'run_investigation_agent'])
     );
     expect(defaultRegistry.all.map((tool) => tool.name)).not.toContain('explore_jsonnet');
+  });
+
+  it('exposes only specialist delegation tools through the supervisor helper', () => {
+    const names = createGrafanaSupervisorTools({
+      runtime: {
+        model: {} as any,
+        streamFn: jest.fn() as any,
+        thinkingLevel: 'off',
+      },
+    }).map((tool) => tool.name);
+
+    expect(names).toEqual([
+      'run_query_agent',
+      'run_dashboard_agent',
+      'run_investigation_agent',
+      'run_support_agent',
+      'run_navigation_agent',
+    ]);
+  });
+
+  it('builds safe Grafana navigation paths', () => {
+    expect(buildNavigationPath({ type: 'dashboard', uid: 'service-red', slug: 'Service RED' })).toBe(
+      '/d/service-red/service-red'
+    );
+    expect(buildNavigationPath({ type: 'relative', path: '/dashboards?query=node' })).toBe('/dashboards?query=node');
+
+    const explorePath = buildNavigationPath({
+      type: 'prometheus_explore',
+      datasourceUid: 'prom-a',
+      query: 'up',
+    });
+    const left = JSON.parse(decodeURIComponent(explorePath.replace('/explore?left=', '')));
+    expect(left).toMatchObject({
+      datasource: 'prom-a',
+      queries: [
+        {
+          datasource: { type: 'prometheus', uid: 'prom-a' },
+          expr: 'up',
+        },
+      ],
+      range: { from: 'now-1h', to: 'now' },
+    });
+
+    expect(() => buildNavigationPath({ type: 'relative', path: 'https://example.com' })).toThrow(
+      'navigate relative path must be a Grafana-relative path starting with /.'
+    );
+    expect(() => buildNavigationPath({ type: 'relative', path: '//example.com' })).toThrow(
+      'navigate relative path must be a Grafana-relative path starting with /.'
+    );
   });
 
   it('keeps raw dashboard upload/delete and direct Jsonnet library browsing out of the compatibility toolset', () => {
@@ -920,8 +1089,13 @@ describe('grafana datasource tool policy', () => {
     expect(names).toContain('get_dashboard_source');
     expect(names).toContain('bootstrap_dashboard_context');
     expect(names).toContain('screenshot_dashboard');
-    expect(names).toContain('explore_metrics');
-    expect(names).toContain('design_dashboard');
+    expect(names).toContain('run_query_agent');
+    expect(names).toContain('run_dashboard_agent');
+    expect(names).toContain('run_investigation_agent');
+    expect(names).toContain('run_support_agent');
+    expect(names).toContain('run_navigation_agent');
+    expect(names).not.toContain('explore_metrics');
+    expect(names).not.toContain('design_dashboard');
     expect(names).not.toContain('query_prometheus_raw');
     expect(names).not.toContain('upload_dashboard');
     expect(names).not.toContain('delete_dashboard');
@@ -951,8 +1125,8 @@ describe('grafana datasource tool policy', () => {
     expect(names).toContain('get_dashboard_source');
     expect(names).toContain('bootstrap_dashboard_context');
     expect(names).toContain('search_grafonnet');
-    expect(names).toContain('explore_metrics');
-    expect(names).toContain('design_dashboard');
+    expect(names).toContain('run_query_agent');
+    expect(names).toContain('run_dashboard_agent');
     expect(names).not.toContain('explore_jsonnet');
   });
 
@@ -1121,8 +1295,11 @@ describe('grafana datasource tool policy', () => {
 
     expect(names).toContain('list_datasources');
     expect(names).toContain('query_prometheus');
-    expect(names).toContain('explore_metrics');
-    expect(names).toContain('design_dashboard');
+    expect(names).toContain('run_query_agent');
+    expect(names).toContain('run_dashboard_agent');
+    expect(names).toContain('run_investigation_agent');
+    expect(names).toContain('run_support_agent');
+    expect(names).toContain('run_navigation_agent');
     expect(names).not.toContain('write_jsonnet');
     expect(names).not.toContain('render_dashboard');
     expect(names).not.toContain('sync_dashboard');
@@ -1155,12 +1332,13 @@ describe('grafana datasource tool policy', () => {
     expect(names).toContain('get_dashboard_source');
     expect(names).toContain('get_dashboard');
     expect(names).toContain('screenshot_dashboard');
-    expect(names).toContain('design_dashboard');
+    expect(names).toContain('run_dashboard_agent');
+    expect(names).not.toContain('design_dashboard');
     expect(names).not.toContain('upload_dashboard');
     expect(names).not.toContain('delete_dashboard');
   });
 
-  it('runs the dashboard designer with read-only child tools', async () => {
+  it('runs the dashboard agent with managed-dashboard child tools', async () => {
     const registry = createGrafanaToolRegistry({
       skillTools: createSkillTools(GRAFANA_SKILLS),
       runtime: {
@@ -1169,7 +1347,7 @@ describe('grafana datasource tool policy', () => {
         thinkingLevel: 'off',
       },
     });
-    const tool = getTool(registry.subagents, 'design_dashboard');
+    const tool = getTool(registry.subagents, 'run_dashboard_agent');
 
     const result = await tool.execute(
       'call-1',
@@ -1181,22 +1359,30 @@ describe('grafana datasource tool policy', () => {
       },
       undefined
     );
-    const call = jest.mocked(runGrafanaSubagent).mock.calls.at(-1)?.[0];
+    const call = jest.mocked(runSpecialistAgent).mock.calls.at(-1)?.[0];
     const childToolNames = call?.tools.map((childTool) => childTool.name) ?? [];
 
     expect(call).toMatchObject({
-      kind: 'dashboard-design',
+      kind: 'dashboard',
       task: expect.stringContaining('Design an HTTP request dashboard'),
     });
     expect(call?.task).toContain('Prefer datasource UID: prom-b.');
     expect(call?.task).toContain('Inspect existing dashboard UID: http-current.');
-    expect(result.details).toMatchObject({ agent: 'dashboard-design', status: 'completed' });
+    expect(result.details).toMatchObject({ agent: 'dashboard', status: 'completed' });
     expect(childToolNames).toEqual(
       expect.arrayContaining([
         'list_datasources',
         'list_metrics',
         'inspect_metric_series',
         'query_prometheus',
+        'write_jsonnet',
+        'edit_jsonnet',
+        'fix_jsonnet',
+        'read_jsonnet',
+        'list_managed_dashboards',
+        'get_dashboard_source',
+        'render_dashboard',
+        'sync_dashboard',
         'get_dashboard',
         'list_dashboards',
         'bootstrap_dashboard_context',
@@ -1204,14 +1390,38 @@ describe('grafana datasource tool policy', () => {
         'read_skill_resource',
       ])
     );
-    expect(childToolNames).not.toContain('write_jsonnet');
-    expect(childToolNames).not.toContain('edit_jsonnet');
-    expect(childToolNames).not.toContain('fix_jsonnet');
-    expect(childToolNames).not.toContain('render_dashboard');
-    expect(childToolNames).not.toContain('sync_dashboard');
     expect(childToolNames).not.toContain('upload_dashboard');
     expect(childToolNames).not.toContain('delete_dashboard');
-    expect(childToolNames).not.toContain('design_dashboard');
+    expect(childToolNames).not.toContain('run_dashboard_agent');
+  });
+
+  it('runs the navigation agent with only the safe navigation tool', async () => {
+    const registry = createGrafanaToolRegistry({
+      runtime: {
+        model: {} as any,
+        streamFn: jest.fn() as any,
+        thinkingLevel: 'off',
+      },
+    });
+    const tool = getTool(registry.subagents, 'run_navigation_agent');
+
+    const result = await tool.execute(
+      'call-1',
+      {
+        task: 'Open the Service RED dashboard.',
+        destinationHint: 'service-red',
+      },
+      undefined
+    );
+    const call = jest.mocked(runSpecialistAgent).mock.calls.at(-1)?.[0];
+
+    expect(call).toMatchObject({
+      kind: 'navigation',
+      task: expect.stringContaining('Open the Service RED dashboard.'),
+    });
+    expect(call?.task).toContain('Destination hint: service-red.');
+    expect(call?.tools.map((childTool) => childTool.name)).toEqual(['navigate']);
+    expect(result.details).toMatchObject({ agent: 'navigation', status: 'completed' });
   });
 
   it('reads bundled skill resources through an explicit tool', async () => {

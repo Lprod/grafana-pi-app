@@ -22,6 +22,15 @@ describe('Grafana skill selection', () => {
     );
   });
 
+  it('activates the investigation skill for analysis requests', () => {
+    const selection = selectGrafanaSkills('Analyze the last 6 hours and summarize what is wrong', GRAFANA_SKILLS);
+
+    expect(selection.activeSkillNames).toEqual(['investigation']);
+    expect(selection.toolGroups).toEqual(
+      expect.arrayContaining(['metrics', 'subagents', 'investigation', 'skillResources'])
+    );
+  });
+
   it('activates the dashboard skill for dashboard artifact requests', () => {
     const selection = selectGrafanaSkills('build a dashboard for node health panels', GRAFANA_SKILLS);
 
@@ -53,7 +62,7 @@ describe('Grafana skill selection', () => {
 
     expect(prompt).toContain('## Available Skills');
     expect(prompt).toContain('### grafana-dashboard');
-    expect(prompt).toContain('design_dashboard');
+    expect(prompt).toContain('run_dashboard_agent');
     expect(prompt).toContain('references/dashboard-jsonnet-workflow.md');
     expect(prompt).not.toContain('### grafana-metrics');
     expect(prompt).not.toContain('references/promql-patterns.md');

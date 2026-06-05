@@ -1,74 +1,134 @@
 import type { AgentTool } from '@earendil-works/pi-agent-core';
-import { Type } from 'typebox';
-import { runGrafanaSubagent } from './subagentRunner';
+import { Type, type TSchema } from 'typebox';
+import { runSpecialistAgent, type AgentSpecialistKind } from './subagentRunner';
 import type { GrafanaToolRuntime } from './types';
 
-type MetricsSubagentParams = {
+type SpecialistToolParams = {
   task: string;
   datasourceUid?: string;
   metricPrefix?: string;
-};
-
-type DashboardDesignSubagentParams = {
-  task: string;
-  datasourceUid?: string;
   existingDashboardUid?: string;
   intent?: 'create' | 'update' | 'review';
+  timeRange?: string;
+  destinationHint?: string;
+  audience?: string;
 };
 
-type SubagentToolOptions = {
+type SpecialistToolOptions = {
   runtime: GrafanaToolRuntime;
   metricsTools: AgentTool[];
+  rqliteTools?: AgentTool[];
   dashboardReadTools?: AgentTool[];
+  jsonnetFileTools?: AgentTool[];
+  managedDashboardTools?: AgentTool[];
+  investigationTools?: AgentTool[];
+  navigationTools?: AgentTool[];
   skillTools?: AgentTool[];
-  includeMetrics?: boolean;
-  includeDashboardDesign?: boolean;
 };
 
-export function createSubagentTools(options: SubagentToolOptions): AgentTool[] {
-  const tools: AgentTool[] = [];
-  if (options.includeMetrics !== false) {
-    tools.push(makeMetricsExplorerTool(options.runtime, options.metricsTools));
-  }
-  if (options.includeDashboardDesign !== false) {
-    tools.push(
-      makeDashboardDesignerTool(
-        options.runtime,
-        dedupeTools([...options.metricsTools, ...(options.dashboardReadTools ?? []), ...(options.skillTools ?? [])])
-      )
-    );
-  }
-  return tools;
+export function createSubagentTools(options: SpecialistToolOptions): AgentTool[] {
+  return [
+    makeSpecialistTool({
+      name: 'run_query_agent',
+      label: 'Run query agent',
+      description:
+        'Delegate Prometheus metric discovery, PromQL validation, and read-only rqlite SQL analysis to a focused query specialist.',
+      kind: 'query',
+      runtime: options.runtime,
+      tools: dedupeTools([...(options.metricsTools ?? []), ...(options.rqliteTools ?? [])]),
+      systemPrompt: QUERY_AGENT_PROMPT,
+      params: queryAgentParameters(),
+      taskPrefix: queryTaskPrefix,
+    }),
+    makeSpecialistTool({
+      name: 'run_dashboard_agent',
+      label: 'Run dashboard agent',
+      description:
+        'Delegate Grafana dashboard create, update, review, managed Jsonnet, and panel planning work to a dashboard specialist.',
+      kind: 'dashboard',
+      runtime: options.runtime,
+      tools: dedupeTools([
+        ...(options.metricsTools ?? []),
+        ...(options.dashboardReadTools ?? []),
+        ...(options.jsonnetFileTools ?? []),
+        ...(options.managedDashboardTools ?? []),
+        ...(options.skillTools ?? []),
+      ]),
+      systemPrompt: DASHBOARD_AGENT_PROMPT,
+      params: dashboardAgentParameters(),
+      taskPrefix: dashboardTaskPrefix,
+    }),
+    makeSpecialistTool({
+      name: 'run_investigation_agent',
+      label: 'Run investigation agent',
+      description:
+        'Delegate incident, degradation, latency, failure, and root-cause analysis to an investigation specialist that maintains the structured report.',
+      kind: 'investigation',
+      runtime: options.runtime,
+      tools: dedupeTools([
+        ...(options.metricsTools ?? []),
+        ...(options.rqliteTools ?? []),
+        ...(options.investigationTools ?? []),
+        ...(options.skillTools ?? []),
+      ]),
+      systemPrompt: INVESTIGATION_AGENT_PROMPT,
+      params: investigationAgentParameters(),
+      taskPrefix: investigationTaskPrefix,
+    }),
+    makeSpecialistTool({
+      name: 'run_support_agent',
+      label: 'Run support agent',
+      description:
+        'Delegate Grafana and observability explanation, best-practice, and skill-reference questions to a support specialist.',
+      kind: 'support',
+      runtime: options.runtime,
+      tools: dedupeTools(options.skillTools ?? []),
+      systemPrompt: SUPPORT_AGENT_PROMPT,
+      params: supportAgentParameters(),
+      taskPrefix: supportTaskPrefix,
+    }),
+    makeSpecialistTool({
+      name: 'run_navigation_agent',
+      label: 'Run navigation agent',
+      description:
+        'Delegate Grafana navigation and link-building tasks to a navigation specialist that can open safe Grafana-relative destinations.',
+      kind: 'navigation',
+      runtime: options.runtime,
+      tools: dedupeTools(options.navigationTools ?? []),
+      systemPrompt: NAVIGATION_AGENT_PROMPT,
+      params: navigationAgentParameters(),
+      taskPrefix: navigationTaskPrefix,
+    }),
+  ];
 }
 
-function makeMetricsExplorerTool(runtime: GrafanaToolRuntime, tools: AgentTool[]): AgentTool {
+function makeSpecialistTool(options: {
+  name: string;
+  label: string;
+  description: string;
+  kind: AgentSpecialistKind;
+  runtime: GrafanaToolRuntime;
+  tools: AgentTool[];
+  systemPrompt: string;
+  params: TSchema;
+  taskPrefix: (params: SpecialistToolParams) => string[];
+}): AgentTool {
   return {
-    name: 'explore_metrics',
-    label: 'Explore metrics',
-    description:
-      'Delegate metric and PromQL reconnaissance to an isolated Grafana metrics subagent. It can only discover datasources, list metadata, and validate PromQL.',
+    name: options.name,
+    label: options.label,
+    description: options.description,
     executionMode: 'sequential',
-    parameters: Type.Object({
-      task: Type.String({ description: 'Specific metrics exploration task and expected output.' }),
-      datasourceUid: Type.Optional(Type.String({ description: 'Optional Prometheus datasource UID to prefer.' })),
-      metricPrefix: Type.Optional(Type.String({ description: 'Optional metric-name prefix to investigate first.' })),
-    }),
+    parameters: options.params,
     async execute(_toolCallId, params, signal, onUpdate) {
-      const args = params as MetricsSubagentParams;
-      const task = [
-        args.task,
-        args.datasourceUid ? `Prefer datasource UID: ${args.datasourceUid}.` : '',
-        args.metricPrefix ? `Start metric discovery with prefix: ${args.metricPrefix}.` : '',
-      ]
-        .filter(Boolean)
-        .join('\n');
+      const args = params as SpecialistToolParams;
+      const task = [...options.taskPrefix(args), args.task].filter(Boolean).join('\n');
 
-      return runGrafanaSubagent({
-        kind: 'metrics',
+      return runSpecialistAgent({
+        kind: options.kind,
         task,
-        systemPrompt: METRICS_SUBAGENT_PROMPT,
-        tools,
-        runtime,
+        systemPrompt: options.systemPrompt,
+        tools: options.tools,
+        runtime: options.runtime,
         signal,
         onUpdate,
       });
@@ -76,47 +136,87 @@ function makeMetricsExplorerTool(runtime: GrafanaToolRuntime, tools: AgentTool[]
   };
 }
 
-function makeDashboardDesignerTool(runtime: GrafanaToolRuntime, tools: AgentTool[]): AgentTool {
-  return {
-    name: 'design_dashboard',
-    label: 'Design dashboard',
-    description:
-      'Delegate Grafana dashboard planning to an isolated design-only subagent. Use this before writing, rendering, or syncing non-trivial dashboard create, update, or review work. The subagent can inspect metrics and dashboards but cannot mutate persistent artifacts.',
-    executionMode: 'sequential',
-    parameters: Type.Object({
-      task: Type.String({ description: 'Specific dashboard design task and expected output.' }),
-      datasourceUid: Type.Optional(Type.String({ description: 'Optional Prometheus datasource UID to prefer.' })),
-      existingDashboardUid: Type.Optional(
-        Type.String({ description: 'Existing dashboard UID to inspect for update or review requests.' })
-      ),
-      intent: Type.Optional(
-        Type.Union([Type.Literal('create'), Type.Literal('update'), Type.Literal('review')], {
-          description: 'Dashboard task intent. Defaults to create when omitted.',
-        })
-      ),
-    }),
-    async execute(_toolCallId, params, signal, onUpdate) {
-      const args = params as DashboardDesignSubagentParams;
-      const task = [
-        `Intent: ${args.intent ?? 'create'}.`,
-        args.datasourceUid ? `Prefer datasource UID: ${args.datasourceUid}.` : '',
-        args.existingDashboardUid ? `Inspect existing dashboard UID: ${args.existingDashboardUid}.` : '',
-        args.task,
-      ]
-        .filter(Boolean)
-        .join('\n');
+function queryAgentParameters() {
+  return Type.Object({
+    task: Type.String({ description: 'Specific query or metric/SQL exploration task and expected output.' }),
+    datasourceUid: Type.Optional(
+      Type.String({ description: 'Optional Prometheus or rqlite datasource UID to prefer.' })
+    ),
+    metricPrefix: Type.Optional(
+      Type.String({ description: 'Optional Prometheus metric-name prefix to investigate first.' })
+    ),
+  });
+}
 
-      return runGrafanaSubagent({
-        kind: 'dashboard-design',
-        task,
-        systemPrompt: DASHBOARD_DESIGNER_PROMPT,
-        tools,
-        runtime,
-        signal,
-        onUpdate,
-      });
-    },
-  };
+function dashboardAgentParameters() {
+  return Type.Object({
+    task: Type.String({ description: 'Specific dashboard task and expected output.' }),
+    datasourceUid: Type.Optional(Type.String({ description: 'Optional Prometheus datasource UID to prefer.' })),
+    existingDashboardUid: Type.Optional(
+      Type.String({ description: 'Existing dashboard UID to inspect for update or review requests.' })
+    ),
+    intent: Type.Optional(
+      Type.Union([Type.Literal('create'), Type.Literal('update'), Type.Literal('review')], {
+        description: 'Dashboard task intent. Defaults to create when omitted.',
+      })
+    ),
+  });
+}
+
+function investigationAgentParameters() {
+  return Type.Object({
+    task: Type.String({ description: 'Specific investigation task, symptom, and expected output.' }),
+    datasourceUid: Type.Optional(Type.String({ description: 'Optional datasource UID to prefer.' })),
+    timeRange: Type.Optional(Type.String({ description: 'Optional incident time range such as now-2h to now.' })),
+  });
+}
+
+function supportAgentParameters() {
+  return Type.Object({
+    task: Type.String({ description: 'Specific Grafana or observability support question.' }),
+    audience: Type.Optional(
+      Type.String({ description: 'Optional audience or experience level to tailor the answer.' })
+    ),
+  });
+}
+
+function navigationAgentParameters() {
+  return Type.Object({
+    task: Type.String({ description: 'Navigation request and destination details.' }),
+    destinationHint: Type.Optional(
+      Type.String({ description: 'Optional dashboard UID, Explore query, plugin route, or relative Grafana path.' })
+    ),
+  });
+}
+
+function queryTaskPrefix(args: SpecialistToolParams) {
+  return [
+    args.datasourceUid ? `Prefer datasource UID: ${args.datasourceUid}.` : '',
+    args.metricPrefix ? `Start metric discovery with prefix: ${args.metricPrefix}.` : '',
+  ];
+}
+
+function dashboardTaskPrefix(args: SpecialistToolParams) {
+  return [
+    `Intent: ${args.intent ?? 'create'}.`,
+    args.datasourceUid ? `Prefer datasource UID: ${args.datasourceUid}.` : '',
+    args.existingDashboardUid ? `Inspect existing dashboard UID: ${args.existingDashboardUid}.` : '',
+  ];
+}
+
+function investigationTaskPrefix(args: SpecialistToolParams) {
+  return [
+    args.datasourceUid ? `Prefer datasource UID: ${args.datasourceUid}.` : '',
+    args.timeRange ? `Incident time range: ${args.timeRange}.` : '',
+  ];
+}
+
+function supportTaskPrefix(args: SpecialistToolParams) {
+  return [args.audience ? `Audience: ${args.audience}.` : ''];
+}
+
+function navigationTaskPrefix(args: SpecialistToolParams) {
+  return [args.destinationHint ? `Destination hint: ${args.destinationHint}.` : ''];
 }
 
 function dedupeTools(tools: readonly AgentTool[]) {
@@ -134,49 +234,108 @@ function dedupeTools(tools: readonly AgentTool[]) {
   return deduped;
 }
 
-const METRICS_SUBAGENT_PROMPT = `You are a Grafana metrics exploration subagent.
+const TOOL_EXECUTION_PROTOCOL = `
+Tool execution protocol:
+- Batch related Prometheus discovery in one call: use list_metrics.prefixes, inspect_metric_series.matches, and query_prometheus.queries when checking multiple metrics or PromQL expressions.
+- When multiple tool calls are independent, request them in the same assistant turn so the runtime can execute them concurrently.
+- Use sequential calls only when one result determines the exact arguments for the next call.
+- Never repeat identical tool calls with the same parameters.
+- Keep tool output focused on the evidence needed for the requested answer.`;
+
+const QUERY_AGENT_PROMPT = `You are the query-agent for a Grafana observability assistant.
 
 Scope:
 - Discover Prometheus datasources, metric names, labels, and label values.
 - Inspect metric series before naming label selectors; do not infer names like status/status_code/path/route from convention.
 - Validate PromQL with query_prometheus before recommending it.
-- Do not create, update, delete, upload, or sync dashboards.
-- Do not use datasource variables. Only use datasource UIDs returned by list_datasources.
+- Query rqlite only with read-only SQL tools when the user asks for SQL/database analysis.
+- Do not create, update, delete, upload, render, or sync dashboards.
+- Do not update investigation reports or navigate the user.
+- For multi-metric exploration, list all known prefixes in one list_metrics call, inspect all candidate metric selectors in one inspect_metric_series call, then validate related PromQL in one query_prometheus call.
 
 Output:
 - Datasource UID used.
-- Relevant metrics and labels.
-- Validated PromQL snippets, with what each answers.
-- Data-shape or cardinality caveats.
-- Open questions if the available metrics are insufficient.
+- Relevant metrics, labels, tables, or columns.
+- Validated PromQL or SQL snippets with what each answers.
+- Data-shape, truncation, or cardinality caveats.
+- Open questions if available data is insufficient.
 
-Keep the final answer compact and directly usable by the parent assistant.`;
+Keep the final answer compact and directly usable by the supervisor.
+${TOOL_EXECUTION_PROTOCOL}`;
 
-const DASHBOARD_DESIGNER_PROMPT = `You are a Grafana dashboard design subagent.
+const DASHBOARD_AGENT_PROMPT = `You are the dashboard-agent for a Grafana observability assistant.
 
 Scope:
-- Design Grafana dashboards, panels, variables, layout, and PromQL for dashboard create, update, or review tasks.
-- Discover Prometheus datasources, metric names, labels, and label values before selecting queries.
+- Create, update, review, render, and sync Grafana dashboards when the user explicitly asks for dashboard or persistent artifact work.
+- Discover Prometheus datasources, metric names, labels, and label values before selecting panel queries.
 - Inspect existing dashboards when a dashboard UID is provided or the task is an update or review.
-- Validate PromQL with query_prometheus before recommending panel queries.
+- Validate PromQL with query_prometheus before using panel queries.
+- Prefer managed Jsonnet dashboards for durable changes.
 - Read active skill resources when examples or detailed dashboard workflow notes are needed.
-- Do not create, update, delete, upload, compile managed dashboard previews, sync, or persist dashboards. Screenshots of existing dashboards are allowed for review when useful. Return a design for the parent assistant to apply.
-- Do not use datasource variables or unlisted datasource UIDs. Use datasource UIDs returned by list_datasources or supplied by the parent only after verification.
+- Do not use datasource variables or unlisted datasource UIDs.
+- Do not call screenshot_dashboard unless the user explicitly asks for a screenshot or visual preview.
+- Batch metric discovery and PromQL validation before writing panels.
 
 Workflow:
 1. Identify the dashboard goal: service health, infrastructure capacity, debugging, status overview, or exploratory analysis.
 2. Gather the minimum metric and dashboard context needed for the task.
 3. Choose panels by data shape: time series for trends, stat or gauge for reduced values, table for label-rich summaries, heatmap for distributions.
 4. Prefer query-side shaping when it is semantically clear; use Grafana transformations only when they materially simplify presentation.
-5. Propose a 24-column grid layout with stable panel IDs, clear titles, units, legends, thresholds, and descriptions where useful.
-6. For create or update tasks, draft plain Jsonnet that evaluates to a dashboard object. Do not import Grafonnet or use constructor chains such as g.dashboard.new, g.panel.new, row.new, or with_* methods.
+5. Write a plain Jsonnet dashboard object for new dashboards; do not import Grafonnet or use g.dashboard.new, g.panel.new, row.new, or with_* constructor chains.
+6. Render before syncing. Sync only when the user requested create/update/apply, not for draft or preview-only requests.
+7. For create/update requests, call sync_dashboard immediately after render_dashboard succeeds. Screenshots are optional after sync only.
 
 Output:
 - Datasource UID used.
 - Verified metrics and labels.
-- Panel plan with title, type, purpose, query, unit, legend, and grid position.
-- Variables and links, if useful; otherwise say none.
-- Plain Jsonnet draft or exact Jsonnet sections for the parent assistant to write.
+- Dashboard or panel changes made.
+- Render/sync status and dashboard UID/URL when applicable.
 - Caveats for missing metrics, high cardinality, or unvalidated assumptions.
+${TOOL_EXECUTION_PROTOCOL}`;
 
-Keep the final answer compact, specific, and directly usable by the parent assistant.`;
+const INVESTIGATION_AGENT_PROMPT = `You are the investigation-agent for a Grafana observability assistant.
+
+Scope:
+- Investigate incidents, failures, latency spikes, error spikes, degradations, and root-cause questions.
+- Define the scope: service, host, route, symptom, datasource UID, and time range when available.
+- Gather evidence with metric discovery, PromQL validation, and read-only SQL when relevant.
+- Use update_report early and at the final material summary for longer investigations. When the task or benchmark has a tight call budget, consolidate findings instead of updating after every minor check.
+- Keep hypotheses separate from evidence. Evidence must come from tool results or user-provided context.
+- Do not create dashboards or navigate unless the supervisor explicitly delegates that to another specialist.
+- For Prometheus-only incidents, prefer this compact sequence: list datasources if needed, one batched list_metrics call, one batched inspect_metric_series call, one batched query_prometheus call, then answer from the evidence.
+
+Output:
+- Current finding and confidence.
+- Evidence chain with tool-backed facts.
+- Ruled-out causes.
+- Remaining gaps.
+- Next checks or remediation.
+- Keep the final response concise. If the task requests bullets or a short summary, follow that exact shape; do not write a full report, tables, or long prose. The structured report is maintained with update_report and does not need to be repeated in chat.
+${TOOL_EXECUTION_PROTOCOL}`;
+
+const SUPPORT_AGENT_PROMPT = `You are the support-agent for a Grafana observability assistant.
+
+Scope:
+- Explain Grafana concepts, observability concepts, monitoring best practices, and the assistant's available workflow.
+- Use active skill resources when they are relevant.
+- Do not claim live documentation search, product features, or datasource evidence unless a tool result or user context provides it.
+- Do not run data queries, mutate dashboards, update investigation reports, or navigate.
+
+Output:
+- Clear, accurate guidance.
+- Concrete examples when useful.
+- Note when a query, dashboard, investigation, or navigation specialist would be needed for verification or action.
+${TOOL_EXECUTION_PROTOCOL}`;
+
+const NAVIGATION_AGENT_PROMPT = `You are the navigation-agent for a Grafana observability assistant.
+
+Scope:
+- Open safe Grafana-relative destinations using the navigate tool.
+- Support dashboard URLs, Prometheus Explore URLs, the Observability Analyst chat route, and explicitly supplied relative Grafana paths.
+- Do not run data queries, mutate dashboards, or update investigation reports.
+- If the destination is missing required identifiers, return the exact missing field instead of guessing.
+
+Output:
+- The destination opened or the link built.
+- Any required missing information.
+${TOOL_EXECUTION_PROTOCOL}`;

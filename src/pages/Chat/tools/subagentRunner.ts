@@ -1,8 +1,15 @@
-import type { AgentEvent, AgentMessage, AgentTool, AgentToolResult } from '@earendil-works/pi-agent-core';
+import {
+  Agent,
+  type AgentEvent,
+  type AgentMessage,
+  type AgentTool,
+  type AgentToolResult,
+} from '@earendil-works/pi-agent-core';
 import { textResult, truncateText, type TextToolResult } from './result';
 import type { GrafanaToolRuntime } from './types';
 
-export type SubagentKind = 'metrics' | 'dashboard-design' | 'jsonnet';
+export type AgentSpecialistKind = 'query' | 'dashboard' | 'investigation' | 'support' | 'navigation';
+export type SubagentKind = AgentSpecialistKind;
 export type SubagentRunStatus = 'running' | 'completed' | 'failed';
 
 export type SubagentToolCall = {
@@ -48,15 +55,22 @@ type RunSubagentOptions = {
   onUpdate?: (partialResult: TextToolResult<SubagentRunDetails>) => void;
 };
 
-const MAX_CHILD_TOOL_CALLS = 14;
+const CHILD_TOOL_CALL_LIMITS: Record<SubagentKind, number> = {
+  query: 14,
+  dashboard: 24,
+  investigation: 20,
+  support: 6,
+  navigation: 4,
+};
+const MAX_SPECIALIST_FOLLOW_UPS = 3;
 
-export async function runGrafanaSubagent(options: RunSubagentOptions): Promise<TextToolResult<SubagentRunDetails>> {
-  const { Agent } = await import('@earendil-works/pi-agent-core');
+export async function runSpecialistAgent(options: RunSubagentOptions): Promise<TextToolResult<SubagentRunDetails>> {
   const toolCalls = new Map<string, SubagentToolCall>();
   const usage = zeroUsage();
   const toolNames = options.tools.map((tool) => tool.name);
   let finalOutput = '';
   let lastTextUpdateAt = 0;
+  let followUpCount = 0;
 
   const details = (status: SubagentRunStatus, error?: string): SubagentRunDetails => ({
     type: 'subagent',
@@ -93,14 +107,15 @@ export async function runGrafanaSubagent(options: RunSubagentOptions): Promise<T
       tools: options.tools,
     },
     streamFn: options.runtime.streamFn,
-    beforeToolCall: async () => {
-      if (toolCalls.size >= MAX_CHILD_TOOL_CALLS) {
+    beforeToolCall: async (context, signal) => {
+      const toolCallLimit = CHILD_TOOL_CALL_LIMITS[options.kind];
+      if (toolCalls.size >= toolCallLimit) {
         return {
           block: true,
-          reason: `Subagent tool budget exhausted after ${MAX_CHILD_TOOL_CALLS} tool calls. Return a concise summary with what you found.`,
+          reason: `Specialist tool budget exhausted after ${toolCallLimit} tool calls. Return a concise summary with what you found.`,
         };
       }
-      return undefined;
+      return options.runtime.beforeToolCall?.(context, signal);
     },
   });
 
@@ -132,6 +147,13 @@ export async function runGrafanaSubagent(options: RunSubagentOptions): Promise<T
       event.type === 'tool_execution_end'
     ) {
       emitUpdate('running');
+    }
+    if (event.type === 'turn_end' && event.message.role === 'assistant' && event.toolResults.length === 0) {
+      const followUp = buildSpecialistFollowUp(options.kind, options.task, toolCalls, followUpCount);
+      if (followUp) {
+        followUpCount += 1;
+        child.followUp(followUp);
+      }
     }
   });
 
@@ -261,15 +283,95 @@ function subagentStatusText(
   return `${label} running. ${toolCallCount} tool call${toolCallCount === 1 ? '' : 's'} so far.`;
 }
 
-function subagentLabel(kind: SubagentKind) {
+export function specialistLabel(kind: SubagentKind) {
   switch (kind) {
-    case 'metrics':
-      return 'Metrics explorer';
-    case 'dashboard-design':
-      return 'Dashboard designer';
-    case 'jsonnet':
-      return 'Jsonnet explorer';
+    case 'query':
+      return 'Query agent';
+    case 'dashboard':
+      return 'Dashboard agent';
+    case 'investigation':
+      return 'Investigation agent';
+    case 'support':
+      return 'Support agent';
+    case 'navigation':
+      return 'Navigation agent';
   }
+}
+
+function subagentLabel(kind: SubagentKind) {
+  return specialistLabel(kind);
+}
+
+function buildSpecialistFollowUp(
+  kind: SubagentKind,
+  task: string,
+  toolCalls: Map<string, SubagentToolCall>,
+  followUpCount: number
+): AgentMessage | undefined {
+  if (kind !== 'dashboard' || !dashboardTaskRequiresSync(task) || followUpCount >= MAX_SPECIALIST_FOLLOW_UPS) {
+    return undefined;
+  }
+
+  if (hasSuccessfulToolCall(toolCalls, 'sync_dashboard')) {
+    return undefined;
+  }
+
+  const missing = missingDashboardCompletionSteps(toolCalls);
+  return {
+    role: 'user',
+    content: [
+      {
+        type: 'text',
+        text: [
+          'Continue this dashboard create/update task; it is incomplete until the managed dashboard is synced.',
+          `Missing successful steps: ${missing.join(', ')}.`,
+          'Use the verified datasource UID and metrics already gathered.',
+          'If no virtual Jsonnet source exists, call write_jsonnet with a self-contained plain Grafana dashboard object.',
+          'Then call render_dashboard, repair Jsonnet if render fails, and call sync_dashboard.',
+          'Do not report completion until sync_dashboard succeeds. If a required tool fails, return the exact failure.',
+        ].join('\n'),
+      },
+    ],
+    timestamp: Date.now(),
+  };
+}
+
+function dashboardTaskRequiresSync(task: string) {
+  const normalized = task.toLowerCase();
+  if (/\bintent:\s*review\b/.test(normalized)) {
+    return false;
+  }
+  if (/\b(draft|preview|plan only|design only|no-sync|no sync|do not sync|without syncing)\b/.test(normalized)) {
+    return false;
+  }
+  return (
+    /\bintent:\s*(create|update)\b/.test(normalized) ||
+    /\b(create|build|update|apply|sync)\b/.test(normalized)
+  );
+}
+
+function missingDashboardCompletionSteps(toolCalls: Map<string, SubagentToolCall>) {
+  const missing: string[] = [];
+  if (!hasAnySuccessfulToolCall(toolCalls, ['write_jsonnet', 'edit_jsonnet', 'fix_jsonnet'])) {
+    missing.push('write_jsonnet or edit_jsonnet');
+  }
+  if (!hasSuccessfulToolCall(toolCalls, 'render_dashboard')) {
+    missing.push('render_dashboard');
+  }
+  if (!hasSuccessfulToolCall(toolCalls, 'sync_dashboard')) {
+    missing.push('sync_dashboard');
+  }
+  return missing;
+}
+
+function hasAnySuccessfulToolCall(toolCalls: Map<string, SubagentToolCall>, names: string[]) {
+  return names.some((name) => hasSuccessfulToolCall(toolCalls, name));
+}
+
+function hasSuccessfulToolCall(toolCalls: Map<string, SubagentToolCall>, name: string) {
+  return Array.from(toolCalls.values()).some(
+    (call) => call.name === name && call.status === 'completed' && call.isError !== true
+  );
 }
 
 function zeroUsage(): SubagentUsage {

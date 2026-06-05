@@ -92,6 +92,12 @@ function makeListMetricsTool(toolConfig: GrafanaToolConfig): AgentTool {
         })
       ),
       prefix: Type.Optional(Type.String({ description: 'Optional metric-name prefix filter.' })),
+      prefixes: Type.Optional(
+        Type.Array(Type.String(), {
+          description:
+            'Batch of metric-name prefixes to inspect in one call. Prefer this when checking multiple related prefixes.',
+        })
+      ),
     }),
     async execute(_toolCallId, params, signal) {
       const args = params as ListMetricsParams;
@@ -101,15 +107,34 @@ function makeListMetricsTool(toolConfig: GrafanaToolConfig): AgentTool {
         ds,
         'api/v1/label/__name__/values'
       );
-      const metrics = (response.data ?? []).filter((name) => !args.prefix || name.startsWith(args.prefix));
-      const limited = metrics.slice(0, 1000);
-      const suffix =
-        metrics.length > limited.length ? `\n... ${metrics.length - limited.length} more metrics omitted` : '';
+      const metricNames = response.data ?? [];
+      const prefixes = listMetricPrefixes(args);
 
-      return textResult(`${limited.join('\n')}${suffix}`, {
+      if (prefixes.length > 1) {
+        const results = prefixes.map((prefix) => compactMetricNameList(metricNames, prefix));
+        const batch = {
+          datasourceUid: ds.uid,
+          prefixCount: prefixes.length,
+          results,
+        };
+
+        return textResult(truncateText(JSON.stringify(batch, null, 2), 40000), {
+          datasourceUid: ds.uid,
+          batch: true,
+          prefixes,
+          count: results.reduce((sum, result) => sum + result.count, 0),
+          truncated: results.some((result) => result.truncated),
+        });
+      }
+
+      const result = compactMetricNameList(metricNames, prefixes[0]);
+      const suffix = result.truncated ? `\n... ${result.count - result.metrics.length} more metrics omitted` : '';
+
+      return textResult(`${result.metrics.join('\n')}${suffix}`, {
         datasourceUid: ds.uid,
-        count: metrics.length,
-        truncated: metrics.length > limited.length,
+        prefix: result.prefix,
+        count: result.count,
+        truncated: result.truncated,
       });
     },
   };
@@ -168,41 +193,115 @@ function makeInspectMetricSeriesTool(toolConfig: GrafanaToolConfig): AgentTool {
           description: 'Prometheus datasource UID. Defaults to the first available Prometheus datasource.',
         })
       ),
-      match: Type.String({
-        description: 'Prometheus match[] selector, such as http_requests_total or http_requests_total{job="web"}.',
-      }),
+      match: Type.Optional(
+        Type.String({
+          description: 'Prometheus match[] selector, such as http_requests_total or http_requests_total{job="web"}.',
+        })
+      ),
+      matches: Type.Optional(
+        Type.Array(Type.String(), {
+          description:
+            'Batch of Prometheus match[] selectors to inspect in one call. Prefer this when checking multiple metrics.',
+        })
+      ),
       limit: Type.Optional(
-        Type.Number({ description: 'Maximum example series to return. Defaults to 20, maximum 100.' })
+        Type.Number({ description: 'Maximum example series per selector. Defaults to 20, maximum 100.' })
       ),
     }),
     async execute(_toolCallId, params, signal) {
       const args = params as InspectMetricSeriesParams;
       throwIfAborted(signal);
       const ds = await getPrometheusDatasource(toolConfig, args.datasourceUid);
-      const response = await getDatasourceResource<PrometheusMetadataResponse<Array<Record<string, string>>>>(
-        ds,
-        'api/v1/series',
-        {
-          'match[]': args.match,
-        }
-      );
-      const series = response.data ?? [];
+      const matches = metricSeriesMatches(args);
+      if (matches.length === 0) {
+        throw new Error('inspect_metric_series requires match or matches.');
+      }
       const limit = clampInt(args.limit ?? 20, 1, 100);
-      const examples = series.slice(0, limit);
-      const labelNames = Array.from(
-        new Set(series.flatMap((item) => Object.keys(item)).filter((name) => name !== '__name__'))
-      ).sort();
-      const result = {
+      const inspections = await Promise.all(
+        matches.slice(0, 10).map(async (match) => {
+          throwIfAborted(signal);
+          return inspectMetricSeries(ds, match, limit);
+        })
+      );
+
+      if (inspections.length === 1) {
+        return textResult(JSON.stringify(inspections[0], null, 2), inspections[0]);
+      }
+
+      const batch = {
         datasourceUid: ds.uid,
-        match: args.match,
-        labelNames,
-        totalSeries: series.length,
-        truncated: series.length > examples.length,
-        examples,
+        matchCount: matches.length,
+        truncatedMatches: matches.length > inspections.length,
+        results: inspections,
       };
 
-      return textResult(JSON.stringify(result, null, 2), result);
+      return textResult(truncateText(JSON.stringify(batch, null, 2), 40000), {
+        datasourceUid: ds.uid,
+        batch: true,
+        matches: matches.length,
+        truncatedMatches: batch.truncatedMatches,
+        totalSeries: inspections.reduce((sum, result) => sum + result.totalSeries, 0),
+        truncated: inspections.some((result) => result.truncated),
+      });
     },
+  };
+}
+
+function listMetricPrefixes(args: ListMetricsParams) {
+  const prefixes = Array.isArray(args.prefixes)
+    ? args.prefixes.filter((prefix) => typeof prefix === 'string' && prefix.trim()).map((prefix) => prefix.trim())
+    : [];
+  if (typeof args.prefix === 'string' && args.prefix.trim()) {
+    prefixes.unshift(args.prefix.trim());
+  }
+
+  return Array.from(new Set(prefixes)).slice(0, 20);
+}
+
+function compactMetricNameList(metricNames: string[], prefix?: string) {
+  const metrics = metricNames.filter((name) => !prefix || name.startsWith(prefix));
+  const limited = metrics.slice(0, 1000);
+
+  return {
+    prefix,
+    count: metrics.length,
+    truncated: metrics.length > limited.length,
+    metrics: limited,
+  };
+}
+
+function metricSeriesMatches(args: InspectMetricSeriesParams) {
+  const matches = Array.isArray(args.matches)
+    ? args.matches.filter((match) => typeof match === 'string' && match.trim()).map((match) => match.trim())
+    : [];
+  if (typeof args.match === 'string' && args.match.trim()) {
+    matches.unshift(args.match.trim());
+  }
+
+  return Array.from(new Set(matches)).slice(0, 20);
+}
+
+async function inspectMetricSeries(ds: ResourceCapableDataSource, match: string, limit: number) {
+  const response = await getDatasourceResource<PrometheusMetadataResponse<Array<Record<string, string>>>>(
+    ds,
+    'api/v1/series',
+    {
+      'match[]': match,
+    }
+  );
+  const series = response.data ?? [];
+  const examples = series.slice(0, limit);
+  const labelNames = Array.from(
+    new Set(series.flatMap((item) => Object.keys(item)).filter((name) => name !== '__name__'))
+  ).sort();
+
+  return {
+    datasourceUid: ds.uid,
+    match,
+    labelNames,
+    totalSeries: series.length,
+    truncated: series.length > examples.length,
+    examples,
   };
 }
 
@@ -257,7 +356,7 @@ function makeQueryPrometheusTool(toolConfig: GrafanaToolConfig): AgentTool {
       }
 
       if (querySpecs.length === 1) {
-        const summary = await runPrometheusQuerySummary(ds, querySpecs[0]);
+        const summary = await runPrometheusQuerySummaryOrValidationError(ds, querySpecs[0], signal);
         const result = truncateText(JSON.stringify(summary, null, 2), 40000);
 
         return textResult(result, {
@@ -269,25 +368,32 @@ function makeQueryPrometheusTool(toolConfig: GrafanaToolConfig): AgentTool {
           totalSeries: summary.totalSeries,
           truncatedSeries: summary.truncatedSeries,
           summarized: true,
+          validationError: summary.validationError,
           ...prometheusVisualizationDetails(summary),
         });
       }
 
-      const results: PrometheusQuerySummary[] = [];
-      for (const querySpec of querySpecs.slice(0, 10)) {
-        throwIfAborted(signal);
-        results.push(compactBatchPrometheusSummary(await runPrometheusQuerySummary(ds, querySpec)));
-      }
+      const limitedQuerySpecs = querySpecs.slice(0, 10);
+      const results = await Promise.all(
+        limitedQuerySpecs.map(async (querySpec) => {
+          throwIfAborted(signal);
+          return compactBatchPrometheusSummary(await runPrometheusQuerySummaryOrValidationError(ds, querySpec, signal));
+        })
+      );
+      throwIfAborted(signal);
+      const failedQueries = results.filter((summary) => summary.validationError).length;
       const batch = {
         datasourceUid: ds.uid,
         queryCount: querySpecs.length,
         truncatedQueries: querySpecs.length > results.length,
+        failedQueries,
         results,
       };
 
       return textResult(truncateText(JSON.stringify(batch, null, 2), 40000), {
         datasourceUid: ds.uid,
         queries: querySpecs.length,
+        failedQueries,
         summarized: true,
         batch: true,
       });
@@ -351,6 +457,23 @@ function querySpecsFromParams(args: QueryPrometheusParams): PrometheusQuerySpec[
     : [];
 }
 
+type PrometheusQueryValidationSummary = PrometheusQuerySummary & {
+  validationError?: string;
+};
+
+async function runPrometheusQuerySummaryOrValidationError(
+  ds: ResourceCapableDataSource,
+  querySpec: PrometheusQuerySpec,
+  signal?: AbortSignal
+): Promise<PrometheusQueryValidationSummary> {
+  try {
+    return await runPrometheusQuerySummary(ds, querySpec);
+  } catch (error) {
+    throwIfAborted(signal);
+    return failedPrometheusQuerySummary(ds, querySpec, error);
+  }
+}
+
 async function runPrometheusQuerySummary(
   ds: ResourceCapableDataSource,
   querySpec: PrometheusQuerySpec
@@ -369,6 +492,37 @@ async function runPrometheusQuerySummary(
     timeRange,
     frames,
   });
+}
+
+function failedPrometheusQuerySummary(
+  ds: ResourceCapableDataSource,
+  querySpec: PrometheusQuerySpec,
+  error: unknown
+): PrometheusQueryValidationSummary {
+  const queryType = querySpec.type ?? 'instant';
+  const timeRange =
+    queryType === 'range' ? makeTimeRange(querySpec.start ?? 'now-1h', querySpec.end ?? 'now') : getDefaultTimeRange();
+  const interval = queryType === 'range' ? chooseRangeInterval(timeRange) : '1m';
+  const message = error instanceof Error ? error.message : String(error);
+
+  return {
+    datasourceUid: ds.uid,
+    query: querySpec.query,
+    queryType,
+    interval,
+    range: {
+      from: timeRange.from.toISOString(),
+      to: timeRange.to.toISOString(),
+      raw: timeRange.raw,
+    },
+    frameCount: 0,
+    totalSeries: 0,
+    truncatedSeries: false,
+    notices: [{ severity: 'error', text: message }],
+    executedQueryStrings: [],
+    series: [],
+    validationError: message,
+  };
 }
 
 function getPrometheusDatasourceSettings(toolConfig: GrafanaToolConfig) {
@@ -657,7 +811,7 @@ function summarizeNumberField(frame: DataFrame, field: Field, timeField?: Field)
   return summary;
 }
 
-function compactBatchPrometheusSummary(summary: PrometheusQuerySummary): PrometheusQuerySummary {
+function compactBatchPrometheusSummary(summary: PrometheusQueryValidationSummary): PrometheusQueryValidationSummary {
   const selected = selectProminentSeries(summary.series, MAX_BATCH_SERIES_SUMMARIES);
 
   return {
@@ -698,7 +852,9 @@ function selectProminentSeries(
   }
 
   const selected = [...selectedIndexes]
-    .sort((left, right) => seriesCompositeScore(allSeries[right]) - seriesCompositeScore(allSeries[left]) || left - right)
+    .sort(
+      (left, right) => seriesCompositeScore(allSeries[right]) - seriesCompositeScore(allSeries[left]) || left - right
+    )
     .map((index) => allSeries[index]);
   const omitted = allSeries.filter((_series, index) => !selectedIndexes.has(index));
 

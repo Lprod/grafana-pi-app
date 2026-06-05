@@ -3,7 +3,7 @@
 Observability Analyst adds an LLM analyst to Grafana for metric exploration, PromQL validation, read-only rqlite SQL, and dashboard authoring.
 
 The assistant uses the current Grafana user's datasource and dashboard permissions. LLM requests are proxied through the app plugin backend with an OpenAI-compatible API key stored in secure plugin settings.
-The default chat toolset keeps `explore_metrics` available for broad metric reconnaissance and `design_dashboard` available for design-only dashboard planning. Dashboard writes stay in the parent assistant; no Jsonnet writer subagent is exposed.
+The default chat toolset exposes supervisor delegation tools (`run_query_agent`, `run_dashboard_agent`, `run_investigation_agent`, `run_support_agent`, and `run_navigation_agent`). Specialist agents receive the direct Grafana tools they need for their domain; dashboard writes still require the existing in-chat confirmation before syncing, uploading, or deleting persistent Grafana artifacts.
 
 ## Requirements
 

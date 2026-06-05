@@ -5,6 +5,7 @@ import { createJsonnetLibTools } from './jsonnetLibs';
 import { createInvestigationTools } from './investigation';
 import { createManagedDashboardTools } from './managedDashboards';
 import { createMetricTools, filterAllowedPrometheusDatasourceSettings } from './metrics';
+import { createNavigationTools } from './navigation';
 import { createRqliteTools, filterAllowedRqliteDatasourceSettings } from './rqlite';
 import { createSubagentTools } from './subagents';
 import type { CreateGrafanaToolsOptions, GrafanaToolRegistry, SkillToolGroup } from './types';
@@ -15,6 +16,7 @@ export { getUnavailableDashboardDatasourceUids } from './dashboardPolicy';
 export { DEFAULT_JSONNET_FILE_PATH, normalizeJsonnetPath } from './jsonnetFiles';
 export { filterAllowedPrometheusDatasourceSettings, filterAllowedRqliteDatasourceSettings };
 export { createSkillTools } from './skills';
+export { buildNavigationPath } from './navigation';
 export type {
   CreateGrafanaToolsOptions,
   GrafanaToolConfig,
@@ -37,15 +39,20 @@ export function createGrafanaToolRegistry(options: CreateGrafanaToolsOptions = {
   const managedDashboards = createManagedDashboardTools(options);
   const investigation = createInvestigationTools(options.investigationReport);
   const jsonnet = createJsonnetLibTools();
+  const navigation = createNavigationTools();
   const parentManagedDashboardTools = managedDashboards.all;
   const skills = options.skillTools ?? [];
   const subagents = options.runtime
     ? createSubagentTools({
         runtime: options.runtime,
         metricsTools: metrics,
+        rqliteTools: rqlite,
         dashboardReadTools,
+        jsonnetFileTools: jsonnetFiles.all,
+        managedDashboardTools: managedDashboards.all,
+        investigationTools: investigation,
+        navigationTools: navigation,
         skillTools: skills,
-        includeMetrics: options.includeMetricsSubagentTool !== false,
       })
     : [];
 
@@ -75,6 +82,10 @@ export function createGrafanaToolRegistry(options: CreateGrafanaToolsOptions = {
 
 export function createGrafanaTools(options: CreateGrafanaToolsOptions = {}): AgentTool[] {
   return createGrafanaToolRegistry(options).all;
+}
+
+export function createGrafanaSupervisorTools(options: CreateGrafanaToolsOptions = {}): AgentTool[] {
+  return createGrafanaToolRegistry(options).subagents;
 }
 
 export function createGrafanaToolsForSkillGroups(

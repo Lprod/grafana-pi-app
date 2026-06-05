@@ -10,8 +10,8 @@ Use this skill when the user asks for a dashboard, panel, row, variable, Jsonnet
 ## Operating Rules
 
 - Treat dashboard generation as a persistent artifact. Only create or update dashboard files when the user explicitly asks for a dashboard or dashboard change.
-- For non-trivial create, update, or review work, call `design_dashboard` first and use its design brief as the source of truth before writing Jsonnet.
-- Inspect available metrics before selecting panel queries. Use `design_dashboard` for dashboard-level planning and `explore_metrics` for narrow metric reconnaissance.
+- For create, update, review, render, or sync work, call `run_dashboard_agent`; it owns the dashboard workflow and the session virtual Jsonnet file.
+- Inspect available metrics before selecting panel queries. Use `run_dashboard_agent` for dashboard-level planning and `run_query_agent` for narrow metric reconnaissance.
 - Prefer managed Jsonnet dashboards for durable changes.
 - Use dashboard read tools to inspect existing dashboards before updating them when the user references an existing dashboard.
 - Keep generated dashboards focused. A small useful dashboard is better than a broad dashboard with speculative panels.
@@ -19,11 +19,11 @@ Use this skill when the user asks for a dashboard, panel, row, variable, Jsonnet
 
 ## Jsonnet Workflow
 
-1. Call `design_dashboard` with the user task, known datasource UID, existing dashboard UID, and intent when available.
-2. Use the returned panel plan, validated PromQL, layout, and Jsonnet draft to write or edit the session virtual Jsonnet file.
-3. For new dashboards, write a self-contained plain Jsonnet object that evaluates directly to a Grafana dashboard object.
-4. Render the dashboard after writing.
-5. Sync the rendered dashboard for create or update requests unless the user explicitly asked for a draft or preview only.
+1. Call `run_dashboard_agent` with the user task, known datasource UID, existing dashboard UID, and intent when available.
+2. Let the dashboard agent inspect metrics and existing dashboards, then write or edit the session virtual Jsonnet file.
+3. For new dashboards, the dashboard agent should write a self-contained plain Jsonnet object that evaluates directly to a Grafana dashboard object.
+4. The dashboard agent should render the dashboard after writing.
+5. The dashboard agent should sync the rendered dashboard for create or update requests unless the user explicitly asked for a draft or preview only.
 
 ## Jsonnet Rules
 

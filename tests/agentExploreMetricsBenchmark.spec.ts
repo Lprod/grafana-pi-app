@@ -6,9 +6,9 @@ import { testIds } from '../src/components/testIds';
 import type { Page } from '@playwright/test';
 
 const BENCHMARK_PROMPT = [
-  'Use exactly one explore_metrics tool call to discover the demo Prometheus metrics for HTTP request errors, HTTP latency histograms, node load, and CPU usage.',
-  'Do not call list_datasources, list_metrics, inspect_metric_series, list_label_values, query_prometheus, or any dashboard tool directly; this benchmark is measuring explore_metrics as the only top-level tool call.',
-  'Call explore_metrics with this task: Find HTTP error rate (500s), latency, node_load1, and CPU usage metrics in the default Prometheus datasource. Search by prefixes http, node_load, and node_cpu. List exact metric names and labels for HTTP requests by status code, route, and vm; histogram latency by route and vm; node load; and CPU utilization. Validate candidate PromQL with query_prometheus before returning.',
+  'Use exactly one run_query_agent tool call to discover the demo Prometheus metrics for HTTP request errors, HTTP latency histograms, node load, and CPU usage.',
+  'Do not call list_datasources, list_metrics, inspect_metric_series, list_label_values, query_prometheus, or any dashboard tool directly; this benchmark is measuring run_query_agent as the only top-level tool call.',
+  'Call run_query_agent with this task: Find HTTP error rate (500s), latency, node_load1, and CPU usage metrics in the default Prometheus datasource. Search by prefixes http, node_load, and node_cpu. List exact metric names and labels for HTTP requests by status code, route, and vm; histogram latency by route and vm; node load; and CPU utilization. Validate candidate PromQL with query_prometheus before returning.',
   'After the tool returns, answer with exactly four short bullets: metric coverage, labels/values, useful PromQL, caveats.',
   'Do not create, render, sync, upload, or modify dashboards.',
 ].join(' ');
@@ -75,22 +75,40 @@ type BenchmarkUsage = {
   cost: number;
 };
 
+type LiveBenchmarkState = {
+  toolStarts: Map<string, BenchmarkEvent>;
+  toolUpdates: Map<string, string>;
+};
+
 test.describe.configure({ mode: 'serial' });
 test.setTimeout(readPositiveInteger(process.env.BENCH_TEST_TIMEOUT_MS, DEFAULT_TIMEOUT_MS + 60_000));
 
-test.describe('agent explore metrics benchmark', () => {
-  test('uses explore_metrics to discover demo Prometheus metrics', async ({ gotoPage, page }, testInfo) => {
+test.describe('agent query specialist benchmark', () => {
+  test('uses run_query_agent to discover demo Prometheus metrics', async ({ gotoPage, page }, testInfo) => {
     const timeoutMs = readPositiveInteger(process.env.BENCH_TIMEOUT_MS, DEFAULT_TIMEOUT_MS);
+    const liveState: LiveBenchmarkState = {
+      toolStarts: new Map(),
+      toolUpdates: new Map(),
+    };
+
+    await page.exposeFunction('__PI_AGENT_BENCHMARK_STREAM_EVENT__', (event: BenchmarkEvent) => {
+      const line = formatLiveBenchmarkEvent(event, liveState);
+      if (line) {
+        console.log(line);
+      }
+    });
 
     await page.addInitScript(() => {
       const benchmarkWindow = window as typeof window & {
         __PI_AGENT_BENCHMARK_EVENTS__?: unknown[];
         __PI_AGENT_BENCHMARK_RECORD_EVENT__?: (event: unknown) => void;
+        __PI_AGENT_BENCHMARK_STREAM_EVENT__?: (event: unknown) => Promise<void>;
       };
 
       benchmarkWindow.__PI_AGENT_BENCHMARK_EVENTS__ = [];
       benchmarkWindow.__PI_AGENT_BENCHMARK_RECORD_EVENT__ = (event: unknown) => {
         benchmarkWindow.__PI_AGENT_BENCHMARK_EVENTS__?.push(event);
+        void benchmarkWindow.__PI_AGENT_BENCHMARK_STREAM_EVENT__?.(event);
       };
     });
 
@@ -144,17 +162,17 @@ test.describe('agent explore metrics benchmark', () => {
     console.log(report);
 
     if (timedOut) {
-      throw new Error(`Agent explore_metrics benchmark timed out after ${timeoutMs}ms.`);
+      throw new Error(`Agent run_query_agent benchmark timed out after ${timeoutMs}ms.`);
     }
 
     const finalAssistantError = findFinalAssistantError(events);
     if (finalAssistantError) {
-      throw new Error(`Agent explore_metrics benchmark ended with assistant error: ${finalAssistantError}`);
+      throw new Error(`Agent run_query_agent benchmark ended with assistant error: ${finalAssistantError}`);
     }
 
     const qualityError = findExploreMetricsQualityError(events);
     if (qualityError) {
-      throw new Error(`Agent explore_metrics benchmark failed quality gate: ${qualityError}`);
+      throw new Error(`Agent run_query_agent benchmark failed quality gate: ${qualityError}`);
     }
   });
 });
@@ -166,6 +184,65 @@ async function readBenchmarkEvents(page: Page): Promise<BenchmarkEvent[]> {
   });
 }
 
+function formatLiveBenchmarkEvent(event: BenchmarkEvent, state: LiveBenchmarkState) {
+  if (event.type === 'tool_execution_start' && event.toolCallId && event.toolName) {
+    state.toolStarts.set(event.toolCallId, event);
+    return `[query-benchmark:live] tool_start ${event.toolName} args=${summarizeJson(event.args)}`;
+  }
+
+  if (event.type === 'tool_execution_update' && event.toolCallId && event.toolName) {
+    const nestedCalls = extractNestedToolCallCount(event.partialResult);
+    const resultText = truncateOneLine(extractResultText(event.partialResult) ?? '', 240);
+    if (nestedCalls === undefined && !resultText) {
+      return undefined;
+    }
+
+    const updateKey = `${nestedCalls ?? ''}|${resultText}`;
+    if (state.toolUpdates.get(event.toolCallId) === updateKey) {
+      return undefined;
+    }
+    state.toolUpdates.set(event.toolCallId, updateKey);
+
+    const parts = [`[query-benchmark:live] tool_update ${event.toolName}`];
+    if (nestedCalls !== undefined) {
+      parts.push(`nested=${nestedCalls}`);
+    }
+    if (resultText) {
+      parts.push(`text=${resultText}`);
+    }
+    return parts.join(' ');
+  }
+
+  if (event.type === 'tool_execution_end' && event.toolCallId && event.toolName) {
+    const start = state.toolStarts.get(event.toolCallId);
+    const duration = start ? formatDuration(event.timestamp - start.timestamp) : 'unknown';
+    const status = event.isError ? 'failed' : 'completed';
+    const nestedCalls = extractNestedToolCallCount(event.result);
+    const resultText = truncateOneLine(extractResultText(event.result) ?? '', event.isError ? 600 : 240);
+    const parts = [`[query-benchmark:live] tool_end ${event.toolName} ${status} duration=${duration}`];
+    if (nestedCalls !== undefined) {
+      parts.push(`nested=${nestedCalls}`);
+    }
+    if (resultText) {
+      parts.push(event.isError ? `error=${resultText}` : `text=${resultText}`);
+    }
+    return parts.join(' ');
+  }
+
+  if (event.type === 'message_end' && event.message?.role === 'assistant') {
+    const error = event.message.errorMessage;
+    if (typeof error === 'string' && error) {
+      return `[query-benchmark:live] assistant_error ${truncateOneLine(error, 600)}`;
+    }
+  }
+
+  if (event.type === 'agent_end') {
+    return '[query-benchmark:live] agent_end';
+  }
+
+  return undefined;
+}
+
 function formatBenchmarkReport(
   events: BenchmarkEvent[],
   options: { promptStartedAt: number; timeoutMs: number; timedOut: boolean; finalAnswer: string }
@@ -174,7 +251,7 @@ function formatBenchmarkReport(
   const agentEnd = [...events].reverse().find((event) => event.type === 'agent_end')?.timestamp;
   const elapsedMs = (agentEnd ?? Date.now()) - agentStart;
   const toolCalls = summarizeToolCalls(events);
-  const exploreCall = toolCalls.find((call) => call.name === 'explore_metrics');
+  const exploreCall = toolCalls.find((call) => call.name === 'run_query_agent');
   const toolWallMs = toolCalls.reduce((total, call) => total + (call.durationMs ?? 0), 0);
   const firstToolStart = toolCalls[0]?.startedAt;
   const assistantTurns = events.filter(
@@ -188,22 +265,22 @@ function formatBenchmarkReport(
   const nestedErrors = nestedCalls.filter((call) => call.isError || call.status === 'failed').length;
   const lines = [
     '',
-    'Agent explore_metrics benchmark report',
+    'Agent run_query_agent benchmark report',
     `Prompt: ${BENCHMARK_PROMPT}`,
     `Grafana URL: ${process.env.GRAFANA_URL ?? 'http://localhost:3000'}`,
     `Model URL: ${process.env.BENCH_LLM_BASE_URL ?? 'http://127.0.0.1:8080/v1'}`,
     `Timeout: ${formatDuration(options.timeoutMs)}`,
-    `Explore max duration: ${formatDuration(readPositiveInteger(process.env.BENCH_EXPLORE_MAX_TOOL_MS, DEFAULT_EXPLORE_MAX_TOOL_MS))}`,
-    `Explore max nested calls: ${readPositiveInteger(process.env.BENCH_EXPLORE_MAX_NESTED_CALLS, DEFAULT_EXPLORE_MAX_NESTED_CALLS)}`,
+    `Query agent max duration: ${formatDuration(readPositiveInteger(process.env.BENCH_EXPLORE_MAX_TOOL_MS, DEFAULT_EXPLORE_MAX_TOOL_MS))}`,
+    `Query agent max nested calls: ${readPositiveInteger(process.env.BENCH_EXPLORE_MAX_NESTED_CALLS, DEFAULT_EXPLORE_MAX_NESTED_CALLS)}`,
     `Status: ${options.timedOut ? 'timed out' : finalAssistantError ? 'failed' : 'completed'}`,
     `Elapsed: ${formatDuration(elapsedMs)}`,
     `Time to first tool: ${firstToolStart ? formatDuration(firstToolStart - agentStart) : 'none'}`,
     `Tool wall time: ${formatDuration(toolWallMs)}`,
     `Non-tool time: ${formatDuration(Math.max(0, elapsedMs - toolWallMs))}`,
-    `Explore duration: ${exploreCall?.durationMs === undefined ? 'missing' : formatDuration(exploreCall.durationMs)}`,
-    `Explore nested calls: ${nestedCalls.length}`,
-    `Explore nested errors: ${nestedErrors}`,
-    `Explore nested tools: ${formatToolNameCounts(nestedCalls)}`,
+    `Query agent duration: ${exploreCall?.durationMs === undefined ? 'missing' : formatDuration(exploreCall.durationMs)}`,
+    `Query agent nested calls: ${nestedCalls.length}`,
+    `Query agent nested errors: ${nestedErrors}`,
+    `Query agent nested tools: ${formatToolNameCounts(nestedCalls)}`,
     `Assistant turns: ${assistantTurns}`,
     `Messages: ${messageCount ?? 'unknown'}`,
     `Token usage: input=${usage.input}, output=${usage.output}, cacheRead=${usage.cacheRead}, cacheWrite=${usage.cacheWrite}, total=${usage.totalTokens}`,
@@ -247,7 +324,7 @@ function formatBenchmarkReport(
   }
 
   if (exploreCall?.resultText?.trim()) {
-    lines.push('', 'Explore result excerpt', truncateReportText(exploreCall.resultText, 2500));
+    lines.push('', 'Query agent result excerpt', truncateReportText(exploreCall.resultText, 2500));
   }
 
   if (options.finalAnswer.trim()) {
@@ -331,24 +408,24 @@ async function writeBenchmarkArtifacts(events: BenchmarkEvent[], report: string,
 
 function findExploreMetricsQualityError(events: BenchmarkEvent[]) {
   const toolCalls = summarizeToolCalls(events);
-  const exploreCalls = toolCalls.filter((call) => call.name === 'explore_metrics');
+  const exploreCalls = toolCalls.filter((call) => call.name === 'run_query_agent');
   if (exploreCalls.length !== 1) {
-    return `expected exactly one top-level explore_metrics call, got ${exploreCalls.length}`;
+    return `expected exactly one top-level run_query_agent call, got ${exploreCalls.length}`;
   }
 
-  const unexpectedTopLevelCall = toolCalls.find((call) => call.name !== 'explore_metrics');
+  const unexpectedTopLevelCall = toolCalls.find((call) => call.name !== 'run_query_agent');
   if (unexpectedTopLevelCall) {
     return `unexpected top-level tool call: ${unexpectedTopLevelCall.name}`;
   }
 
   const exploreCall = exploreCalls[0];
   if (exploreCall.status !== 'completed' || exploreCall.isError) {
-    return 'explore_metrics did not complete successfully';
+    return 'run_query_agent did not complete successfully';
   }
 
   const maxToolMs = readPositiveInteger(process.env.BENCH_EXPLORE_MAX_TOOL_MS, DEFAULT_EXPLORE_MAX_TOOL_MS);
   if ((exploreCall.durationMs ?? Number.POSITIVE_INFINITY) > maxToolMs) {
-    return `explore_metrics exceeded ${formatDuration(maxToolMs)} duration budget`;
+    return `run_query_agent exceeded ${formatDuration(maxToolMs)} duration budget`;
   }
 
   const nestedCalls = exploreCall.nestedToolCalls ?? [];
@@ -357,10 +434,10 @@ function findExploreMetricsQualityError(events: BenchmarkEvent[]) {
     DEFAULT_EXPLORE_MAX_NESTED_CALLS
   );
   if (nestedCalls.length === 0) {
-    return 'explore_metrics did not report nested tool calls';
+    return 'run_query_agent did not report nested tool calls';
   }
   if (nestedCalls.length > maxNestedCalls) {
-    return `explore_metrics used ${nestedCalls.length} nested calls, over budget ${maxNestedCalls}`;
+    return `run_query_agent used ${nestedCalls.length} nested calls, over budget ${maxNestedCalls}`;
   }
 
   const nestedError = nestedCalls.find((call) => call.isError || call.status === 'failed');
@@ -371,7 +448,7 @@ function findExploreMetricsQualityError(events: BenchmarkEvent[]) {
   const nestedNames = new Set(nestedCalls.map((call) => call.name));
   for (const required of ['list_metrics', 'inspect_metric_series', 'query_prometheus']) {
     if (!nestedNames.has(required)) {
-      return `explore_metrics did not use nested ${required}`;
+      return `run_query_agent did not use nested ${required}`;
     }
   }
 
@@ -395,7 +472,7 @@ function findExploreMetricsQualityError(events: BenchmarkEvent[]) {
   ];
   const missing = expectations.filter((expectation) => !expectation.pattern.test(evidenceText));
   if (missing.length > 0) {
-    return `explore_metrics evidence is missing ${missing.map((item) => item.label).join(', ')}`;
+    return `run_query_agent evidence is missing ${missing.map((item) => item.label).join(', ')}`;
   }
 
   return undefined;
@@ -445,6 +522,10 @@ function extractNestedToolCalls(result: unknown): NestedToolCallSummary[] | unde
       args: record?.args,
     };
   });
+}
+
+function extractNestedToolCallCount(result: unknown) {
+  return extractNestedToolCalls(result)?.length;
 }
 
 function extractResultText(result: unknown) {
@@ -539,6 +620,11 @@ function formatDuration(ms: number) {
     return `${ms}ms`;
   }
   return `${(ms / 1000).toFixed(1)}s`;
+}
+
+function truncateOneLine(value: string, maxLength: number) {
+  const oneLine = value.replace(/\s+/g, ' ').trim();
+  return oneLine.length > maxLength ? `${oneLine.slice(0, maxLength)}...` : oneLine;
 }
 
 function formatNestedToolCall(call: NestedToolCallSummary) {
