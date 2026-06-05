@@ -1268,6 +1268,7 @@ function renderStructuredToolResult(
   content: unknown,
   args?: unknown
 ): React.ReactNode | undefined {
+  const artifactResult = asArtifactResult(details);
   const datasources = asDatasourceResult(toolName, details, content);
   if (datasources) {
     return <DatasourceResultView datasources={datasources} />;
@@ -1276,6 +1277,11 @@ function renderStructuredToolResult(
   const lineList = asLineListResult(toolName, details, content);
   if (lineList) {
     return <LineListResultView result={lineList} />;
+  }
+
+  const rqliteQuery = asRqliteQuerySummary(toolName, details, content);
+  if (rqliteQuery) {
+    return <RqliteQueryResultView result={rqliteQuery} />;
   }
 
   const metricSeries = asMetricSeriesInspection(toolName, details, content);
@@ -1309,20 +1315,25 @@ function renderStructuredToolResult(
 
   const rawPrometheusQuery = asRawPrometheusQuery(toolName, details);
   if (rawPrometheusQuery) {
-    return <RawPrometheusQueryResultView content={content} result={rawPrometheusQuery} />;
+    return <RawPrometheusQueryResultView content={artifactResult ? undefined : content} result={rawPrometheusQuery} />;
   }
 
   const screenshot = asScreenshotResult(toolName, details);
   if (screenshot) {
-    return <ScreenshotResultView content={content} result={screenshot} />;
+    return <ScreenshotResultView content={artifactResult ? undefined : content} result={screenshot} />;
   }
 
-  const dashboardList = asDashboardList(toolName, content);
+  const bootstrapSummary = asDashboardBootstrapSummary(toolName, details, content, Boolean(artifactResult));
+  if (bootstrapSummary) {
+    return <DashboardBootstrapSummaryView result={bootstrapSummary} />;
+  }
+
+  const dashboardList = asDashboardList(toolName, details, content);
   if (dashboardList) {
     return <DashboardListView result={dashboardList} />;
   }
 
-  const managedDashboardList = asManagedDashboardList(toolName, content);
+  const managedDashboardList = asManagedDashboardList(toolName, details, content);
   if (managedDashboardList) {
     return <ManagedDashboardListView result={managedDashboardList} />;
   }
@@ -1449,6 +1460,113 @@ function LineListResultView({ result }: { result: LineListResult }) {
       </div>
     </div>
   );
+}
+
+type RqliteQuerySummaryView = {
+  datasourceUid?: string;
+  sql: string;
+  frameCount: number;
+  rowCount: number;
+  truncated: boolean;
+  frames: RqliteFrameSummaryView[];
+  contentAvailable: boolean;
+};
+
+type RqliteFrameSummaryView = {
+  name?: string;
+  rowCount: number;
+  truncated: boolean;
+  columns: RqliteColumnSummaryView[];
+  rows: Array<Record<string, unknown>>;
+};
+
+type RqliteColumnSummaryView = {
+  name: string;
+  type?: string;
+};
+
+function RqliteQueryResultView({ result }: { result: RqliteQuerySummaryView }) {
+  const styles = useStyles2(getToolStyles);
+  const summaryParts = [
+    `${formatCount(result.rowCount)} ${result.rowCount === 1 ? 'row' : 'rows'}`,
+    `${formatCount(result.frameCount)} ${result.frameCount === 1 ? 'frame' : 'frames'}`,
+    result.truncated ? 'truncated' : undefined,
+  ].filter(Boolean);
+
+  return (
+    <div className={styles.structuredResult}>
+      <div className={styles.resultSummary}>{summaryParts.join(' | ')}</div>
+      <ResultMetaGrid
+        items={[
+          { label: 'Datasource', value: result.datasourceUid },
+          { label: 'Rows', value: formatCount(result.rowCount) },
+          { label: 'Frames', value: formatCount(result.frameCount) },
+          { label: 'Shown', value: result.truncated ? 'truncated' : undefined },
+        ]}
+      />
+      <pre className={styles.queryBlock}>{result.sql}</pre>
+      {!result.contentAvailable && (
+        <div className={styles.emptyState}>The SQL query completed, but row-level preview data was unavailable.</div>
+      )}
+      {result.frames.map((frame, index) => (
+        <RqliteFrameView frame={frame} index={index} key={`${frame.name ?? 'frame'}:${index}`} />
+      ))}
+    </div>
+  );
+}
+
+function RqliteFrameView({ frame, index }: { frame: RqliteFrameSummaryView; index: number }) {
+  const styles = useStyles2(getToolStyles);
+  const columns = rqliteFrameColumns(frame);
+  const title = frame.name || `Frame ${index + 1}`;
+
+  return (
+    <details className={styles.collapsible} open={index === 0}>
+      <summary>
+        {title} | {formatCount(frame.rowCount)} {frame.rowCount === 1 ? 'row' : 'rows'}
+        {frame.truncated ? ' | truncated' : ''}
+      </summary>
+      {columns.length === 0 || frame.rows.length === 0 ? (
+        <div className={styles.emptyState}>No rows in this frame.</div>
+      ) : (
+        <div className={styles.tableWrap}>
+          <table className={cx(styles.dataTable, styles.wideTable)}>
+            <thead>
+              <tr>
+                {columns.map((column) => (
+                  <th key={column.name} title={column.type}>
+                    {column.name}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {frame.rows.map((row, rowIndex) => (
+                <tr key={rowIndex}>
+                  {columns.map((column) => {
+                    const value = formatTableCellValue(row[column.name]);
+                    return (
+                      <td className={styles.textClip} key={column.name} title={value}>
+                        {value}
+                      </td>
+                    );
+                  })}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </details>
+  );
+}
+
+function rqliteFrameColumns(frame: RqliteFrameSummaryView): RqliteColumnSummaryView[] {
+  if (frame.columns.length > 0) {
+    return frame.columns;
+  }
+
+  return Array.from(new Set(frame.rows.flatMap((row) => Object.keys(row)))).map((name) => ({ name }));
 }
 
 type MetricSeriesInspection = {
@@ -1902,7 +2020,7 @@ type RawPrometheusQueryResult = {
   frames?: number;
 };
 
-function RawPrometheusQueryResultView({ result, content }: { result: RawPrometheusQueryResult; content: unknown }) {
+function RawPrometheusQueryResultView({ result, content }: { result: RawPrometheusQueryResult; content?: unknown }) {
   const styles = useStyles2(getToolStyles);
   return (
     <div className={styles.structuredResult}>
@@ -1914,10 +2032,12 @@ function RawPrometheusQueryResultView({ result, content }: { result: RawPromethe
         ]}
       />
       {result.query && <pre className={styles.queryBlock}>{result.query}</pre>}
-      <details className={styles.collapsible}>
-        <summary>Raw frames</summary>
-        <ContentBlocks content={content} />
-      </details>
+      {content !== undefined && (
+        <details className={styles.collapsible}>
+          <summary>Raw frames</summary>
+          <ContentBlocks content={content} />
+        </details>
+      )}
     </div>
   );
 }
@@ -1929,7 +2049,7 @@ type ScreenshotResult = {
   height?: number;
 };
 
-function ScreenshotResultView({ result, content }: { result: ScreenshotResult; content: unknown }) {
+function ScreenshotResultView({ result, content }: { result: ScreenshotResult; content?: unknown }) {
   const styles = useStyles2(getToolStyles);
   return (
     <div className={styles.structuredResult}>
@@ -1940,7 +2060,7 @@ function ScreenshotResultView({ result, content }: { result: ScreenshotResult; c
           { label: 'Size', value: result.width && result.height ? `${result.width} x ${result.height}` : undefined },
         ]}
       />
-      <ContentBlocks content={content} />
+      {content !== undefined && <ContentBlocks content={content} />}
     </div>
   );
 }
@@ -2233,6 +2353,67 @@ function ManagedDashboardSourceView({ result }: { result: ManagedDashboardSource
   );
 }
 
+type DashboardBootstrapSummaryResult = {
+  uid?: string;
+  title?: string;
+  folderTitle?: string;
+  url?: string;
+  panelCount?: number;
+  variableCount?: number;
+  queryCount?: number;
+  truncated?: boolean;
+  warnings: string[];
+  contextText?: string;
+};
+
+function DashboardBootstrapSummaryView({ result }: { result: DashboardBootstrapSummaryResult }) {
+  const styles = useStyles2(getToolStyles);
+  const title = result.title ?? result.uid ?? 'Dashboard context';
+  const summaryParts = [
+    title,
+    result.panelCount === undefined ? undefined : `${formatCount(result.panelCount)} panels`,
+    result.variableCount === undefined ? undefined : `${formatCount(result.variableCount)} variables`,
+    result.queryCount === undefined ? undefined : `${formatCount(result.queryCount)} queries`,
+    result.truncated ? 'truncated' : undefined,
+  ].filter(Boolean);
+
+  return (
+    <div className={styles.structuredResult}>
+      <div className={styles.resultSummary}>{summaryParts.join(' | ')}</div>
+      <ResultMetaGrid
+        items={[
+          { label: 'Title', value: result.title },
+          { label: 'UID', value: result.uid ? <code>{result.uid}</code> : undefined },
+          { label: 'Folder', value: result.folderTitle },
+          { label: 'Panels', value: result.panelCount === undefined ? undefined : formatCount(result.panelCount) },
+          {
+            label: 'Variables',
+            value: result.variableCount === undefined ? undefined : formatCount(result.variableCount),
+          },
+          { label: 'Queries', value: result.queryCount === undefined ? undefined : formatCount(result.queryCount) },
+          { label: 'Open', value: result.url ? <ExternalLink href={result.url}>Open</ExternalLink> : undefined },
+        ]}
+      />
+      {result.warnings.length > 0 && (
+        <div className={styles.noticeList}>
+          {result.warnings.slice(0, 5).map((warning, index) => (
+            <div className={styles.notice} key={`${index}:${warning}`}>
+              <strong>warning</strong>
+              <span>{warning}</span>
+            </div>
+          ))}
+        </div>
+      )}
+      {result.contextText && (
+        <details className={styles.collapsible} open>
+          <summary>Context preview</summary>
+          <ContentBlocks content={[{ type: 'text', text: result.contextText }]} />
+        </details>
+      )}
+    </div>
+  );
+}
+
 type DashboardSummaryResult = {
   title: string;
   uid?: string;
@@ -2357,6 +2538,7 @@ function ArtifactResultView({ artifact, preview }: { artifact: ArtifactRef; prev
           { label: 'Read', value: <code>{`read_artifact {"id":"${artifact.id}"}`}</code> },
         ]}
       />
+      {preview?.type === 'text' && <ArtifactTextPreview preview={preview} />}
       {preview?.type === 'image' && (
         <img
           alt={artifact.title}
@@ -2365,6 +2547,16 @@ function ArtifactResultView({ artifact, preview }: { artifact: ArtifactRef; prev
         />
       )}
     </div>
+  );
+}
+
+function ArtifactTextPreview({ preview }: { preview: Extract<ArtifactPreview, { type: 'text' }> }) {
+  const styles = useStyles2(getToolStyles);
+  return (
+    <details className={cx(styles.collapsible, styles.artifactTextPreview)} open>
+      <summary>Preview{preview.truncated ? ' | truncated' : ''}</summary>
+      <ContentBlocks content={[{ type: 'text', text: preview.text }]} />
+    </details>
   );
 }
 
@@ -2696,6 +2888,80 @@ function asLineListResult(
     count: numberField(detailRecord, 'count'),
     truncated: booleanField(detailRecord, 'truncated'),
     items,
+  };
+}
+
+function asRqliteQuerySummary(
+  toolName: string | undefined,
+  details: unknown,
+  content: unknown
+): RqliteQuerySummaryView | undefined {
+  if (toolName !== 'query_rqlite') {
+    return undefined;
+  }
+
+  const detailRecord = isRecord(details) ? details : undefined;
+  const record = parseToolJsonRecord(content, details);
+  if (record) {
+    const sql = stringField(record, 'sql') ?? stringField(detailRecord, 'sql');
+    if (!sql) {
+      return undefined;
+    }
+
+    const frames = recordsField(record, 'frames')
+      .map(asRqliteFrameSummary)
+      .filter((frame): frame is RqliteFrameSummaryView => Boolean(frame));
+    return {
+      datasourceUid: stringField(record, 'datasourceUid') ?? stringField(detailRecord, 'datasourceUid'),
+      sql,
+      frameCount: numberField(record, 'frameCount') ?? frames.length,
+      rowCount: numberField(record, 'rowCount') ?? numberField(detailRecord, 'rows') ?? 0,
+      truncated: booleanField(record, 'truncated') ?? booleanField(detailRecord, 'truncated') ?? false,
+      frames,
+      contentAvailable: true,
+    };
+  }
+
+  const sql = stringField(detailRecord, 'sql');
+  if (!sql || booleanField(detailRecord, 'summarized') !== true) {
+    return undefined;
+  }
+
+  return {
+    datasourceUid: stringField(detailRecord, 'datasourceUid'),
+    sql,
+    frameCount: numberField(detailRecord, 'frames') ?? 0,
+    rowCount: numberField(detailRecord, 'rows') ?? 0,
+    truncated: booleanField(detailRecord, 'truncated') ?? false,
+    frames: [],
+    contentAvailable: false,
+  };
+}
+
+function asRqliteFrameSummary(record: Record<string, unknown>): RqliteFrameSummaryView | undefined {
+  const rows = recordsField(record, 'rows');
+  const columns = recordsField(record, 'columns')
+    .map(asRqliteColumnSummary)
+    .filter((column): column is RqliteColumnSummaryView => Boolean(column));
+  const rowCount = numberField(record, 'rowCount') ?? rows.length;
+
+  return {
+    name: stringField(record, 'name'),
+    rowCount,
+    truncated: booleanField(record, 'truncated') ?? rows.length < rowCount,
+    columns,
+    rows,
+  };
+}
+
+function asRqliteColumnSummary(record: Record<string, unknown>): RqliteColumnSummaryView | undefined {
+  const name = stringField(record, 'name');
+  if (!name) {
+    return undefined;
+  }
+  return {
+    name,
+    type: stringField(record, 'type'),
   };
 }
 
@@ -3115,12 +3381,16 @@ function asScreenshotResult(toolName: string | undefined, details: unknown): Scr
   };
 }
 
-function asDashboardList(toolName: string | undefined, content: unknown): DashboardListResult | undefined {
+function asDashboardList(
+  toolName: string | undefined,
+  details: unknown,
+  content: unknown
+): DashboardListResult | undefined {
   if (toolName !== 'list_dashboards' && toolName !== 'grafana_list_dashboards') {
     return undefined;
   }
 
-  const dashboards = parseJsonArray(content)
+  const dashboards = parseToolJsonArray(content, details)
     ?.map(asDashboardListItem)
     .filter((item): item is DashboardListItem => Boolean(item));
   return dashboards ? { dashboards } : undefined;
@@ -3146,13 +3416,14 @@ function asDashboardListItem(record: unknown): DashboardListItem | undefined {
 
 function asManagedDashboardList(
   toolName: string | undefined,
+  details: unknown,
   content: unknown
 ): ManagedDashboardListResult | undefined {
   if (toolName !== 'list_managed_dashboards' && toolName !== 'grafana_list_managed_dashboards') {
     return undefined;
   }
 
-  const dashboards = parseJsonArray(content)
+  const dashboards = parseToolJsonArray(content, details)
     ?.map(asManagedDashboardListItem)
     .filter((item): item is ManagedDashboardListItem => Boolean(item));
   return dashboards ? { dashboards } : undefined;
@@ -3265,6 +3536,36 @@ function asManagedDashboardSource(
   };
 }
 
+function asDashboardBootstrapSummary(
+  toolName: string | undefined,
+  details: unknown,
+  content: unknown,
+  artifactized: boolean
+): DashboardBootstrapSummaryResult | undefined {
+  if (toolName !== 'bootstrap_dashboard_context') {
+    return undefined;
+  }
+
+  const detailRecord = isRecord(details) ? details : undefined;
+  const contextText = artifactized ? undefined : (artifactPreviewText(details) ?? getSingleTextContent(content));
+  if (!detailRecord && !contextText) {
+    return undefined;
+  }
+
+  return {
+    uid: stringField(detailRecord, 'uid'),
+    title: stringField(detailRecord, 'title'),
+    folderTitle: stringField(detailRecord, 'folderTitle'),
+    url: stringField(detailRecord, 'url'),
+    panelCount: numberField(detailRecord, 'panelCount'),
+    variableCount: numberField(detailRecord, 'variableCount'),
+    queryCount: numberField(detailRecord, 'queryCount'),
+    truncated: booleanField(detailRecord, 'truncated'),
+    warnings: detailRecord ? (stringArrayField(detailRecord, 'warnings') ?? []) : [],
+    contextText,
+  };
+}
+
 function asJsonnetFileResult(
   toolName: string | undefined,
   details: unknown,
@@ -3329,7 +3630,7 @@ function asDashboardSummary(
     return undefined;
   }
 
-  const record = parseJsonRecord(content);
+  const record = parseToolJsonRecord(content, details);
   if (!record) {
     return undefined;
   }
@@ -3444,14 +3745,35 @@ function parseToolJsonRecord(content: unknown, details: unknown): Record<string,
   return parseJsonRecord(content) ?? artifactPreviewJsonRecord(details);
 }
 
+function parseToolJsonArray(content: unknown, details: unknown): unknown[] | undefined {
+  return parseJsonArray(content) ?? artifactPreviewJsonArray(details);
+}
+
 function artifactPreviewJsonRecord(details: unknown): Record<string, unknown> | undefined {
+  const data = artifactPreviewData(details);
+  return isRecord(data) ? data : undefined;
+}
+
+function artifactPreviewJsonArray(details: unknown): unknown[] | undefined {
+  const data = artifactPreviewData(details);
+  return Array.isArray(data) ? data : undefined;
+}
+
+function artifactPreviewText(details: unknown): string | undefined {
+  if (!isRecord(details)) {
+    return undefined;
+  }
+  const preview = recordField(details, 'artifactPreview');
+  return preview?.type === 'text' && typeof preview.text === 'string' ? preview.text : undefined;
+}
+
+function artifactPreviewData(details: unknown): unknown {
   if (!isRecord(details)) {
     return undefined;
   }
 
   const preview = recordField(details, 'artifactPreview');
-  const data = preview?.data;
-  return isRecord(data) ? data : undefined;
+  return preview?.data;
 }
 
 function parseJsonArray(content: unknown): unknown[] | undefined {
@@ -3590,6 +3912,22 @@ function formatNumber(value: number | null | undefined) {
   return Number(value.toPrecision(5)).toString();
 }
 
+function formatTableCellValue(value: unknown) {
+  if (value === null || value === undefined) {
+    return '-';
+  }
+  if (typeof value === 'string') {
+    return value;
+  }
+  if (typeof value === 'number') {
+    return formatNumber(value);
+  }
+  if (typeof value === 'boolean') {
+    return value ? 'true' : 'false';
+  }
+  return formatJson(value);
+}
+
 function formatBytes(value: number | undefined) {
   if (value === undefined) {
     return undefined;
@@ -3660,6 +3998,8 @@ const getToolStyles = (theme: GrafanaTheme2) => ({
   toolFrame: css({
     display: 'grid',
     gap: theme.spacing(1),
+    minWidth: 0,
+    maxWidth: '100%',
   }),
   toolFrameError: css({
     color: theme.colors.error.text,
@@ -3760,14 +4100,34 @@ const getToolStyles = (theme: GrafanaTheme2) => ({
   structuredResult: css({
     display: 'grid',
     gap: theme.spacing(1),
+    minWidth: 0,
+    maxWidth: '100%',
   }),
   artifactCard: css({
     display: 'grid',
     gap: theme.spacing(1),
+    minWidth: 0,
+    maxWidth: '100%',
     padding: theme.spacing(1),
     border: `1px solid ${theme.colors.border.weak}`,
     borderRadius: theme.shape.radius.default,
     background: theme.colors.background.secondary,
+  }),
+  artifactTextPreview: css({
+    '& h1, & h2, & h3, & h4, & h5, & h6': {
+      margin: `${theme.spacing(1)} 0 ${theme.spacing(0.5)}`,
+      lineHeight: 1.35,
+      fontWeight: theme.typography.fontWeightMedium,
+    },
+    '& h1': {
+      fontSize: theme.typography.h4.fontSize,
+    },
+    '& h2': {
+      fontSize: theme.typography.h5.fontSize,
+    },
+    '& h3, & h4, & h5, & h6': {
+      fontSize: theme.typography.bodySmall.fontSize,
+    },
   }),
   artifactHeader: css({
     display: 'grid',
@@ -3869,6 +4229,7 @@ const getToolStyles = (theme: GrafanaTheme2) => ({
     background: theme.colors.background.primary,
   }),
   tableWrap: css({
+    minWidth: 0,
     maxWidth: '100%',
     overflowX: 'auto',
   }),
@@ -3895,12 +4256,16 @@ const getToolStyles = (theme: GrafanaTheme2) => ({
     },
   }),
   wideTable: css({
-    minWidth: 860,
+    minWidth: 640,
+    '@media (max-width: 700px)': {
+      minWidth: 520,
+    },
   }),
   metaGrid: css({
     display: 'grid',
-    gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))',
+    gridTemplateColumns: 'repeat(auto-fit, minmax(min(140px, 100%), 1fr))',
     gap: theme.spacing(1),
+    minWidth: 0,
   }),
   metaItem: css({
     display: 'grid',
@@ -3927,6 +4292,8 @@ const getToolStyles = (theme: GrafanaTheme2) => ({
   }),
   queryBlock: css({
     margin: 0,
+    minWidth: 0,
+    maxWidth: '100%',
     padding: theme.spacing(1),
     overflow: 'auto',
     whiteSpace: 'pre-wrap',
@@ -4176,6 +4543,8 @@ const getToolStyles = (theme: GrafanaTheme2) => ({
     color: theme.colors.text.secondary,
   }),
   collapsible: css({
+    minWidth: 0,
+    maxWidth: '100%',
     '& summary': {
       cursor: 'pointer',
       color: theme.colors.text.secondary,

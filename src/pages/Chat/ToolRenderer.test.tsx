@@ -1149,4 +1149,223 @@ describe('ToolRenderer', () => {
     expect(container.textContent).toContain('8.0 KiB');
     expect(container.textContent).not.toContain('Stored artifact [artifact: artifact_1]');
   });
+
+  it('renders artifactized rqlite query previews as structured tables', () => {
+    const sql = 'select service, requests from http_requests order by requests desc';
+    const { container } = render(
+      <ToolResultMessageBody
+        toolName="query_rqlite"
+        content={[{ type: 'text', text: 'Stored artifact [artifact: artifact_1] query_rqlite' }]}
+        details={{
+          datasourceUid: 'rqlite',
+          sql,
+          rows: 2,
+          frames: 1,
+          truncated: false,
+          summarized: true,
+          artifactRef: {
+            id: 'artifact_1',
+            kind: 'table',
+            title: 'query_rqlite',
+            toolName: 'query_rqlite',
+            createdAt: '2026-06-05T00:00:00.000Z',
+            bytes: 8192,
+            summary: 'rqlite query result with 2 rows.',
+          },
+          artifactPreview: {
+            type: 'json',
+            data: {
+              datasourceUid: 'rqlite',
+              sql,
+              frameCount: 1,
+              rowCount: 2,
+              truncated: false,
+              frames: [
+                {
+                  name: 'result',
+                  rowCount: 2,
+                  truncated: false,
+                  columns: [
+                    { name: 'service', type: 'string' },
+                    { name: 'requests', type: 'number' },
+                  ],
+                  rows: [
+                    { service: 'api', requests: 42 },
+                    { service: 'web', requests: 7 },
+                  ],
+                },
+              ],
+            },
+            truncated: true,
+          },
+        }}
+      />
+    );
+
+    expect(container.textContent).toContain('2 rows | 1 frame');
+    expect(container.textContent).toContain(sql);
+    expect(container.textContent).toContain('service');
+    expect(container.textContent).toContain('api');
+    expect(container.textContent).toContain('42');
+    expect(container.textContent).not.toContain('Stored artifact [artifact: artifact_1]');
+  });
+
+  it('renders artifactized dashboard summaries from preview data', () => {
+    const { container } = render(
+      <ToolResultMessageBody
+        toolName="render_dashboard"
+        content={[{ type: 'text', text: 'Stored artifact [artifact: artifact_1] render_dashboard' }]}
+        details={{
+          sourceBytes: 2048,
+          artifactRef: {
+            id: 'artifact_1',
+            kind: 'dashboard',
+            title: 'render_dashboard: HTTP Overview',
+            toolName: 'render_dashboard',
+            createdAt: '2026-06-05T00:00:00.000Z',
+            bytes: 8192,
+            summary: 'HTTP Overview with 1 panels.',
+          },
+          artifactPreview: {
+            type: 'json',
+            data: {
+              dashboard: {
+                title: 'HTTP Overview',
+                uid: 'http-overview',
+                tags: ['genai'],
+                panels: [{ id: 1, title: 'Request rate', type: 'timeseries' }],
+              },
+              sourceChecksum: '0123456789abcdef0123456789abcdef',
+            },
+            truncated: true,
+          },
+        }}
+      />
+    );
+
+    expect(container.textContent).toContain('HTTP Overview');
+    expect(container.textContent).toContain('http-overview');
+    expect(container.textContent).toContain('Panels');
+    expect(container.textContent).toContain('timeseries: 1');
+    expect(container.textContent).not.toContain('Stored artifact [artifact: artifact_1]');
+  });
+
+  it('renders artifactized managed dashboard lists from preview data', () => {
+    const { container } = render(
+      <ToolResultMessageBody
+        toolName="list_managed_dashboards"
+        content={[{ type: 'text', text: 'Stored artifact [artifact: artifact_1] list_managed_dashboards' }]}
+        details={{
+          count: 1,
+          artifactRef: {
+            id: 'artifact_1',
+            kind: 'dashboard',
+            title: 'list_managed_dashboards',
+            toolName: 'list_managed_dashboards',
+            createdAt: '2026-06-05T00:00:00.000Z',
+            bytes: 8192,
+            summary: 'list_managed_dashboards returned 1 items.',
+          },
+          artifactPreview: {
+            type: 'json',
+            data: [
+              {
+                title: 'Service Health',
+                uid: 'service-health',
+                folderUid: 'ops',
+                url: '/d/service-health/service-health',
+                hasJsonnetSource: true,
+                dashboardJsonnetSize: 1234,
+              },
+            ],
+            truncated: true,
+          },
+        }}
+      />
+    );
+
+    expect(container.textContent).toContain('1 managed dashboards');
+    expect(container.textContent).toContain('Service Health');
+    expect(container.textContent).toContain('service-health');
+    expect(container.textContent).toContain('1.2 KiB Jsonnet');
+    expect(container.textContent).not.toContain('Stored artifact [artifact: artifact_1]');
+  });
+
+  it('renders artifactized dashboard bootstrap context metadata and text preview', () => {
+    const contextMarkdown = '# Service Dashboard\n\n## Variables\n- job: api';
+    const { container } = render(
+      <ToolResultMessageBody
+        toolName="bootstrap_dashboard_context"
+        content={[{ type: 'text', text: 'Stored artifact [artifact: artifact_1] bootstrap_dashboard_context' }]}
+        details={{
+          uid: 'service-dashboard',
+          title: 'Service Dashboard',
+          folderTitle: 'Operations',
+          url: '/d/service-dashboard/service-dashboard',
+          panelCount: 3,
+          variableCount: 2,
+          queryCount: 4,
+          truncated: true,
+          warnings: ['1 panel omitted'],
+          summarized: true,
+          artifactRef: {
+            id: 'artifact_1',
+            kind: 'text',
+            title: 'bootstrap_dashboard_context: Service Dashboard',
+            toolName: 'bootstrap_dashboard_context',
+            createdAt: '2026-06-05T00:00:00.000Z',
+            bytes: 8192,
+            summary: 'bootstrap_dashboard_context result stored as artifact.',
+          },
+          artifactPreview: {
+            type: 'text',
+            text: contextMarkdown,
+            truncated: true,
+          },
+        }}
+      />
+    );
+
+    expect(container.textContent).toContain('Service Dashboard | 3 panels | 2 variables | 4 queries | truncated');
+    expect(container.textContent).toContain('Operations');
+    expect(container.textContent).toContain('1 panel omitted');
+    expect(container.textContent).toContain('Variables');
+    expect(container.textContent).not.toContain('Stored artifact [artifact: artifact_1]');
+  });
+
+  it('suppresses raw Prometheus artifact handles inside the raw frame wrapper', () => {
+    const query = 'up';
+    const { container } = render(
+      <ToolResultMessageBody
+        toolName="query_prometheus_raw"
+        content={[{ type: 'text', text: 'Stored artifact [artifact: artifact_1] query_prometheus_raw' }]}
+        details={{
+          datasourceUid: 'prometheus',
+          query,
+          interval: '1m',
+          frames: 2,
+          raw: true,
+          artifactRef: {
+            id: 'artifact_1',
+            kind: 'json',
+            title: 'query_prometheus_raw',
+            toolName: 'query_prometheus_raw',
+            createdAt: '2026-06-05T00:00:00.000Z',
+            bytes: 8192,
+            summary: 'query_prometheus_raw result stored as artifact.',
+          },
+          artifactPreview: {
+            type: 'json',
+            data: [{ name: 'frame' }],
+            truncated: true,
+          },
+        }}
+      />
+    );
+
+    expect(container.textContent).toContain(query);
+    expect(container.textContent).toContain('Frames');
+    expect(container.textContent).not.toContain('Stored artifact [artifact: artifact_1]');
+    expect(container.textContent).not.toContain('Raw frames');
+  });
 });

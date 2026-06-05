@@ -76,6 +76,7 @@ const ARTIFACT_MIN_BYTES = 6000;
 const ARTIFACT_READ_TEXT_LIMIT = 80000;
 const ARTIFACT_PREVIEW_TEXT_LIMIT = 6000;
 const ARTIFACT_HANDLE_PREVIEW_TEXT_LIMIT = 2400;
+const ARTIFACT_PREVIEW_STRING_FIELD_LIMIT = 1200;
 const ARTIFACT_DEFAULT_SLICE_LIMIT = 50;
 const ARTIFACT_MAX_SLICE_LIMIT = 500;
 const JQ_OUTPUT_LIMIT = 80000;
@@ -449,7 +450,10 @@ function makePreview(data: unknown, bytes: number): ArtifactPreview {
 
 function previewJsonValue(data: unknown): unknown {
   if (Array.isArray(data)) {
-    return data.slice(0, 20);
+    return data.slice(0, 20).map(previewJsonValue);
+  }
+  if (typeof data === 'string') {
+    return truncateText(data, ARTIFACT_PREVIEW_STRING_FIELD_LIMIT);
   }
   if (!isRecord(data)) {
     return data;
@@ -469,7 +473,7 @@ function previewJsonValue(data: unknown): unknown {
   return Object.fromEntries(
     entries.map(([key, value]) => [
       key,
-      Array.isArray(value) ? value.slice(0, 20) : isRecord(value) ? previewJsonValue(value) : value,
+      Array.isArray(value) || typeof value === 'string' || isRecord(value) ? previewJsonValue(value) : value,
     ])
   );
 }
