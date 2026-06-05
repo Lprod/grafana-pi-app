@@ -1,3 +1,10 @@
+# [2.4.0](https://github.com/elohmeier/grafana-pi-app/compare/v2.3.0...v2.4.0) (2026-06-05)
+
+
+### Features
+
+* **chat:** add artifact registry ([b87ddb6](https://github.com/elohmeier/grafana-pi-app/commit/b87ddb6f6a44d33cb98591d2c15abfd1608b3383))
+
 # [2.3.0](https://github.com/elohmeier/grafana-pi-app/compare/v2.2.2...v2.3.0) (2026-06-05)
 
 
