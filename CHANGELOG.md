@@ -1,3 +1,13 @@
+# [2.3.0](https://github.com/elohmeier/grafana-pi-app/compare/v2.2.2...v2.3.0) (2026-06-05)
+
+
+### Features
+
+* add assistant safety workflows ([c1d89d2](https://github.com/elohmeier/grafana-pi-app/commit/c1d89d293b2f65d9b6c04f2c244b922faea4bb48))
+* add bootstrap tool ([67e9915](https://github.com/elohmeier/grafana-pi-app/commit/67e9915446e915df34b4af8a76a948846ae2aa22))
+* add configurable model thinking ([0d9871b](https://github.com/elohmeier/grafana-pi-app/commit/0d9871b19713dae1986d9e3cdb070482ad6dceb3))
+* add dashboard design subagent ([117a169](https://github.com/elohmeier/grafana-pi-app/commit/117a169e5a7c8d38c3e21a9b7aaeaff396fc69f3))
+
 ## [2.2.2](https://github.com/elohmeier/grafana-pi-app/compare/v2.2.1...v2.2.2) (2026-06-03)
 
 
