@@ -1,0 +1,37 @@
+exclude: |
+  (?x)^(
+    \.config/|
+    node_modules/|
+    dist/|
+    artifacts/|
+    work/|
+    ci/|
+    test-results/|
+    playwright-report/|
+    blob-report/|
+    playwright/\.cache/|
+    playwright/\.auth/|
+    research/|
+    pkg/plugin/jsonnet/vendor/
+  )
+
+repos:
+  - repo: local
+    hooks:
+      - id: eslint-fix
+        name: eslint --fix
+        entry: npm exec -- eslint --cache --fix
+        language: system
+        files: \.[cm]?[jt]sx?$
+
+      - id: prettier
+        name: prettier
+        entry: npm exec -- prettier --write --ignore-unknown
+        language: system
+        files: \.(css|html|json|jsx?|md|mdx|scss|tsx?|ya?ml)$
+
+      - id: gofmt
+        name: gofmt
+        entry: gofmt -w
+        language: system
+        types: [go]

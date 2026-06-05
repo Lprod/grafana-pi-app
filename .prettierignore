@@ -1,0 +1,13 @@
+.config/
+node_modules/
+dist/
+artifacts/
+work/
+ci/
+test-results/
+playwright-report/
+blob-report/
+playwright/.cache/
+playwright/.auth/
+research/
+pkg/plugin/jsonnet/vendor/

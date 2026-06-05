@@ -97,6 +97,12 @@ Install frontend dependencies:
 npm install
 ```
 
+Install pre-commit hooks with the `pre-commit` CLI:
+
+```bash
+pre-commit install
+```
+
 Build or watch the frontend:
 
 ```bash
