@@ -21,9 +21,9 @@ describe('artifact tools', () => {
   it('stores bulky tool results behind an artifact handle', () => {
     const { runtime, artifacts } = createTestArtifactRuntime();
     const rows = Array.from({ length: 400 }, (_, index) => ({ id: index, value: `row-${index}` }));
-    const result = artifactizeToolResult(runtime, 'query_rqlite', {
+    const result = artifactizeToolResult(runtime, 'query_prometheus', {
       content: [{ type: 'text', text: JSON.stringify({ rows }, null, 2) }],
-      details: { rows: rows.length, format: 'table' },
+      details: { rows: rows.length },
     });
 
     const firstBlock = result?.content?.[0];
@@ -36,8 +36,8 @@ describe('artifact tools', () => {
       rows: rows.length,
       artifactRef: {
         id: 'artifact_1',
-        kind: 'table',
-        toolName: 'query_rqlite',
+        kind: 'json',
+        toolName: 'query_prometheus',
       },
     });
     expect(artifacts.artifact_1.data).toMatchObject({ rows: expect.any(Array) });

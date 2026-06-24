@@ -9,7 +9,6 @@ export const testIds = {
     allowedUsers: 'data-testid ac-allowed-users',
     systemPromptAddendum: 'data-testid ac-system-prompt-addendum',
     allowedPrometheusDatasourceUids: 'data-testid ac-allowed-prometheus-datasource-uids',
-    allowedRqliteDatasourceUids: 'data-testid ac-allowed-rqlite-datasource-uids',
     customSkillsJson: 'data-testid ac-custom-skills-json',
     submit: 'data-testid ac-submit-form',
   },

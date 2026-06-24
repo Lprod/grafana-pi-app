@@ -17,7 +17,6 @@ type SpecialistToolParams = {
 type SpecialistToolOptions = {
   runtime: GrafanaToolRuntime;
   metricsTools: AgentTool[];
-  rqliteTools?: AgentTool[];
   dashboardReadTools?: AgentTool[];
   jsonnetFileTools?: AgentTool[];
   managedDashboardTools?: AgentTool[];
@@ -32,15 +31,10 @@ export function createSubagentTools(options: SpecialistToolOptions): AgentTool[]
     makeSpecialistTool({
       name: 'run_query_agent',
       label: 'Run query agent',
-      description:
-        'Delegate Prometheus metric discovery, PromQL validation, and read-only rqlite SQL analysis to a focused query specialist.',
+      description: 'Delegate Prometheus metric discovery and PromQL validation to a focused query specialist.',
       kind: 'query',
       runtime: options.runtime,
-      tools: dedupeTools([
-        ...(options.metricsTools ?? []),
-        ...(options.rqliteTools ?? []),
-        ...(options.artifactTools ?? []),
-      ]),
+      tools: dedupeTools([...(options.metricsTools ?? []), ...(options.artifactTools ?? [])]),
       systemPrompt: QUERY_AGENT_PROMPT,
       params: queryAgentParameters(),
       taskPrefix: queryTaskPrefix,
@@ -73,7 +67,6 @@ export function createSubagentTools(options: SpecialistToolOptions): AgentTool[]
       runtime: options.runtime,
       tools: dedupeTools([
         ...(options.metricsTools ?? []),
-        ...(options.rqliteTools ?? []),
         ...(options.investigationTools ?? []),
         ...(options.artifactTools ?? []),
         ...(options.skillTools ?? []),
@@ -145,10 +138,8 @@ function makeSpecialistTool(options: {
 
 function queryAgentParameters() {
   return Type.Object({
-    task: Type.String({ description: 'Specific query or metric/SQL exploration task and expected output.' }),
-    datasourceUid: Type.Optional(
-      Type.String({ description: 'Optional Prometheus or rqlite datasource UID to prefer.' })
-    ),
+    task: Type.String({ description: 'Specific query or metric exploration task and expected output.' }),
+    datasourceUid: Type.Optional(Type.String({ description: 'Optional Prometheus datasource UID to prefer.' })),
     metricPrefix: Type.Optional(
       Type.String({ description: 'Optional Prometheus metric-name prefix to investigate first.' })
     ),
@@ -256,15 +247,14 @@ Scope:
 - Discover Prometheus datasources, metric names, labels, and label values.
 - Inspect metric series before naming label selectors; do not infer names like status/status_code/path/route from convention.
 - Validate PromQL with query_prometheus before recommending it.
-- Query rqlite only with read-only SQL tools when the user asks for SQL/database analysis.
 - Do not create, update, delete, upload, render, or sync dashboards.
 - Do not update investigation reports or navigate the user.
 - For multi-metric exploration, list all known prefixes in one list_metrics call, inspect all candidate metric selectors in one inspect_metric_series call, then validate related PromQL in one query_prometheus call.
 
 Output:
 - Datasource UID used.
-- Relevant metrics, labels, tables, or columns.
-- Validated PromQL or SQL snippets with what each answers.
+- Relevant metrics and labels.
+- Validated PromQL snippets with what each answers.
 - Data-shape, truncation, or cardinality caveats.
 - Open questions if available data is insufficient.
 
@@ -307,7 +297,7 @@ const INVESTIGATION_AGENT_PROMPT = `You are the investigation-agent for a Grafan
 Scope:
 - Investigate incidents, failures, latency spikes, error spikes, degradations, and root-cause questions.
 - Define the scope: service, host, route, symptom, datasource UID, and time range when available.
-- Gather evidence with metric discovery, PromQL validation, and read-only SQL when relevant.
+- Gather evidence with metric discovery and PromQL validation.
 - Use update_report early and at the final material summary for longer investigations. When the task or benchmark has a tight call budget, consolidate findings instead of updating after every minor check.
 - Keep hypotheses separate from evidence. Evidence must come from tool results or user-provided context.
 - Do not create dashboards or navigate unless the supervisor explicitly delegates that to another specialist.

@@ -12,7 +12,7 @@ import type { PiAppJsonData, PiAppThinkingLevel } from '../../../types';
 import type { SkillToolGroup } from '../skills/types';
 import type { ArtifactRuntime } from './artifacts';
 
-export type GrafanaToolConfig = Pick<PiAppJsonData, 'allowedPrometheusDatasourceUids' | 'allowedRqliteDatasourceUids'>;
+export type GrafanaToolConfig = Pick<PiAppJsonData, 'allowedPrometheusDatasourceUids'>;
 
 export type GrafanaToolRuntime = {
   model: Model<any>;
@@ -127,18 +127,6 @@ export type QueryPrometheusParams = DatasourceParams &
     queries?: PrometheusQuerySpec[];
   };
 
-export type RqliteColumnsParams = DatasourceParams & {
-  table: string;
-};
-
-export type QueryRqliteParams = DatasourceParams & {
-  sql: string;
-  format?: 'table' | 'time_series';
-  timeColumns?: string[];
-  start?: string;
-  end?: string;
-};
-
 export type UploadDashboardParams = {
   dashboard_json: string;
   overwrite?: boolean;
@@ -252,7 +240,6 @@ export type JsonnetLibToolSet = {
 
 export type GrafanaToolRegistry = {
   metrics: AgentTool[];
-  rqlite: AgentTool[];
   dashboards: AgentTool[];
   managedDashboards: ManagedDashboardToolSet;
   jsonnetFiles: JsonnetFileToolSet;

@@ -7,7 +7,6 @@ import { createInvestigationTools } from './investigation';
 import { createManagedDashboardTools } from './managedDashboards';
 import { createMetricTools, filterAllowedPrometheusDatasourceSettings } from './metrics';
 import { createNavigationTools } from './navigation';
-import { createRqliteTools, filterAllowedRqliteDatasourceSettings } from './rqlite';
 import { createSubagentTools } from './subagents';
 import type { CreateGrafanaToolsOptions, GrafanaToolRegistry, SkillToolGroup } from './types';
 
@@ -15,7 +14,7 @@ export { artifactByteSize, artifactizeToolResult, createArtifactTools, readArtif
 export type { Artifact, ArtifactPreview, ArtifactRef, ArtifactRuntime } from './artifacts';
 export { getUnavailableDashboardDatasourceUids } from './dashboardPolicy';
 export { DEFAULT_JSONNET_FILE_PATH, normalizeJsonnetPath } from './jsonnetFiles';
-export { filterAllowedPrometheusDatasourceSettings, filterAllowedRqliteDatasourceSettings };
+export { filterAllowedPrometheusDatasourceSettings };
 export { createSkillTools } from './skills';
 export { buildNavigationPath } from './navigation';
 export type {
@@ -33,7 +32,6 @@ export type { SubagentRunDetails, SubagentToolCall, SubagentUsage } from './suba
 
 export function createGrafanaToolRegistry(options: CreateGrafanaToolsOptions = {}): GrafanaToolRegistry {
   const metrics = createMetricTools(options);
-  const rqlite = createRqliteTools(options);
   const dashboards = createDashboardTools(options, options.includeAdHocDashboardTools);
   const dashboardReadTools = createDashboardTools(options, false);
   const jsonnetFiles = createJsonnetFileTools(options);
@@ -48,7 +46,6 @@ export function createGrafanaToolRegistry(options: CreateGrafanaToolsOptions = {
     ? createSubagentTools({
         runtime: options.runtime,
         metricsTools: metrics,
-        rqliteTools: rqlite,
         dashboardReadTools,
         jsonnetFileTools: jsonnetFiles.all,
         managedDashboardTools: managedDashboards.all,
@@ -61,7 +58,6 @@ export function createGrafanaToolRegistry(options: CreateGrafanaToolsOptions = {
 
   return {
     metrics,
-    rqlite,
     dashboards,
     jsonnetFiles,
     managedDashboards,
@@ -72,7 +68,6 @@ export function createGrafanaToolRegistry(options: CreateGrafanaToolsOptions = {
     skills,
     all: [
       ...metrics,
-      ...rqlite,
       ...jsonnetFiles.all,
       ...parentManagedDashboardTools,
       ...investigation,
@@ -108,10 +103,6 @@ export function createGrafanaToolsForSkillGroups(
 
   if (groupSet.has('metrics')) {
     selected.push(...registry.metrics);
-  }
-
-  if (groupSet.has('rqlite')) {
-    selected.push(...registry.rqlite);
   }
 
   if (groupSet.has('jsonnetFiles')) {

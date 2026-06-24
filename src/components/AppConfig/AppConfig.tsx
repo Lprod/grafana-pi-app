@@ -37,7 +37,6 @@ type State = {
   accessMode: PiAppAccessMode;
   allowedUsersText: string;
   allowedPrometheusDatasourceUids: string[];
-  allowedRqliteDatasourceUids: string[];
   systemPromptAddendum: string;
   customSkillsJson: string;
 };
@@ -59,14 +58,10 @@ const AppConfig = ({ plugin }: AppConfigProps) => {
     allowedPrometheusDatasourceUids: Array.isArray(jsonData?.allowedPrometheusDatasourceUids)
       ? jsonData.allowedPrometheusDatasourceUids
       : [],
-    allowedRqliteDatasourceUids: Array.isArray(jsonData?.allowedRqliteDatasourceUids)
-      ? jsonData.allowedRqliteDatasourceUids
-      : [],
     systemPromptAddendum: typeof jsonData?.systemPromptAddendum === 'string' ? jsonData.systemPromptAddendum : '',
     customSkillsJson: formatCustomSkillsJson(jsonData?.customSkills),
   });
   const datasourceOptions = getPrometheusDatasourceOptions(state.allowedPrometheusDatasourceUids);
-  const rqliteDatasourceOptions = getRqliteDatasourceOptions(state.allowedRqliteDatasourceUids);
   const customSkillsError = useMemo(() => validateCustomSkillsJson(state.customSkillsJson), [state.customSkillsJson]);
   const allowedUsers = useMemo(() => parseAllowedUsersInput(state.allowedUsersText), [state.allowedUsersText]);
   const allowedUsersError =
@@ -145,13 +140,6 @@ const AppConfig = ({ plugin }: AppConfigProps) => {
     });
   };
 
-  const onChangeAllowedRqliteDatasourceUids = (options: Array<ComboboxOption<string>>) => {
-    setState({
-      ...state,
-      allowedRqliteDatasourceUids: options.map((option) => option.value),
-    });
-  };
-
   const onChangeSystemPromptAddendum = (event: ChangeEvent<HTMLTextAreaElement>) => {
     setState({
       ...state,
@@ -182,7 +170,6 @@ const AppConfig = ({ plugin }: AppConfigProps) => {
         accessMode: state.accessMode,
         allowedUsers,
         allowedPrometheusDatasourceUids: state.allowedPrometheusDatasourceUids,
-        allowedRqliteDatasourceUids: state.allowedRqliteDatasourceUids,
         systemPromptAddendum: state.systemPromptAddendum.trim(),
         customSkills,
       },
@@ -333,23 +320,6 @@ const AppConfig = ({ plugin }: AppConfigProps) => {
             onChange={onChangeAllowedDatasourceUids}
           />
         </Field>
-
-        <Field
-          label="Allowed rqlite datasources"
-          description="Leave empty to allow all rqlite datasources visible to the current Grafana user. Select datasources to restrict assistant SQL queries."
-          className={s.marginTop}
-        >
-          <MultiCombobox
-            width={60}
-            id="allowed-rqlite-datasource-uids"
-            data-testid={testIds.appConfig.allowedRqliteDatasourceUids}
-            options={rqliteDatasourceOptions}
-            value={state.allowedRqliteDatasourceUids}
-            placeholder="All visible rqlite datasources"
-            isClearable
-            onChange={onChangeAllowedRqliteDatasourceUids}
-          />
-        </Field>
       </FieldSet>
 
       <FieldSet label="Custom skills" className={s.marginTopXl}>
@@ -416,7 +386,7 @@ const CUSTOM_SKILLS_PLACEHOLDER = `[
     "activation": {
       "explicitOnly": true
     },
-    "toolGroups": ["metrics", "rqlite", "skillResources"],
+    "toolGroups": ["metrics", "skillResources"],
     "resources": [
       {
         "path": "references/team-runbook.md",
@@ -462,28 +432,6 @@ const updatePluginAndReload = async (pluginId: string, data: Partial<PluginMeta<
 const getPrometheusDatasourceOptions = (selectedUids: string[]): Array<ComboboxOption<string>> => {
   const options = getDataSourceSrv()
     .getList({ metrics: true, type: 'prometheus' })
-    .filter((ds) => Boolean(ds.uid))
-    .map((ds) => ({
-      label: ds.name,
-      value: ds.uid,
-      description: `${ds.uid}${ds.isDefault ? ' (default)' : ''}`,
-    }))
-    .sort((left, right) => left.label.localeCompare(right.label));
-  const availableUids = new Set(options.map((option) => option.value));
-  const missingOptions = selectedUids
-    .filter((uid) => uid && !availableUids.has(uid))
-    .map((uid) => ({
-      label: uid,
-      value: uid,
-      description: 'Configured UID not visible in this session',
-    }));
-
-  return [...options, ...missingOptions];
-};
-
-const getRqliteDatasourceOptions = (selectedUids: string[]): Array<ComboboxOption<string>> => {
-  const options = getDataSourceSrv()
-    .getList({ metrics: true, type: 'g42-rqlite-datasource' })
     .filter((ds) => Boolean(ds.uid))
     .map((ds) => ({
       label: ds.name,

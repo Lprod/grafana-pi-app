@@ -84,7 +84,6 @@ const JQ_OUTPUT_LIMIT = 80000;
 const ARTIFACT_TOOL_NAMES = new Set([
   'query_prometheus',
   'query_prometheus_raw',
-  'query_rqlite',
   'list_managed_dashboards',
   'get_dashboard',
   'grafana_get_dashboard',
@@ -375,9 +374,6 @@ function artifactKind(toolName: string, data: unknown, details: unknown): Artifa
   ) {
     return 'dashboard';
   }
-  if (toolName === 'query_rqlite') {
-    return 'table';
-  }
   if (toolName === 'list_managed_dashboards') {
     return 'dashboard';
   }
@@ -411,11 +407,6 @@ function artifactSummaryLine(toolName: string, data: unknown, details: unknown) 
     if (query) {
       return `Prometheus query summary for ${query}.`;
     }
-  }
-
-  if (toolName === 'query_rqlite' && isRecord(details)) {
-    const rows = numberField(details, 'rows');
-    return rows === undefined ? 'rqlite query result.' : `rqlite query result with ${rows} rows.`;
   }
 
   const dashboard = isRecord(data) ? (recordField(data, 'dashboard') ?? data) : undefined;

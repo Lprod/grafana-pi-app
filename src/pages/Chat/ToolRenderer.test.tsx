@@ -1122,21 +1122,21 @@ describe('ToolRenderer', () => {
   it('renders artifactized tool results as artifact cards', () => {
     const { container } = render(
       <ToolResultMessageBody
-        toolName="query_rqlite"
+        toolName="query_prometheus"
         content={[{ type: 'text', text: 'Stored artifact [artifact: artifact_1]' }]}
         details={{
           artifactRef: {
             id: 'artifact_1',
-            kind: 'table',
-            title: 'query_rqlite',
-            toolName: 'query_rqlite',
+            kind: 'json',
+            title: 'query_prometheus',
+            toolName: 'query_prometheus',
             createdAt: '2026-06-05T00:00:00.000Z',
             bytes: 8192,
-            summary: 'rqlite query result with 120 rows.',
+            summary: 'Prometheus batch result.',
           },
           artifactPreview: {
             type: 'json',
-            data: { rows: [{ id: 1 }] },
+            data: { results: [{ query: 'up' }] },
             truncated: true,
           },
         }}
@@ -1145,68 +1145,8 @@ describe('ToolRenderer', () => {
 
     expect(screen.getByTestId('artifact-result')).toBeInTheDocument();
     expect(container.textContent).toContain('artifact_1');
-    expect(container.textContent).toContain('rqlite query result with 120 rows.');
+    expect(container.textContent).toContain('Prometheus batch result.');
     expect(container.textContent).toContain('8.0 KiB');
-    expect(container.textContent).not.toContain('Stored artifact [artifact: artifact_1]');
-  });
-
-  it('renders artifactized rqlite query previews as structured tables', () => {
-    const sql = 'select service, requests from http_requests order by requests desc';
-    const { container } = render(
-      <ToolResultMessageBody
-        toolName="query_rqlite"
-        content={[{ type: 'text', text: 'Stored artifact [artifact: artifact_1] query_rqlite' }]}
-        details={{
-          datasourceUid: 'rqlite',
-          sql,
-          rows: 2,
-          frames: 1,
-          truncated: false,
-          summarized: true,
-          artifactRef: {
-            id: 'artifact_1',
-            kind: 'table',
-            title: 'query_rqlite',
-            toolName: 'query_rqlite',
-            createdAt: '2026-06-05T00:00:00.000Z',
-            bytes: 8192,
-            summary: 'rqlite query result with 2 rows.',
-          },
-          artifactPreview: {
-            type: 'json',
-            data: {
-              datasourceUid: 'rqlite',
-              sql,
-              frameCount: 1,
-              rowCount: 2,
-              truncated: false,
-              frames: [
-                {
-                  name: 'result',
-                  rowCount: 2,
-                  truncated: false,
-                  columns: [
-                    { name: 'service', type: 'string' },
-                    { name: 'requests', type: 'number' },
-                  ],
-                  rows: [
-                    { service: 'api', requests: 42 },
-                    { service: 'web', requests: 7 },
-                  ],
-                },
-              ],
-            },
-            truncated: true,
-          },
-        }}
-      />
-    );
-
-    expect(container.textContent).toContain('2 rows | 1 frame');
-    expect(container.textContent).toContain(sql);
-    expect(container.textContent).toContain('service');
-    expect(container.textContent).toContain('api');
-    expect(container.textContent).toContain('42');
     expect(container.textContent).not.toContain('Stored artifact [artifact: artifact_1]');
   });
 

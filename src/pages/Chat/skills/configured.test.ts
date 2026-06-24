@@ -23,7 +23,7 @@ describe('configured Grafana skills', () => {
             name: 'team-runbook',
             description: 'Team incident workflow.',
             content: '# Team Runbook\n\nUse the internal incident workflow.',
-            toolGroups: ['metrics', 'rqlite', 'dashboardRead', 'adHocDashboards'],
+            toolGroups: ['metrics', 'dashboardRead', 'adHocDashboards'],
             resources: [
               {
                 path: 'references/runbook.md',
@@ -44,7 +44,7 @@ describe('configured Grafana skills', () => {
     expect(skills[1]).toMatchObject({
       name: 'team-runbook',
       filePath: 'plugin-config/customSkills/team-runbook',
-      toolGroups: expect.arrayContaining(['skillResources', 'metrics', 'rqlite', 'dashboardRead']),
+      toolGroups: expect.arrayContaining(['skillResources', 'metrics', 'dashboardRead']),
     });
     expect(skills[1].toolGroups).not.toContain('adHocDashboards');
     expect(skills[1].resources['references/runbook.md']).toMatchObject({
@@ -86,7 +86,7 @@ describe('configured Grafana skills', () => {
           "description": "Team incident workflow.",
           "content": "# Team Runbook",
           "activation": { "keywords": ["incident"] },
-          "toolGroups": ["metrics", "rqlite", "skillResources"]
+          "toolGroups": ["metrics", "skillResources"]
         }
       ]`)
     ).toEqual([
@@ -95,9 +95,20 @@ describe('configured Grafana skills', () => {
         description: 'Team incident workflow.',
         content: '# Team Runbook',
         activation: { keywords: ['incident'] },
-        toolGroups: ['metrics', 'rqlite', 'skillResources'],
+        toolGroups: ['metrics', 'skillResources'],
       },
     ]);
+
+    expect(
+      validateCustomSkillsJson(`[
+        {
+          "name": "unsupported-runbook",
+          "description": "Unsupported group.",
+          "content": "# Unsupported",
+          "toolGroups": ["sql"]
+        }
+      ]`)
+    ).toContain('unsupported group "sql"');
 
     expect(validateCustomSkillsJson('{"name":"not-array"}')).toContain('must be an array');
     expect(

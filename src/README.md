@@ -1,6 +1,6 @@
 # Observability Analyst
 
-Observability Analyst adds an LLM analyst to Grafana for metric exploration, PromQL validation, read-only rqlite SQL, and dashboard authoring.
+Observability Analyst adds an LLM analyst to Grafana for metric exploration, PromQL validation, investigations, and dashboard authoring.
 
 The assistant uses the current Grafana user's datasource and dashboard permissions. LLM requests are proxied through the app plugin backend with an OpenAI-compatible API key stored in secure plugin settings.
 The default chat toolset exposes supervisor delegation tools (`run_query_agent`, `run_dashboard_agent`, `run_investigation_agent`, `run_support_agent`, and `run_navigation_agent`). Specialist agents receive the direct Grafana tools they need for their domain; dashboard writes still require the existing in-chat confirmation before syncing, uploading, or deleting persistent Grafana artifacts.
@@ -9,7 +9,6 @@ The default chat toolset exposes supervisor delegation tools (`run_query_agent`,
 
 - Grafana 13.0 or newer.
 - At least one Prometheus datasource for metric exploration.
-- Optionally, at least one rqlite datasource for SQL exploration.
 - An OpenAI-compatible chat completions endpoint and API key.
 - Grafana image rendering if dashboard screenshot verification is required.
 - Grafana external service accounts for app-managed dashboard sync.
@@ -18,7 +17,7 @@ The default chat toolset exposes supervisor delegation tools (`run_query_agent`,
 
 1. Enable the app plugin.
 2. Open the plugin configuration page.
-3. Set the OpenAI-compatible base URL, central model, API key, optional thinking mode, optional system prompt addendum, optional Prometheus and rqlite datasource allow-lists, and optional custom skills.
+3. Set the OpenAI-compatible base URL, central model, API key, optional thinking mode, optional system prompt addendum, optional Prometheus datasource allow-list, and optional custom skills.
 4. Open **Observability Analyst** from the app navigation.
 5. Ask the assistant to inspect metrics, validate PromQL, or create dashboards.
 

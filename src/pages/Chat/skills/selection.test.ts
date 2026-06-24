@@ -47,11 +47,12 @@ describe('Grafana skill selection', () => {
     );
   });
 
-  it('activates the rqlite skill for SQL datasource requests', () => {
-    const selection = selectGrafanaSkills('show me rqlite tables and query SELECT * FROM metrics', GRAFANA_SKILLS);
+  it('does not activate a bundled skill for SQL datasource requests', () => {
+    const selection = selectGrafanaSkills('show me SQL tables and query SELECT * FROM metrics', GRAFANA_SKILLS);
 
-    expect(selection.activeSkillNames).toEqual(['rqlite-datasource']);
-    expect(selection.toolGroups).toEqual(expect.arrayContaining(['metrics', 'subagents', 'rqlite', 'skillResources']));
+    expect(selection.activeSkillNames).toEqual([]);
+    expect(selection.toolGroups).toEqual(expect.arrayContaining(['metrics', 'subagents']));
+    expect(selection.toolGroups).not.toContain('skillResources');
   });
 
   it('renders only active skill instructions into the system prompt', () => {

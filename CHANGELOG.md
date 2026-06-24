@@ -1,9 +1,8 @@
 ## [2.5.1](https://github.com/elohmeier/grafana-pi-app/compare/v2.5.0...v2.5.1) (2026-06-05)
 
-
 ### Bug Fixes
 
-* **chat:** handle stopped chat replay content ([2db3ccf](https://github.com/elohmeier/grafana-pi-app/commit/2db3ccfbd1e2b0cd9c0e00ed9f619b5edcb1f4a4))
+- **chat:** handle stopped chat replay content ([2db3ccf](https://github.com/elohmeier/grafana-pi-app/commit/2db3ccfbd1e2b0cd9c0e00ed9f619b5edcb1f4a4))
 
 # [2.5.0](https://github.com/elohmeier/grafana-pi-app/compare/v2.4.1...v2.5.0) (2026-06-05)
 
@@ -60,10 +59,6 @@
 # [2.0.0](https://github.com/elohmeier/grafana-pi-app/compare/v1.3.0...v2.0.0) (2026-05-29)
 
 - refactor(chat)!: rename Prometheus allowlist ([bacd322](https://github.com/elohmeier/grafana-pi-app/commit/bacd3226188a8a225967f58a21082d60c295765d))
-
-### Features
-
-- **chat:** add rqlite query tools ([6eb7671](https://github.com/elohmeier/grafana-pi-app/commit/6eb7671627ff4436e129b92354b8e6e229eeed14))
 
 ### BREAKING CHANGES
 

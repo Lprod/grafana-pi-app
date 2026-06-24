@@ -35,7 +35,6 @@ export type PiAppJsonData = {
   allowedPrometheusDatasourceUids?: string[];
   // Legacy name kept for existing plugin settings.
   allowedDatasourceUids?: string[];
-  allowedRqliteDatasourceUids?: string[];
   systemPromptAddendum?: string;
   customSkills?: PiAppCustomSkill[];
 };

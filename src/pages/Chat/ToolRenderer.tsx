@@ -451,30 +451,6 @@ function asSimpleToolCallSummary(
     case 'list_datasources':
     case 'grafana_get_datasources':
       return { summary: 'Discover Prometheus datasources' };
-    case 'list_rqlite_datasources':
-      return { summary: 'Discover rqlite datasources' };
-    case 'list_rqlite_tables':
-      return {
-        summary: `List rqlite tables | ${formatDatasourceSummary(record)}`,
-        items: [{ label: 'Datasource', value: formatDatasourceMetaValue(record) }],
-      };
-    case 'list_rqlite_columns':
-      return {
-        summary: summaryLine(['List rqlite columns', stringField(record, 'table'), formatDatasourceSummary(record)]),
-        items: [
-          { label: 'Datasource', value: formatDatasourceMetaValue(record) },
-          { label: 'Table', value: stringField(record, 'table') },
-        ],
-      };
-    case 'query_rqlite':
-      return {
-        summary: summaryLine(['Query rqlite', formatDatasourceSummary(record)]),
-        items: [
-          { label: 'Datasource', value: formatDatasourceMetaValue(record) },
-          { label: 'Format', value: stringField(record, 'format') ?? 'table' },
-        ],
-        code: stringField(record, 'sql'),
-      };
     case 'list_metrics':
       return listMetricsToolCallSummary(record);
     case 'list_label_values':
@@ -1075,10 +1051,6 @@ function hasUsefulErrorContent(content: unknown, message: string) {
 const TOOL_ICONS: Record<string, IconName> = {
   list_datasources: 'database',
   grafana_get_datasources: 'database',
-  list_rqlite_datasources: 'database',
-  list_rqlite_tables: 'table',
-  list_rqlite_columns: 'list-ul',
-  query_rqlite: 'database',
   list_metrics: 'list-ul',
   list_label_values: 'list-ul',
   inspect_metric_series: 'search',
@@ -1279,11 +1251,6 @@ function renderStructuredToolResult(
     return <LineListResultView result={lineList} />;
   }
 
-  const rqliteQuery = asRqliteQuerySummary(toolName, details, content);
-  if (rqliteQuery) {
-    return <RqliteQueryResultView result={rqliteQuery} />;
-  }
-
   const metricSeries = asMetricSeriesInspection(toolName, details, content);
   if (metricSeries) {
     return <MetricSeriesInspectionView result={metricSeries} />;
@@ -1455,113 +1422,6 @@ function LineListResultView({ result }: { result: LineListResult }) {
       </div>
     </div>
   );
-}
-
-type RqliteQuerySummaryView = {
-  datasourceUid?: string;
-  sql: string;
-  frameCount: number;
-  rowCount: number;
-  truncated: boolean;
-  frames: RqliteFrameSummaryView[];
-  contentAvailable: boolean;
-};
-
-type RqliteFrameSummaryView = {
-  name?: string;
-  rowCount: number;
-  truncated: boolean;
-  columns: RqliteColumnSummaryView[];
-  rows: Array<Record<string, unknown>>;
-};
-
-type RqliteColumnSummaryView = {
-  name: string;
-  type?: string;
-};
-
-function RqliteQueryResultView({ result }: { result: RqliteQuerySummaryView }) {
-  const styles = useStyles2(getToolStyles);
-  const summaryParts = [
-    `${formatCount(result.rowCount)} ${result.rowCount === 1 ? 'row' : 'rows'}`,
-    `${formatCount(result.frameCount)} ${result.frameCount === 1 ? 'frame' : 'frames'}`,
-    result.truncated ? 'truncated' : undefined,
-  ].filter(Boolean);
-
-  return (
-    <div className={styles.structuredResult}>
-      <div className={styles.resultSummary}>{summaryParts.join(' | ')}</div>
-      <ResultMetaGrid
-        items={[
-          { label: 'Datasource', value: result.datasourceUid },
-          { label: 'Rows', value: formatCount(result.rowCount) },
-          { label: 'Frames', value: formatCount(result.frameCount) },
-          { label: 'Shown', value: result.truncated ? 'truncated' : undefined },
-        ]}
-      />
-      <pre className={styles.queryBlock}>{result.sql}</pre>
-      {!result.contentAvailable && (
-        <div className={styles.emptyState}>The SQL query completed, but row-level preview data was unavailable.</div>
-      )}
-      {result.frames.map((frame, index) => (
-        <RqliteFrameView frame={frame} index={index} key={`${frame.name ?? 'frame'}:${index}`} />
-      ))}
-    </div>
-  );
-}
-
-function RqliteFrameView({ frame, index }: { frame: RqliteFrameSummaryView; index: number }) {
-  const styles = useStyles2(getToolStyles);
-  const columns = rqliteFrameColumns(frame);
-  const title = frame.name || `Frame ${index + 1}`;
-
-  return (
-    <details className={styles.collapsible} open={index === 0}>
-      <summary>
-        {title} | {formatCount(frame.rowCount)} {frame.rowCount === 1 ? 'row' : 'rows'}
-        {frame.truncated ? ' | truncated' : ''}
-      </summary>
-      {columns.length === 0 || frame.rows.length === 0 ? (
-        <div className={styles.emptyState}>No rows in this frame.</div>
-      ) : (
-        <div className={styles.tableWrap}>
-          <table className={cx(styles.dataTable, styles.wideTable)}>
-            <thead>
-              <tr>
-                {columns.map((column) => (
-                  <th key={column.name} title={column.type}>
-                    {column.name}
-                  </th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {frame.rows.map((row, rowIndex) => (
-                <tr key={rowIndex}>
-                  {columns.map((column) => {
-                    const value = formatTableCellValue(row[column.name]);
-                    return (
-                      <td className={styles.textClip} key={column.name} title={value}>
-                        {value}
-                      </td>
-                    );
-                  })}
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
-    </details>
-  );
-}
-
-function rqliteFrameColumns(frame: RqliteFrameSummaryView): RqliteColumnSummaryView[] {
-  if (frame.columns.length > 0) {
-    return frame.columns;
-  }
-
-  return Array.from(new Set(frame.rows.flatMap((row) => Object.keys(row)))).map((name) => ({ name }));
 }
 
 type MetricSeriesInspection = {
@@ -2825,80 +2685,6 @@ function asLineListResult(
   };
 }
 
-function asRqliteQuerySummary(
-  toolName: string | undefined,
-  details: unknown,
-  content: unknown
-): RqliteQuerySummaryView | undefined {
-  if (toolName !== 'query_rqlite') {
-    return undefined;
-  }
-
-  const detailRecord = isRecord(details) ? details : undefined;
-  const record = parseToolJsonRecord(content, details);
-  if (record) {
-    const sql = stringField(record, 'sql') ?? stringField(detailRecord, 'sql');
-    if (!sql) {
-      return undefined;
-    }
-
-    const frames = recordsField(record, 'frames')
-      .map(asRqliteFrameSummary)
-      .filter((frame): frame is RqliteFrameSummaryView => Boolean(frame));
-    return {
-      datasourceUid: stringField(record, 'datasourceUid') ?? stringField(detailRecord, 'datasourceUid'),
-      sql,
-      frameCount: numberField(record, 'frameCount') ?? frames.length,
-      rowCount: numberField(record, 'rowCount') ?? numberField(detailRecord, 'rows') ?? 0,
-      truncated: booleanField(record, 'truncated') ?? booleanField(detailRecord, 'truncated') ?? false,
-      frames,
-      contentAvailable: true,
-    };
-  }
-
-  const sql = stringField(detailRecord, 'sql');
-  if (!sql || booleanField(detailRecord, 'summarized') !== true) {
-    return undefined;
-  }
-
-  return {
-    datasourceUid: stringField(detailRecord, 'datasourceUid'),
-    sql,
-    frameCount: numberField(detailRecord, 'frames') ?? 0,
-    rowCount: numberField(detailRecord, 'rows') ?? 0,
-    truncated: booleanField(detailRecord, 'truncated') ?? false,
-    frames: [],
-    contentAvailable: false,
-  };
-}
-
-function asRqliteFrameSummary(record: Record<string, unknown>): RqliteFrameSummaryView | undefined {
-  const rows = recordsField(record, 'rows');
-  const columns = recordsField(record, 'columns')
-    .map(asRqliteColumnSummary)
-    .filter((column): column is RqliteColumnSummaryView => Boolean(column));
-  const rowCount = numberField(record, 'rowCount') ?? rows.length;
-
-  return {
-    name: stringField(record, 'name'),
-    rowCount,
-    truncated: booleanField(record, 'truncated') ?? rows.length < rowCount,
-    columns,
-    rows,
-  };
-}
-
-function asRqliteColumnSummary(record: Record<string, unknown>): RqliteColumnSummaryView | undefined {
-  const name = stringField(record, 'name');
-  if (!name) {
-    return undefined;
-  }
-  return {
-    name,
-    type: stringField(record, 'type'),
-  };
-}
-
 function asMetricSeriesInspection(
   toolName: string | undefined,
   details: unknown,
@@ -3806,22 +3592,6 @@ function formatNumber(value: number | null | undefined) {
     return value.toLocaleString(undefined, { maximumFractionDigits: 2 });
   }
   return Number(value.toPrecision(5)).toString();
-}
-
-function formatTableCellValue(value: unknown) {
-  if (value === null || value === undefined) {
-    return '-';
-  }
-  if (typeof value === 'string') {
-    return value;
-  }
-  if (typeof value === 'number') {
-    return formatNumber(value);
-  }
-  if (typeof value === 'boolean') {
-    return value ? 'true' : 'false';
-  }
-  return formatJson(value);
 }
 
 function formatBytes(value: number | undefined) {

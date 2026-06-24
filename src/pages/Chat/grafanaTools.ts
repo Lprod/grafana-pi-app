@@ -10,7 +10,6 @@ export {
   createSkillTools,
   DEFAULT_JSONNET_FILE_PATH,
   filterAllowedPrometheusDatasourceSettings,
-  filterAllowedRqliteDatasourceSettings,
   getUnavailableDashboardDatasourceUids,
   normalizeJsonnetPath,
 } from './tools';
