@@ -19,12 +19,14 @@ import { testIds } from '../../components/testIds';
 import { usePluginMeta } from '../../utils/utils.plugin';
 import {
   createGrafanaSupervisorTools,
+  createGrafanaToolsForSkillGroups,
   createSkillTools,
   artifactByteSize,
   artifactizeToolResult,
   normalizeJsonnetPath,
   type Artifact,
   type ArtifactRuntime,
+  type GrafanaToolRuntime,
   type InvestigationReport,
   type VirtualJsonnetFileSnapshot,
 } from './grafanaTools';
@@ -286,20 +288,26 @@ function ChatApp() {
     (prompt: string) => {
       const selection = selectGrafanaSkills(prompt, skills);
       const skillTools = createSkillTools(selection.activeSkills);
-      const tools = createGrafanaSupervisorTools({
+      const beforeToolCall: NonNullable<GrafanaToolRuntime['beforeToolCall']> = async ({ toolCall, args }, signal) =>
+        requestToolConfirmation(toolCall.name, args, signal);
+      const toolOptions = {
         ...jsonData,
         runtime: {
           model: llmModel,
           streamFn,
           thinkingLevel,
-          beforeToolCall: async ({ toolCall, args }, signal) => requestToolConfirmation(toolCall.name, args, signal),
+          beforeToolCall,
           afterToolCall,
         },
         virtualJsonnetFiles: virtualJsonnetRuntime,
         investigationReport: investigationReportRuntime,
         artifacts: artifactRuntime,
         skillTools,
-      });
+      };
+      const tools =
+        prompt.trim() === ''
+          ? createGrafanaSupervisorTools(toolOptions)
+          : createGrafanaToolsForSkillGroups(toolOptions, selection.toolGroups);
 
       return {
         systemPrompt: renderGrafanaSystemPrompt({
