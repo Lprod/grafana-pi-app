@@ -1,3 +1,10 @@
+## [2.5.2](https://github.com/elohmeier/grafana-pi-app/compare/v2.5.1...v2.5.2) (2026-06-24)
+
+
+### Bug Fixes
+
+* prevent mobile session title clipping ([bd5945c](https://github.com/elohmeier/grafana-pi-app/commit/bd5945c03f7aaeae8aa6557d91bdb1bd94d54cc9))
+
 ## [2.5.1](https://github.com/elohmeier/grafana-pi-app/compare/v2.5.0...v2.5.1) (2026-06-05)
 
 ### Bug Fixes
