@@ -1864,9 +1864,12 @@ const getStyles = (theme: GrafanaTheme2) => ({
   }),
   sessionButton: css({
     display: 'grid',
+    gridTemplateRows: 'auto auto',
+    alignContent: 'center',
     gap: theme.spacing(0.5),
+    flexShrink: 0,
     width: '100%',
-    minHeight: 54,
+    minHeight: 60,
     padding: theme.spacing(1),
     border: `1px solid ${theme.colors.border.weak}`,
     borderRadius: theme.shape.radius.default,
@@ -1883,6 +1886,9 @@ const getStyles = (theme: GrafanaTheme2) => ({
     boxShadow: `inset 3px 0 0 ${theme.colors.primary.main}`,
   }),
   sessionTitle: css({
+    display: 'block',
+    minWidth: 0,
+    lineHeight: theme.typography.body.lineHeight,
     overflow: 'hidden',
     textOverflow: 'ellipsis',
     whiteSpace: 'nowrap',
@@ -1890,6 +1896,7 @@ const getStyles = (theme: GrafanaTheme2) => ({
   sessionDate: css({
     color: theme.colors.text.secondary,
     fontSize: theme.typography.bodySmall.fontSize,
+    lineHeight: theme.typography.bodySmall.lineHeight,
   }),
   main: css({
     display: 'flex',
