@@ -1,3 +1,10 @@
+## [2.5.3](https://github.com/elohmeier/grafana-pi-app/compare/v2.5.2...v2.5.3) (2026-06-24)
+
+
+### Bug Fixes
+
+* expose selected chat skill tools ([f3c9110](https://github.com/elohmeier/grafana-pi-app/commit/f3c9110de944e05eb32ab207cde5cc400879ebbc))
+
 ## [2.5.2](https://github.com/elohmeier/grafana-pi-app/compare/v2.5.1...v2.5.2) (2026-06-24)
 
 
