@@ -1,0 +1,75 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="860" height="280" viewBox="0 0 860 280" role="img" aria-labelledby="title desc">
+  <title id="title">Agenten-Loop</title>
+  <desc id="desc">Vom Nutzer über das Modell zum kontrollierten Tool-Aufruf und zurück zur Antwort.</desc>
+  <rect x="0" y="0" width="860" height="280" rx="12" fill="#f4fbfe"/>
+  <g font-family="Open Sans, Arial, sans-serif">
+    <g fill="none" stroke="#009EE3" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+      <line x1="156" y1="82" x2="206" y2="82"/>
+      <polygon points="206,82 193,74 193,90" fill="#009EE3" stroke="none"/>
+      <line x1="336" y1="82" x2="386" y2="82"/>
+      <polygon points="386,82 373,74 373,90" fill="#009EE3" stroke="none"/>
+      <line x1="516" y1="82" x2="590" y2="82"/>
+      <polygon points="590,82 577,74 577,90" fill="#009EE3" stroke="none"/>
+      <path d="M 695 116 L 695 145 L 516 145 L 516 174"/>
+      <polygon points="516,174 508,161 524,161" fill="#009EE3" stroke="none"/>
+      <line x1="386" y1="208" x2="336" y2="208"/>
+      <polygon points="336,208 349,200 349,216" fill="#009EE3" stroke="none"/>
+      <path d="M 271 174 L 271 136"/>
+      <polygon points="271,136 263,149 279,149" fill="#009EE3" stroke="none"/>
+    </g>
+
+    <g>
+      <rect x="26" y="48" width="130" height="68" rx="8" fill="#ffffff" stroke="#c7e6f4"/>
+      <g transform="translate(84 54) scale(0.6)" fill="none" stroke="#009EE3" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M2.992 16.342a2 2 0 0 1 .094 1.167l-1.065 3.29a1 1 0 0 0 1.236 1.168l3.413-.998a2 2 0 0 1 1.099.092 10 10 0 1 0-4.777-4.719" />
+      </g>
+      <text x="91" y="89" text-anchor="middle" font-size="17" font-weight="700" fill="#00354e">Nutzerfrage</text>
+      <text x="91" y="110" text-anchor="middle" font-size="12" fill="#004b6f">Ziel + Kontext</text>
+
+      <rect x="206" y="48" width="130" height="68" rx="8" fill="#ffffff" stroke="#c7e6f4"/>
+      <g transform="translate(264 54) scale(0.6)" fill="none" stroke="#009EE3" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M22 12h-2.48a2 2 0 0 0-1.93 1.46l-2.35 8.36a.25.25 0 0 1-.48 0L9.24 2.18a.25.25 0 0 0-.48 0l-2.35 8.36A2 2 0 0 1 4.49 12H2" />
+      </g>
+      <text x="271" y="89" text-anchor="middle" font-size="17" font-weight="700" fill="#00354e">Modell</text>
+      <text x="271" y="110" text-anchor="middle" font-size="12" fill="#004b6f">plant nächsten Schritt</text>
+
+      <rect x="386" y="48" width="130" height="68" rx="8" fill="#ffffff" stroke="#c7e6f4"/>
+      <g transform="translate(444 54) scale(0.6)" fill="none" stroke="#009EE3" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.106-3.105c.32-.322.863-.22.983.218a6 6 0 0 1-8.259 7.057l-7.91 7.91a1 1 0 0 1-2.999-3l7.91-7.91a6 6 0 0 1 7.057-8.259c.438.12.54.662.219.984z" />
+      </g>
+      <text x="451" y="89" text-anchor="middle" font-size="17" font-weight="700" fill="#00354e">Tool-Aufruf</text>
+      <text x="451" y="110" text-anchor="middle" font-size="12" fill="#004b6f">Name + Argumente</text>
+
+      <rect x="590" y="48" width="210" height="68" rx="8" fill="#f4fbfe" stroke="#009EE3"/>
+      <g transform="translate(688 54) scale(0.6)" fill="none" stroke="#009EE3" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z" />
+        <path d="m9 12 2 2 4-4" />
+      </g>
+      <text x="695" y="89" text-anchor="middle" font-size="17" font-weight="700" fill="#00354e">App prüft und führt aus</text>
+      <text x="695" y="110" text-anchor="middle" font-size="12" fill="#004b6f">Schema, Rechte, Allow-Lists</text>
+
+      <rect x="386" y="174" width="130" height="68" rx="8" fill="#ffffff" stroke="#c7e6f4"/>
+      <g transform="translate(444 180) scale(0.6)" fill="none" stroke="#009EE3" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M13 5h8" />
+        <path d="M13 12h8" />
+        <path d="M13 19h8" />
+        <path d="m3 17 2 2 4-4" />
+        <path d="m3 7 2 2 4-4" />
+      </g>
+      <text x="451" y="215" text-anchor="middle" font-size="17" font-weight="700" fill="#00354e">Tool-Ergebnis</text>
+      <text x="451" y="236" text-anchor="middle" font-size="12" fill="#004b6f">kompakt und geprüft</text>
+
+      <rect x="206" y="174" width="130" height="68" rx="8" fill="#ffffff" stroke="#c7e6f4"/>
+      <g transform="translate(264 180) scale(0.6)" fill="none" stroke="#009EE3" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M2.992 16.342a2 2 0 0 1 .094 1.167l-1.065 3.29a1 1 0 0 0 1.236 1.168l3.413-.998a2 2 0 0 1 1.099.092 10 10 0 1 0-4.777-4.719" />
+      </g>
+      <text x="271" y="215" text-anchor="middle" font-size="17" font-weight="700" fill="#00354e">Antwort</text>
+      <text x="271" y="236" text-anchor="middle" font-size="12" fill="#004b6f">Befund + Unsicherheit</text>
+    </g>
+
+    <text x="620" y="218" font-size="13" font-weight="700" fill="#009EE3">Kontrollpunkt</text>
+    <text x="620" y="238" font-size="12" fill="#004b6f">Das Modell beschreibt einen Wunsch.</text>
+    <text x="620" y="256" font-size="12" fill="#004b6f">Die Anwendung entscheidet, was passiert.</text>
+  </g>
+</svg>
