@@ -1,3 +1,10 @@
+# [2.6.0](https://github.com/elohmeier/grafana-pi-app/compare/v2.5.3...v2.6.0) (2026-06-25)
+
+
+### Features
+
+* update Assistant UI defaults ([006f6c9](https://github.com/elohmeier/grafana-pi-app/commit/006f6c9b732bfd3e4496046d05a5d93a990fc260))
+
 ## [2.5.3](https://github.com/elohmeier/grafana-pi-app/compare/v2.5.2...v2.5.3) (2026-06-24)
 
 
