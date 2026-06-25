@@ -1178,7 +1178,9 @@ function subagentLabel(agent: SubagentRunDetails['agent']) {
 
 function SubagentToolCallRow({ call }: { call: SubagentToolCall }) {
   const styles = useStyles2(getToolStyles);
-  const [isOpen, setIsOpen] = useState(false);
+  const shouldAutoOpen = shouldExpandSubagentToolCall(call);
+  const [manualOpen, setManualOpen] = useState<boolean | undefined>(undefined);
+  const isOpen = manualOpen ?? shouldAutoOpen;
   const toolResult = call.result ?? call.partialResult;
   const resultContent = toolResult?.content ?? contentFromLegacyToolText(call.text);
   const resultDetails = toolResult?.details;
@@ -1192,7 +1194,7 @@ function SubagentToolCallRow({ call }: { call: SubagentToolCall }) {
         aria-expanded={isOpen}
         onClick={(event) => {
           event.preventDefault();
-          setIsOpen((open) => !open);
+          setManualOpen((open) => !(open ?? shouldAutoOpen));
         }}
       >
         <span>{call.status === 'running' ? 'Running' : call.status === 'failed' ? 'Failed' : 'Done'}</span>
@@ -1227,6 +1229,14 @@ function SubagentToolCallRow({ call }: { call: SubagentToolCall }) {
         </div>
       )}
     </details>
+  );
+}
+
+function shouldExpandSubagentToolCall(call: SubagentToolCall) {
+  return (
+    call.status === 'completed' &&
+    !call.isError &&
+    (call.name === 'sync_dashboard' || call.name === 'grafana_sync_managed_dashboard')
   );
 }
 
@@ -3692,10 +3702,13 @@ const getToolStyles = (theme: GrafanaTheme2) => ({
     '& code': {
       fontFamily: theme.typography.fontFamilyMonospace,
       fontSize: theme.typography.bodySmall.fontSize,
+      whiteSpace: 'pre-wrap',
+      overflowWrap: 'anywhere',
     },
     '& pre': {
-      whiteSpace: 'pre',
+      whiteSpace: 'pre-wrap',
       overflow: 'auto',
+      overflowWrap: 'anywhere',
       padding: theme.spacing(1),
       border: `1px solid ${theme.colors.border.weak}`,
       borderRadius: theme.shape.radius.default,
@@ -3761,7 +3774,8 @@ const getToolStyles = (theme: GrafanaTheme2) => ({
   toolCallJson: css({
     margin: 0,
     overflow: 'auto',
-    whiteSpace: 'pre',
+    whiteSpace: 'pre-wrap',
+    overflowWrap: 'anywhere',
   }),
   structuredResult: css({
     display: 'grid',
@@ -4149,7 +4163,8 @@ const getToolStyles = (theme: GrafanaTheme2) => ({
   }),
   codeText: css({
     padding: theme.spacing(0, 1),
-    whiteSpace: 'pre',
+    whiteSpace: 'pre-wrap',
+    overflowWrap: 'anywhere',
   }),
   syntaxComment: css({
     color: theme.colors.text.secondary,
@@ -4189,7 +4204,8 @@ const getToolStyles = (theme: GrafanaTheme2) => ({
   }),
   diffLine: css({
     padding: theme.spacing(0, 1),
-    whiteSpace: 'pre',
+    whiteSpace: 'pre-wrap',
+    overflowWrap: 'anywhere',
   }),
   diffAdd: css({
     background: theme.colors.success.transparent,

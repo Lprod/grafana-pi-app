@@ -32,7 +32,7 @@ function App(props: AppRootProps) {
   if (!hasAccess) {
     return (
       <Alert severity="warning" title="Access denied">
-        You do not have permission to use Observability Analyst.
+        You do not have permission to use Assistant.
       </Alert>
     );
   }

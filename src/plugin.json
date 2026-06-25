@@ -1,7 +1,7 @@
 {
   "$schema": "https://raw.githubusercontent.com/grafana/grafana/main/docs/sources/developers/plugins/plugin.schema.json",
   "type": "app",
-  "name": "Observability Analyst",
+  "name": "Assistant",
   "id": "g42-pi-app",
   "backend": true,
   "executable": "gpx_g42_pi_app",
@@ -22,17 +22,18 @@
   "includes": [
     {
       "type": "page",
-      "name": "Observability Analyst",
+      "name": "Assistant",
       "path": "/a/%PLUGIN_ID%/chat",
       "addToNav": true,
-      "defaultNav": true
+      "defaultNav": true,
+      "icon": "heart-rate"
     }
   ],
   "roles": [
     {
       "role": {
         "name": "Access",
-        "description": "Use the Observability Analyst app.",
+        "description": "Use the Assistant app.",
         "permissions": [{ "action": "g42-pi-app.app:access" }]
       },
       "grants": ["Admin"]

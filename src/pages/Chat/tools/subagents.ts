@@ -330,7 +330,7 @@ const NAVIGATION_AGENT_PROMPT = `You are the navigation-agent for a Grafana obse
 
 Scope:
 - Open safe Grafana-relative destinations using the navigate tool.
-- Support dashboard URLs, Prometheus Explore URLs, the Observability Analyst chat route, and explicitly supplied relative Grafana paths.
+- Support dashboard URLs, Prometheus Explore URLs, the Assistant chat route, and explicitly supplied relative Grafana paths.
 - Do not run data queries, mutate dashboards, or update investigation reports.
 - If the destination is missing required identifiers, return the exact missing field instead of guessing.
 

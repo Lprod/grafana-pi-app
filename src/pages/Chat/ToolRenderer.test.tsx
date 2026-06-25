@@ -773,6 +773,60 @@ describe('ToolRenderer', () => {
     expect(container.textContent).not.toContain('Managed dashboard synced');
   });
 
+  it('expands successful nested sync_dashboard results by default', () => {
+    const details = {
+      type: 'subagent',
+      agent: 'dashboard',
+      status: 'completed',
+      task: 'Create a dashboard.',
+      toolNames: ['sync_dashboard'],
+      toolCalls: [
+        {
+          id: 'tool-1',
+          name: 'sync_dashboard',
+          args: {
+            uid: 'service-health',
+          },
+          status: 'completed',
+          result: {
+            content: [{ type: 'text', text: 'Dashboard synced.' }],
+            details: {
+              status: 'synced',
+              uid: 'service-health',
+              url: '/d/service-health/service-health',
+              sourceChecksum: '0123456789abcdef',
+            },
+          },
+          isError: false,
+        },
+      ],
+      usage: {
+        turns: 1,
+        input: 10,
+        output: 4,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 14,
+        cost: 0,
+      },
+      finalOutput: 'Dashboard synced.',
+    };
+
+    render(
+      <ToolResultMessageBody
+        toolName="run_dashboard_agent"
+        content={[{ type: 'text', text: 'Dashboard synced.' }]}
+        details={details}
+      />
+    );
+
+    const row = screen.getByText('sync_dashboard').closest('details') as HTMLDetailsElement | null;
+
+    expect(row?.open).toBe(true);
+    expect(screen.getByText('Managed dashboard synced')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Open' })).toHaveAttribute('href', '/d/service-health/service-health');
+  });
+
   it('renders object-shaped failed tool results as readable errors', () => {
     const { container } = render(
       <ToolResultMessageBody

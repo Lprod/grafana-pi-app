@@ -1604,7 +1604,7 @@ function stopDownloadClickPropagation(event: MouseEvent) {
 }
 
 function chatSessionExportFilename(title: string) {
-  const safeTitle = safeFilenamePart(title) || 'observability-analyst-chat-session';
+  const safeTitle = safeFilenamePart(title) || 'assistant-chat-session';
   return `${safeTitle}.json`;
 }
 
@@ -1627,7 +1627,7 @@ function parseChatSessionExport(value: unknown): StoredSession {
     throw new Error('Import file must contain a JSON object.');
   }
   if (value.kind !== CHAT_SESSION_EXPORT_KIND && !LEGACY_CHAT_SESSION_EXPORT_KINDS.includes(String(value.kind))) {
-    throw new Error('Import file is not an Observability Analyst chat session export.');
+    throw new Error('Import file is not an Assistant chat session export.');
   }
   if (value.schemaVersion !== CHAT_SESSION_EXPORT_SCHEMA_VERSION) {
     throw new Error(`Unsupported chat session export version: ${String(value.schemaVersion)}`);
