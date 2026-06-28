@@ -24,6 +24,7 @@ jest.mock('@grafana/runtime', () => ({
 jest.mock('typebox', () => ({
   Type: {
     Array: jest.fn((items, config) => ({ ...config, items })),
+    Any: jest.fn((config) => config ?? {}),
     Boolean: jest.fn((config) => config ?? {}),
     Literal: jest.fn((value, config) => ({ ...config, const: value })),
     Number: jest.fn((config) => config ?? {}),
@@ -521,6 +522,42 @@ describe('grafana datasource tool policy', () => {
       })
     );
     expect(result.content[0].text).toContain('Managed dashboard created');
+  });
+
+  it('applies the approved folder override to one managed dashboard sync call', async () => {
+    const fetch = jest.fn().mockReturnValue(
+      of({
+        data: {
+          uid: 'direct-jsonnet',
+          url: '/d/direct-jsonnet',
+          status: 'created',
+          sourceChecksum: 'sha256:test',
+        },
+      })
+    );
+    const clearFolderOverride = jest.fn();
+    (getBackendSrv as jest.Mock).mockReturnValue({ fetch });
+    const tool = getTool(
+      createGrafanaTools({
+        allowedPrometheusDatasourceUids: ['prom-a'],
+        dashboardSyncFolders: {
+          getFolderOverride: jest.fn(() => ({ uid: 'team-folder', title: 'Team folder' })),
+          clearFolderOverride,
+        },
+      }),
+      'sync_dashboard'
+    );
+    const source = "{ title: 'Direct Jsonnet', uid: 'direct-jsonnet', panels: [] }";
+
+    const result = await tool.execute('call-folder', { dashboard_jsonnet: source }, undefined);
+
+    expect(fetch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: { dashboard_jsonnet: source, folderUid: 'team-folder' },
+      })
+    );
+    expect(result.details).toMatchObject({ folderUid: 'team-folder', folderTitle: 'Team folder' });
+    expect(clearFolderOverride).toHaveBeenCalledWith('call-folder');
   });
 
   it('writes and edits a session virtual Jsonnet file without returning full source to the model', async () => {
@@ -1023,12 +1060,249 @@ describe('grafana datasource tool policy', () => {
     expect(names).not.toContain('query_prometheus_raw');
     expect(names).not.toContain('upload_dashboard');
     expect(names).not.toContain('delete_dashboard');
+    expect(names).not.toContain('apply_live_dashboard_mutation');
     expect(names).not.toContain('explore_jsonnet');
     expect(names).not.toContain('grafana_list_managed_dashboard_templates');
     expect(names).not.toContain('read_managed_dashboard_template');
     expect(names).not.toContain('search_grafonnet');
     expect(names).not.toContain('read_grafonnet');
     expect(names).not.toContain('list_grafonnet');
+  });
+
+  it('exposes live dashboard mutation tools only when Grafana provides the restricted API', async () => {
+    const withoutApi = createGrafanaToolsForSkillGroups({}, ['liveDashboardEditing']).map((tool) => tool.name);
+    expect(withoutApi).not.toContain('apply_live_dashboard_mutation');
+
+    const dashboardMutation = {
+      execute: jest.fn(async ({ type, payload }: { type: string; payload: unknown }) => ({
+        success: true,
+        changes: [{ path: '/elements/panel-1', previousValue: null, newValue: { type, payload } }],
+        data: { ok: true },
+      })),
+      getPayloadSchema: jest.fn(() => ({}) as any),
+      getAvailableCommands: jest.fn(() => [
+        'ADD_PANEL',
+        'ADD_VARIABLE',
+        'GET_DASHBOARD_INFO',
+        'GET_LAYOUT',
+        'LIST_PANELS',
+        'LIST_VARIABLES',
+        'MOVE_PANEL',
+        'UPDATE_DASHBOARD_SETTINGS',
+        'UPDATE_PANEL',
+        'UPDATE_VARIABLE',
+      ]),
+    };
+    const tools = createGrafanaToolsForSkillGroups({ dashboardMutation }, ['liveDashboardEditing']);
+    const names = tools.map((tool) => tool.name);
+
+    expect(names).toEqual([
+      'list_live_dashboard_panels',
+      'get_live_dashboard_layout',
+      'get_live_dashboard_info',
+      'list_live_dashboard_variables',
+      'get_live_dashboard_mutation_schema',
+      'rename_live_dashboard_panel',
+      'update_live_dashboard_panel_query',
+      'add_live_dashboard_panel',
+      'move_or_resize_live_dashboard_panel',
+      'update_live_dashboard_settings',
+      'add_live_dashboard_variable',
+      'update_live_dashboard_variable',
+      'apply_live_dashboard_mutation',
+    ]);
+
+    const listTool = getTool(tools, 'list_live_dashboard_panels');
+    const listResult = await listTool.execute('call-1', { includeStatus: true }, undefined);
+    expect(dashboardMutation.execute).toHaveBeenCalledWith({
+      type: 'LIST_PANELS',
+      payload: { includeStatus: true },
+    });
+    expect(listResult.content[0].text).toContain('Live dashboard mutation LIST_PANELS succeeded');
+
+    const applyTool = getTool(tools, 'apply_live_dashboard_mutation');
+    const result = await applyTool.execute(
+      'call-2',
+      {
+        type: 'UPDATE_PANEL',
+        payload: {
+          element: { kind: 'ElementReference', name: 'panel-1' },
+          panel: { kind: 'Panel', spec: { title: 'Renamed' } },
+        },
+      },
+      undefined
+    );
+    expect(result.details).toMatchObject({ command: 'UPDATE_PANEL', success: true });
+
+    const renameTool = getTool(tools, 'rename_live_dashboard_panel');
+    await renameTool.execute('call-3', { elementName: 'panel-1', title: 'Typed rename' }, undefined);
+    expect(dashboardMutation.execute).toHaveBeenLastCalledWith({
+      type: 'UPDATE_PANEL',
+      payload: {
+        element: { kind: 'ElementReference', name: 'panel-1' },
+        panel: { kind: 'Panel', spec: { title: 'Typed rename' } },
+      },
+    });
+
+    const queryTool = getTool(tools, 'update_live_dashboard_panel_query');
+    await queryTool.execute(
+      'call-4',
+      { elementName: 'panel-1', queryExpression: 'sum(rate(http_requests_total[$__rate_interval]))' },
+      undefined
+    );
+    expect(dashboardMutation.execute).toHaveBeenLastCalledWith({
+      type: 'UPDATE_PANEL',
+      payload: {
+        element: { kind: 'ElementReference', name: 'panel-1' },
+        panel: {
+          kind: 'Panel',
+          spec: {
+            data: {
+              kind: 'QueryGroup',
+              spec: {
+                queries: [
+                  {
+                    kind: 'PanelQuery',
+                    spec: {
+                      refId: 'A',
+                      query: {
+                        kind: 'DataQuery',
+                        group: 'prometheus',
+                        spec: { expr: 'sum(rate(http_requests_total[$__rate_interval]))' },
+                      },
+                    },
+                  },
+                ],
+              },
+            },
+          },
+        },
+      },
+    });
+
+    const addTool = getTool(tools, 'add_live_dashboard_panel');
+    const addResult = await addTool.execute(
+      'call-5',
+      {
+        title: 'Typed added panel',
+        queryExpression: 'sum(rate(http_requests_total{status=~"5.."}[$__rate_interval]))',
+        x: 12,
+        y: 8,
+        width: 12,
+        height: 8,
+      },
+      undefined
+    );
+    expect(dashboardMutation.execute).toHaveBeenCalledWith({
+      type: 'ADD_PANEL',
+      payload: {
+        panel: {
+          kind: 'Panel',
+          spec: {
+            title: 'Typed added panel',
+            data: {
+              kind: 'QueryGroup',
+              spec: {
+                queries: [
+                  {
+                    kind: 'PanelQuery',
+                    spec: {
+                      refId: 'A',
+                      query: {
+                        kind: 'DataQuery',
+                        group: 'prometheus',
+                        spec: { expr: 'sum(rate(http_requests_total{status=~"5.."}[$__rate_interval]))' },
+                      },
+                    },
+                  },
+                ],
+              },
+            },
+            vizConfig: {
+              kind: 'VizConfig',
+              group: 'timeseries',
+              spec: {
+                fieldConfig: { defaults: {}, overrides: [] },
+                options: {},
+              },
+            },
+          },
+        },
+        layoutItem: { kind: 'GridLayoutItem', spec: { x: 12, y: 8, width: 12, height: 8 } },
+      },
+    });
+    expect(dashboardMutation.execute).toHaveBeenLastCalledWith({ type: 'GET_DASHBOARD_INFO', payload: {} });
+    expect(addResult.details).toMatchObject({
+      command: 'ADD_PANEL',
+      success: true,
+      visualVerification: { status: 'skipped' },
+    });
+
+    const settingsTool = getTool(tools, 'update_live_dashboard_settings');
+    await settingsTool.execute('call-6', { title: 'Typed dashboard', tags: ['typed', 'live'] }, undefined);
+    expect(dashboardMutation.execute).toHaveBeenLastCalledWith({
+      type: 'UPDATE_DASHBOARD_SETTINGS',
+      payload: {
+        title: 'Typed dashboard',
+        tags: ['typed', 'live'],
+      },
+    });
+
+    const variableTool = getTool(tools, 'add_live_dashboard_variable');
+    await variableTool.execute(
+      'call-7',
+      { name: 'env', variableType: 'custom', options: ['prod', 'staging'], current: 'prod' },
+      undefined
+    );
+    expect(dashboardMutation.execute).toHaveBeenLastCalledWith({
+      type: 'ADD_VARIABLE',
+      payload: {
+        variable: {
+          kind: 'CustomVariable',
+          spec: {
+            name: 'env',
+            current: { text: 'prod', value: 'prod' },
+            query: 'prod,staging',
+            options: [
+              { text: 'prod', value: 'prod' },
+              { text: 'staging', value: 'staging' },
+            ],
+          },
+        },
+      },
+    });
+  });
+
+  it('does not expose live dashboard mutation tools when no dashboard client is active', async () => {
+    const dashboardMutation = {
+      execute: jest.fn(),
+      getPayloadSchema: jest.fn(() => ({}) as any),
+      getAvailableCommands: jest.fn(() => []),
+    };
+    const names = createGrafanaToolsForSkillGroups({ dashboardMutation }, ['liveDashboardEditing']).map(
+      (tool) => tool.name
+    );
+
+    expect(names).not.toContain('rename_live_dashboard_panel');
+    expect(names).not.toContain('apply_live_dashboard_mutation');
+    expect(dashboardMutation.execute).not.toHaveBeenCalled();
+  });
+
+  it('keeps read-only dashboard mutation commands out of the live apply tool', async () => {
+    const dashboardMutation = {
+      execute: jest.fn(),
+      getPayloadSchema: jest.fn(() => ({}) as any),
+      getAvailableCommands: jest.fn(() => ['LIST_PANELS']),
+    };
+    const applyTool = getTool(
+      createGrafanaToolsForSkillGroups({ dashboardMutation }, ['liveDashboardEditing']),
+      'apply_live_dashboard_mutation'
+    );
+
+    await expect(applyTool.execute('call-1', { type: 'LIST_PANELS', payload: {} }, undefined)).rejects.toThrow(
+      'LIST_PANELS is read-only'
+    );
+    expect(dashboardMutation.execute).not.toHaveBeenCalled();
   });
 
   it('can explicitly expose advanced dashboard and Jsonnet tools for tests or developer workflows', () => {

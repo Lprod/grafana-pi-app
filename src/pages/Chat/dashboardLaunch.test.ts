@@ -158,8 +158,9 @@ describe('dashboard Assistant launch context', () => {
     const contextBlock = renderDashboardAssistantContextBlock(launch);
     expect(contextBlock).toContain('<dashboard_launch_context>');
     expect(contextBlock).toContain('inspect_dashboard_context');
+    expect(contextBlock).toContain('typed live dashboard edit tools');
     expect(contextBlock).toContain('"uid": "dash-uid"');
-    expect(contextBlock).toContain('Do not create, update, sync, upload, or delete dashboards');
+    expect(contextBlock).toContain('Do not create, sync, upload, delete, or persist dashboards');
   });
 });
 

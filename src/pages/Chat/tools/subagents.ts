@@ -18,6 +18,7 @@ type SpecialistToolOptions = {
   runtime: GrafanaToolRuntime;
   metricsTools: AgentTool[];
   dashboardReadTools?: AgentTool[];
+  liveDashboardTools?: AgentTool[];
   jsonnetFileTools?: AgentTool[];
   managedDashboardTools?: AgentTool[];
   investigationTools?: AgentTool[];
@@ -49,6 +50,7 @@ export function createSubagentTools(options: SpecialistToolOptions): AgentTool[]
       tools: dedupeTools([
         ...(options.metricsTools ?? []),
         ...(options.dashboardReadTools ?? []),
+        ...(options.liveDashboardTools ?? []),
         ...(options.jsonnetFileTools ?? []),
         ...(options.managedDashboardTools ?? []),
         ...(options.artifactTools ?? []),
@@ -268,11 +270,12 @@ Scope:
 - Discover Prometheus datasources, metric names, labels, and label values before selecting panel queries.
 - Inspect existing dashboards when a dashboard UID is provided or the task is an update or review.
 - Use inspect_dashboard_context for existing-dashboard review/update work because it returns typed panel/layout context and validates current-variable-substituted PromQL.
+- When live dashboard editing tools are available and the task is an on-the-fly edit to the currently open dashboard, prefer typed live tools such as rename_live_dashboard_panel, update_live_dashboard_panel_query, add_live_dashboard_panel, move_or_resize_live_dashboard_panel, update_live_dashboard_settings, add_live_dashboard_variable, and update_live_dashboard_variable over managed Jsonnet sync.
 - Validate PromQL with query_prometheus before using panel queries.
 - Prefer managed Jsonnet dashboards for durable changes.
 - Read active skill resources when examples or detailed dashboard workflow notes are needed.
 - Do not use datasource variables or unlisted datasource UIDs.
-- Do not call screenshot_dashboard unless the user explicitly asks for a screenshot or visual preview.
+- For layout-affecting live edits, use the screenshot attached by add_live_dashboard_panel or move_or_resize_live_dashboard_panel when available; otherwise call screenshot_dashboard after the edit if you know the dashboard UID.
 - Batch metric discovery and PromQL validation before writing panels.
 
 Workflow:
@@ -281,8 +284,9 @@ Workflow:
 3. Choose panels by data shape: time series for trends, stat or gauge for reduced values, table for label-rich summaries, heatmap for distributions.
 4. Prefer query-side shaping when it is semantically clear; use Grafana transformations only when they materially simplify presentation.
 5. Write a plain Jsonnet dashboard object for new dashboards; do not import Grafonnet or use g.dashboard.new, g.panel.new, row.new, or with_* constructor chains.
-6. Render before syncing. Sync only when the user requested create/update/apply, not for draft or preview-only requests.
-7. For create/update requests, call sync_dashboard immediately after render_dashboard succeeds. Screenshots are optional after sync only.
+6. For live current-dashboard edits, apply one small typed live edit, then verify with list_live_dashboard_panels, get_live_dashboard_layout, get_live_dashboard_info, list_live_dashboard_variables, or the attached screenshot for layout changes.
+7. For durable managed dashboard create/update work, render before syncing. Sync only when the user requested create/update/apply, not for draft or preview-only requests.
+8. For managed create/update requests, call sync_dashboard immediately after render_dashboard succeeds. Screenshots are optional after sync only.
 
 Output:
 - Datasource UID used.

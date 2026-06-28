@@ -1,6 +1,7 @@
 export type SkillToolGroup =
   | 'metrics'
   | 'dashboardRead'
+  | 'liveDashboardEditing'
   | 'jsonnetFiles'
   | 'managedDashboards'
   | 'investigation'

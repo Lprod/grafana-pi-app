@@ -18,6 +18,7 @@ const BENCH_RUNS = readPositiveInteger(process.env.BENCH_RUNS, 1);
 const BENCH_TEST_FILE = process.env.BENCH_TEST_FILE ?? 'tests/agentBenchmark.spec.ts';
 const BENCH_LABEL = process.env.BENCH_LABEL ?? 'agent benchmark';
 const BENCH_LOG_PREFIX = process.env.BENCH_LOG_PREFIX ?? 'agent-benchmark';
+const BENCH_DEV_RELOAD_TASK = process.env.BENCH_DEV_RELOAD_TASK ?? 'dev:reload';
 const MANAGE_LOCAL_LLAMA =
   process.env.BENCH_MANAGE_LLAMA === undefined
     ? isLocalModelEndpoint(LLM_BASE_URL)
@@ -56,8 +57,8 @@ try {
   log('Resetting Docker Compose demo volumes.');
   await runCommand('docker', ['compose', 'down', '-v', '--remove-orphans']);
 
-  log('Rebuilding plugin artifacts and starting the local stack with mise run dev:reload.');
-  await runCommand('mise', ['run', 'dev:reload']);
+  log(`Rebuilding plugin artifacts and starting the local stack with mise run ${BENCH_DEV_RELOAD_TASK}.`);
+  await runCommand('mise', ['run', BENCH_DEV_RELOAD_TASK]);
   await waitForGrafana();
 
   if (!MANAGE_LOCAL_LLAMA) {
@@ -137,7 +138,12 @@ async function isModelServerReady() {
 function isLocalModelEndpoint(rawURL) {
   try {
     const { hostname } = new URL(rawURL);
-    return hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '0.0.0.0' || hostname === 'host.docker.internal';
+    return (
+      hostname === 'localhost' ||
+      hostname === '127.0.0.1' ||
+      hostname === '0.0.0.0' ||
+      hostname === 'host.docker.internal'
+    );
   } catch {
     return false;
   }

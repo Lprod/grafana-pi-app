@@ -5,6 +5,7 @@ import { DEFAULT_JSONNET_FILE_PATH, ensureVirtualJsonnetFileHydrated, normalizeJ
 import { textResult, throwIfAborted, truncateText } from './result';
 import type {
   CreateGrafanaToolsOptions,
+  DashboardSyncFolderSelection,
   ManagedDashboardParams,
   ManagedDashboardSourceParams,
   ManagedDashboardToolSet,
@@ -117,30 +118,68 @@ function makeGrafanaSyncManagedDashboardTool(toolConfig: CreateGrafanaToolsOptio
     description:
       'Create or update an app-managed dashboard from the current virtual Jsonnet file. The resolved source is stored with the dashboard so future edits can fetch, modify, and re-sync it.',
     parameters: managedDashboardParameters(),
-    async execute(_toolCallId, params, signal) {
-      const args = await prepareManagedDashboardParams(params as ManagedDashboardParams, toolConfig, signal);
-      throwIfAborted(signal);
-      const result = await pluginResourceFetch<ManagedDashboardSyncResult>('/managed-dashboards/sync', {
-        method: 'POST',
-        data: args,
-      });
-      hydrateAutoRepairedJsonnetFile(result, toolConfig);
-      const details = {
-        uid: result.uid,
-        url: result.url,
-        status: result.status,
-        sourceChecksum: result.sourceChecksum,
-        path: args.path,
-        sourceBytes: sourceBytes(args, toolConfig),
-        autoRepaired: result.autoRepaired,
-        repairs: result.repairs,
-        jsonnetFile: result.jsonnetFile,
-      };
-      return textResult(
-        `Managed dashboard ${result.status}: ${result.url}\nUID: ${result.uid}\nSource: ${result.sourceChecksum}`,
-        details
-      );
+    async execute(toolCallId, params, signal) {
+      const rawArgs = params as ManagedDashboardParams;
+      const folderOverride = syncFolderOverrideForCall(toolConfig, toolCallId, rawArgs);
+
+      try {
+        const args = await prepareManagedDashboardParams(
+          applySyncFolderOverride(rawArgs, folderOverride),
+          toolConfig,
+          signal
+        );
+        throwIfAborted(signal);
+        const result = await pluginResourceFetch<ManagedDashboardSyncResult>('/managed-dashboards/sync', {
+          method: 'POST',
+          data: args,
+        });
+        hydrateAutoRepairedJsonnetFile(result, toolConfig);
+        const details = {
+          uid: result.uid,
+          url: result.url,
+          status: result.status,
+          sourceChecksum: result.sourceChecksum,
+          path: args.path,
+          sourceBytes: sourceBytes(args, toolConfig),
+          folderUid: args.folderUid,
+          folderTitle: folderOverride?.title,
+          autoRepaired: result.autoRepaired,
+          repairs: result.repairs,
+          jsonnetFile: result.jsonnetFile,
+        };
+        return textResult(
+          `Managed dashboard ${result.status}: ${result.url}\nUID: ${result.uid}\nSource: ${result.sourceChecksum}`,
+          details
+        );
+      } finally {
+        toolConfig.dashboardSyncFolders?.clearFolderOverride(toolCallId);
+      }
     },
+  };
+}
+
+function syncFolderOverrideForCall(
+  toolConfig: CreateGrafanaToolsOptions,
+  toolCallId: string,
+  args: ManagedDashboardParams
+): DashboardSyncFolderSelection | undefined {
+  if (args.folderUid) {
+    return undefined;
+  }
+  return toolConfig.dashboardSyncFolders?.getFolderOverride(toolCallId);
+}
+
+function applySyncFolderOverride(
+  args: ManagedDashboardParams,
+  folderOverride: DashboardSyncFolderSelection | undefined
+): ManagedDashboardParams {
+  if (!folderOverride || args.folderUid) {
+    return args;
+  }
+
+  return {
+    ...args,
+    folderUid: folderOverride.uid,
   };
 }
 

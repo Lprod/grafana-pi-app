@@ -1,21 +1,33 @@
 ---
 name: grafana-dashboard
-description: Design, generate, review, and sync Grafana dashboards using Jsonnet-managed plugin resources.
+description: Design, generate, review, live-edit, and sync Grafana dashboards.
 ---
 
 # Grafana Dashboard Skill
 
-Use this skill when the user asks for a dashboard, panel, row, variable, Jsonnet change, managed dashboard sync, or dashboard review.
+Use this skill when the user asks for a dashboard, panel, row, variable, live dashboard edit, Jsonnet change, managed dashboard sync, or dashboard review.
 
 ## Operating Rules
 
-- Treat dashboard generation as a persistent artifact. Only create or update dashboard files when the user explicitly asks for a dashboard or dashboard change.
-- For create, update, review, render, or sync work, call `run_dashboard_agent`; it owns the dashboard workflow and the session virtual Jsonnet file.
+- Treat dashboard generation as a persistent artifact. Only create, update, or live-edit dashboards when the user explicitly asks for a dashboard change.
+- For create, update, review, live edit, render, or sync work, call `run_dashboard_agent`; it owns the dashboard workflow and can use either live mutation tools or the session virtual Jsonnet file.
 - Inspect available metrics before selecting panel queries. Use `run_dashboard_agent` for dashboard-level planning and `run_query_agent` for narrow metric reconnaissance.
-- Prefer managed Jsonnet dashboards for durable changes.
+- Prefer live dashboard mutation tools for small on-the-fly edits to the currently open dashboard when those tools are available.
+- Prefer managed Jsonnet dashboards for durable generated dashboards and managed copies.
 - Use dashboard read tools to inspect existing dashboards before updating them when the user references an existing dashboard.
 - Keep generated dashboards focused. A small useful dashboard is better than a broad dashboard with speculative panels.
-- For a create or update dashboard request, render and sync the managed dashboard after the Jsonnet compiles unless the user explicitly asks for a draft, preview, or no-sync workflow.
+- For a managed create or update dashboard request, render and sync the managed dashboard after the Jsonnet compiles unless the user explicitly asks for a draft, preview, live-edit, or no-sync workflow.
+
+## Live Editing Workflow
+
+1. Use live edits only for the currently open dashboard and only when live dashboard editing tools are available.
+2. Call `list_live_dashboard_panels`, `get_live_dashboard_layout`, `get_live_dashboard_info`, or `list_live_dashboard_variables` before applying changes when you need exact element names, layout paths, dashboard UID, or variable names.
+3. Prefer typed live tools: `rename_live_dashboard_panel`, `update_live_dashboard_panel_query`, `add_live_dashboard_panel`, `move_or_resize_live_dashboard_panel`, `update_live_dashboard_settings`, `add_live_dashboard_variable`, and `update_live_dashboard_variable`.
+4. Use `apply_live_dashboard_mutation` only for advanced commands that do not have a typed tool.
+5. Apply one small live edit at a time.
+6. Verify with `list_live_dashboard_panels`, `get_live_dashboard_layout`, `get_live_dashboard_info`, `list_live_dashboard_variables`, or the screenshot attached by layout-affecting live edit tools.
+7. If a live mutation fails, inspect panels/layout/variables again and retry with corrected element names or paths before giving up.
+8. Do not call `write_jsonnet`, `render_dashboard`, or `sync_dashboard` for a live-edit request unless the user asks for a durable managed dashboard copy.
 
 ## Jsonnet Workflow
 

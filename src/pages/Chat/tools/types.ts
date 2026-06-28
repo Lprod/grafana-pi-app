@@ -7,7 +7,7 @@ import type {
   StreamFn,
 } from '@earendil-works/pi-agent-core';
 import type { Model } from '@earendil-works/pi-ai';
-import type { DataSourceApi, DataSourceInstanceSettings } from '@grafana/data';
+import type { DashboardMutationAPI, DataSourceApi, DataSourceInstanceSettings } from '@grafana/data';
 import type { PiAppJsonData, PiAppThinkingLevel } from '../../../types';
 import type { SkillToolGroup } from '../skills/types';
 import type { ArtifactRuntime } from './artifacts';
@@ -66,9 +66,21 @@ export type VirtualJsonnetFileRuntime = {
   markHydrated?: (path: string, version: number) => void;
 };
 
+export type DashboardSyncFolderSelection = {
+  uid?: string;
+  title?: string;
+};
+
+export type DashboardSyncFolderRuntime = {
+  getFolderOverride: (toolCallId: string) => DashboardSyncFolderSelection | undefined;
+  clearFolderOverride: (toolCallId: string) => void;
+};
+
 export type CreateGrafanaToolsOptions = GrafanaToolConfig & {
   runtime?: GrafanaToolRuntime;
+  dashboardMutation?: DashboardMutationAPI;
   virtualJsonnetFiles?: VirtualJsonnetFileRuntime;
+  dashboardSyncFolders?: DashboardSyncFolderRuntime;
   investigationReport?: InvestigationReportRuntime;
   artifacts?: ArtifactRuntime;
   skillTools?: AgentTool[];
@@ -241,6 +253,7 @@ export type JsonnetLibToolSet = {
 export type GrafanaToolRegistry = {
   metrics: AgentTool[];
   dashboards: AgentTool[];
+  liveDashboardEditing: AgentTool[];
   managedDashboards: ManagedDashboardToolSet;
   jsonnetFiles: JsonnetFileToolSet;
   investigation: AgentTool[];

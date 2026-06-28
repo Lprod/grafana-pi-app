@@ -1,6 +1,7 @@
 import type { AgentTool } from '@earendil-works/pi-agent-core';
 import { createArtifactTools } from './artifacts';
 import { createDashboardTools } from './dashboards';
+import { createLiveDashboardMutationTools } from './dashboardMutation';
 import { createJsonnetFileTools } from './jsonnetFiles';
 import { createJsonnetLibTools } from './jsonnetLibs';
 import { createInvestigationTools } from './investigation';
@@ -13,12 +14,15 @@ import type { CreateGrafanaToolsOptions, GrafanaToolRegistry, SkillToolGroup } f
 export { artifactByteSize, artifactizeToolResult, createArtifactTools, readArtifact } from './artifacts';
 export type { Artifact, ArtifactPreview, ArtifactRef, ArtifactRuntime } from './artifacts';
 export { getUnavailableDashboardDatasourceUids } from './dashboardPolicy';
+export { createLiveDashboardMutationTools, LIVE_DASHBOARD_WRITE_TOOLS } from './dashboardMutation';
 export { DEFAULT_JSONNET_FILE_PATH, normalizeJsonnetPath } from './jsonnetFiles';
 export { filterAllowedPrometheusDatasourceSettings };
 export { createSkillTools } from './skills';
 export { buildNavigationPath } from './navigation';
 export type {
   CreateGrafanaToolsOptions,
+  DashboardSyncFolderRuntime,
+  DashboardSyncFolderSelection,
   GrafanaToolConfig,
   GrafanaToolRegistry,
   GrafanaToolRuntime,
@@ -34,6 +38,7 @@ export function createGrafanaToolRegistry(options: CreateGrafanaToolsOptions = {
   const metrics = createMetricTools(options);
   const dashboards = createDashboardTools(options, options.includeAdHocDashboardTools);
   const dashboardReadTools = createDashboardTools(options, false);
+  const liveDashboardEditing = createLiveDashboardMutationTools(options.dashboardMutation);
   const jsonnetFiles = createJsonnetFileTools(options);
   const managedDashboards = createManagedDashboardTools(options);
   const investigation = createInvestigationTools(options.investigationReport);
@@ -47,6 +52,7 @@ export function createGrafanaToolRegistry(options: CreateGrafanaToolsOptions = {
         runtime: options.runtime,
         metricsTools: metrics,
         dashboardReadTools,
+        liveDashboardTools: liveDashboardEditing,
         jsonnetFileTools: jsonnetFiles.all,
         managedDashboardTools: managedDashboards.all,
         investigationTools: investigation,
@@ -59,6 +65,7 @@ export function createGrafanaToolRegistry(options: CreateGrafanaToolsOptions = {
   return {
     metrics,
     dashboards,
+    liveDashboardEditing,
     jsonnetFiles,
     managedDashboards,
     investigation,
@@ -68,6 +75,7 @@ export function createGrafanaToolRegistry(options: CreateGrafanaToolsOptions = {
     skills,
     all: [
       ...metrics,
+      ...liveDashboardEditing,
       ...jsonnetFiles.all,
       ...parentManagedDashboardTools,
       ...investigation,
@@ -107,6 +115,10 @@ export function createGrafanaToolsForSkillGroups(
 
   if (groupSet.has('jsonnetFiles')) {
     selected.push(...registry.jsonnetFiles.all);
+  }
+
+  if (groupSet.has('liveDashboardEditing')) {
+    selected.push(...registry.liveDashboardEditing);
   }
 
   if (groupSet.has('managedDashboards')) {

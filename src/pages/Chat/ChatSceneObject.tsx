@@ -6,14 +6,25 @@ import {
   type AgentMessage,
   type AfterToolCallContext,
   type AfterToolCallResult,
-  type BeforeToolCallResult,
   type StreamFn,
   streamProxy,
 } from '@earendil-works/pi-agent-core';
 import { SceneComponentProps, SceneObjectBase, SceneObjectState } from '@grafana/scenes';
-import { Alert, Badge, Button, EmptyState, Icon, Modal, Spinner, TextArea, useStyles2 } from '@grafana/ui';
-import { locationService, usePluginUserStorage } from '@grafana/runtime';
-import type { GrafanaTheme2 } from '@grafana/data';
+import {
+  Alert,
+  Badge,
+  Button,
+  Combobox,
+  EmptyState,
+  Icon,
+  Modal,
+  Spinner,
+  TextArea,
+  useStyles2,
+  type ComboboxOption,
+} from '@grafana/ui';
+import { getBackendSrv, locationService, usePluginUserStorage } from '@grafana/runtime';
+import { useRestrictedGrafanaApis, type DashboardMutationAPI, type GrafanaTheme2 } from '@grafana/data';
 import { PLUGIN_BASE_URL, PLUGIN_ID } from '../../constants';
 import { testIds } from '../../components/testIds';
 import { usePluginMeta } from '../../utils/utils.plugin';
@@ -21,10 +32,12 @@ import {
   createGrafanaSupervisorTools,
   createGrafanaToolsForSkillGroups,
   createSkillTools,
+  LIVE_DASHBOARD_WRITE_TOOLS,
   artifactByteSize,
   artifactizeToolResult,
   normalizeJsonnetPath,
   type Artifact,
+  type DashboardSyncFolderSelection,
   type ArtifactRuntime,
   type GrafanaToolRuntime,
   type InvestigationReport,
@@ -34,7 +47,14 @@ import { formatAssistantError, type AssistantErrorView } from './llmErrors';
 import { createOpenAICompatibleModel, getConfiguredThinkingLevel, type PiAppJsonData } from './model';
 import { convertChatMessagesToLlm, hasPersistableMessages } from './chatMessages';
 import { getGrafanaSkills, renderGrafanaSystemPrompt, selectGrafanaSkills } from './skills';
-import { ContentBlocks, ToolActivityPanel, ToolResultMessageBody, type ToolRunView } from './ToolRenderer';
+import {
+  ContentBlocks,
+  ToolActivityPanel,
+  ToolResultMessageBody,
+  type DashboardAction,
+  type DashboardOpenHandler,
+  type ToolRunView,
+} from './ToolRenderer';
 import {
   buildDashboardAssistantChatUrl,
   consumeDashboardAssistantLaunch,
@@ -47,6 +67,18 @@ import {
   type DashboardAssistantLaunch,
 } from './dashboardLaunch';
 import { getAssistantDockRoute, storeAssistantSidebarDockRequest } from './sidebarDock';
+import {
+  clearDashboardSyncFolderOverride,
+  getChatRun,
+  getDashboardSyncFolderOverride,
+  isStoredChatRunAgent,
+  removeChatRun,
+  setChatRunConfirmationHandler,
+  setDashboardSyncFolderOverride,
+  storeChatRun,
+  type ChatRunSnapshot,
+  type ChatToolConfirmationHandler,
+} from './chatRunRegistry';
 
 type ChatSceneObjectState = SceneObjectState;
 
@@ -70,11 +102,19 @@ type ToolRunState = Record<string, ToolRunView>;
 
 type ToolConfirmationView = {
   id: string;
+  toolCallId: string;
   toolName: string;
   title: string;
   description: string;
   fields: Array<{ label: string; value: string }>;
   args: unknown;
+  syncDashboardFolder?: DashboardSyncFolderSelection;
+};
+
+type DashboardFolderApiItem = {
+  uid?: unknown;
+  title?: unknown;
+  fullTitle?: unknown;
 };
 
 type ChatLeaveGuardAction = {
@@ -90,12 +130,19 @@ const SESSION_INDEX_KEY = 'sessions:index';
 const CHAT_SESSION_EXPORT_KIND = 'g42-pi-app.chat-session';
 const LEGACY_CHAT_SESSION_EXPORT_KINDS = ['grafana-pi-app.chat-session'];
 const CHAT_SESSION_EXPORT_SCHEMA_VERSION = 1;
-const PERSISTENT_WRITE_TOOLS = new Set(['sync_dashboard', 'upload_dashboard', 'delete_dashboard']);
+const PERSISTENT_WRITE_TOOLS = new Set([
+  'sync_dashboard',
+  'upload_dashboard',
+  'delete_dashboard',
+  ...LIVE_DASHBOARD_WRITE_TOOLS,
+]);
 const ACTIVE_CHAT_LEAVE_MESSAGE =
   'The assistant is still working. Leaving now will stop the run and discard any partial response.';
 const DRAFT_CHAT_LEAVE_MESSAGE = 'The current draft message will be discarded.';
 const CHAT_SESSION_PARAM = 'session';
 const ASSISTANT_SIDEBAR_PLUGIN_ID = 'grafana-assistant-app';
+const GENERAL_FOLDER_TITLE = 'General';
+const GENERAL_FOLDER_OPTION: ComboboxOption<string> = { label: GENERAL_FOLDER_TITLE, value: '' };
 const sessionKey = (id: string) => `sessions:${id}`;
 
 type ChatSessionExport = {
@@ -140,6 +187,8 @@ export function ChatApp({
   const canDockToSidebar = !isSidebarVariant && PLUGIN_ID === ASSISTANT_SIDEBAR_PLUGIN_ID;
   const styles = useStyles2(getStyles);
   const storage = usePluginUserStorage();
+  const { dashboardMutationAPI } = useRestrictedGrafanaApis();
+  const liveDashboardEditingAvailable = hasActiveDashboardMutationCommands(dashboardMutationAPI);
   const pluginMeta = usePluginMeta();
   const jsonData = useMemo(() => (pluginMeta?.jsonData ?? {}) as PiAppJsonData, [pluginMeta?.jsonData]);
   const llmModel = useMemo(() => createOpenAICompatibleModel(jsonData), [jsonData]);
@@ -244,20 +293,35 @@ export function ChatApp({
     },
     [artifactRuntime]
   );
+  const dashboardSyncFolderRuntime = useMemo(
+    () => ({
+      getFolderOverride: (toolCallId: string) => getDashboardSyncFolderOverride(sessionIdRef.current, toolCallId),
+      clearFolderOverride: (toolCallId: string) => clearDashboardSyncFolderOverride(sessionIdRef.current, toolCallId),
+    }),
+    []
+  );
   const [agent, setAgent] = useState<Agent>();
   const agentRef = useRef<Agent>();
   const { revision, flushRevision, scheduleRevision } = useFrameRevision();
   const [input, setInput] = useState('');
-  const [pendingToolConfirmation, setPendingToolConfirmation] = useState<ToolConfirmationView>();
+  const [pendingToolConfirmation, setPendingToolConfirmationState] = useState<ToolConfirmationView>();
+  const pendingToolConfirmationRef = useRef<ToolConfirmationView>();
   const [sessions, setSessions] = useState<SessionIndexItem[]>([]);
   const [currentSessionId, setCurrentSessionId] = useState<string>();
   const [currentTitle, setCurrentTitle] = useState('New chat');
   const [error, setError] = useState<string>();
   const [toolRuns, setToolRuns] = useState<ToolRunState>({});
+  const [dashboardFolderOptions, setDashboardFolderOptions] = useState<Array<ComboboxOption<string>>>([
+    GENERAL_FOLDER_OPTION,
+  ]);
+  const [dashboardFoldersLoading, setDashboardFoldersLoading] = useState(false);
+  const [dashboardFoldersError, setDashboardFoldersError] = useState<string>();
   const unsubscribeRef = useRef<() => void>();
   const titleRef = useRef('New chat');
   const sessionsRef = useRef<SessionIndexItem[]>([]);
   const storageRef = useRef(storage);
+  const dashboardFoldersRequestedRef = useRef(false);
+  const dashboardFoldersLoadedRef = useRef(false);
   const importSessionInputRef = useRef<HTMLInputElement | null>(null);
   const messagesContainerRef = useRef<HTMLElement | null>(null);
   const autoScrollRef = useRef(true);
@@ -272,16 +336,57 @@ export function ChatApp({
   const [blockedLocation, setBlockedLocation] = useState<ReturnType<typeof locationService.getLocation>>();
   const [isAutoScrollPaused, setIsAutoScrollPaused] = useState(false);
 
-  const settleToolConfirmation = useCallback((approved: boolean) => {
-    const resolve = toolConfirmationResolverRef.current;
-    toolConfirmationResolverRef.current = undefined;
-    setPendingToolConfirmation(undefined);
-    resolve?.(approved);
-  }, []);
+  const setPendingToolConfirmation = useCallback(
+    (
+      next:
+        | ToolConfirmationView
+        | undefined
+        | ((current: ToolConfirmationView | undefined) => ToolConfirmationView | undefined)
+    ) => {
+      setPendingToolConfirmationState((current) => {
+        const value = typeof next === 'function' ? next(current) : next;
+        pendingToolConfirmationRef.current = value;
+        return value;
+      });
+    },
+    []
+  );
 
-  const requestToolConfirmation = useCallback(
-    (toolName: string, args: unknown, signal?: AbortSignal): Promise<BeforeToolCallResult | undefined> => {
-      const confirmation = buildToolConfirmation(toolName, args);
+  const settleToolConfirmation = useCallback(
+    (approved: boolean) => {
+      const resolve = toolConfirmationResolverRef.current;
+      if (!resolve) {
+        setPendingToolConfirmation(undefined);
+        return;
+      }
+      resolve?.(approved);
+    },
+    [setPendingToolConfirmation]
+  );
+
+  const loadDashboardFolders = useCallback(async () => {
+    if (dashboardFoldersRequestedRef.current || dashboardFoldersLoadedRef.current || dashboardFoldersLoading) {
+      return;
+    }
+
+    dashboardFoldersRequestedRef.current = true;
+    setDashboardFoldersLoading(true);
+    setDashboardFoldersError(undefined);
+    try {
+      const folders = await getBackendSrv().get<DashboardFolderApiItem[]>('/api/folders', { limit: 1000 });
+      const options = [GENERAL_FOLDER_OPTION, ...folders.map(dashboardFolderOption).filter(isSelectableFolderOption)];
+      setDashboardFolderOptions(dedupeFolderOptions(options));
+      dashboardFoldersLoadedRef.current = true;
+    } catch (err) {
+      setDashboardFoldersError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setDashboardFoldersLoading(false);
+    }
+  }, [dashboardFoldersLoading]);
+
+  const requestToolConfirmation = useCallback<ChatToolConfirmationHandler>(
+    (toolCallId: string, toolName: string, args: unknown, signal?: AbortSignal) => {
+      const confirmation = buildToolConfirmation(toolCallId, toolName, args);
       if (!confirmation) {
         return Promise.resolve(undefined);
       }
@@ -293,6 +398,10 @@ export function ChatApp({
         });
       }
 
+      if (confirmation.syncDashboardFolder) {
+        void loadDashboardFolders();
+      }
+
       return new Promise((resolve) => {
         let settled = false;
         const finish = (approved: boolean) => {
@@ -301,6 +410,15 @@ export function ChatApp({
           }
           settled = true;
           signal?.removeEventListener('abort', handleAbort);
+          const pending = pendingToolConfirmationRef.current;
+          if (approved && pending?.toolCallId === toolCallId && pending.syncDashboardFolder) {
+            const sessionId = sessionIdRef.current;
+            if (sessionId) {
+              setDashboardSyncFolderOverride(sessionId, toolCallId, pending.syncDashboardFolder);
+            }
+          } else {
+            clearDashboardSyncFolderOverride(sessionIdRef.current, toolCallId);
+          }
           toolConfirmationResolverRef.current = undefined;
           setPendingToolConfirmation(undefined);
           resolve(
@@ -324,27 +442,55 @@ export function ChatApp({
         }
       });
     },
-    []
+    [loadDashboardFolders, setPendingToolConfirmation]
+  );
+
+  const confirmToolCall = useCallback<NonNullable<GrafanaToolRuntime['beforeToolCall']>>(
+    ({ toolCall, args }, signal) => {
+      const handler = getChatRun(sessionIdRef.current)?.requestToolConfirmation ?? requestToolConfirmation;
+      return handler(toolCall.id, toolCall.name, args, signal);
+    },
+    [requestToolConfirmation]
+  );
+
+  const handleDashboardFolderChange = useCallback(
+    (option: ComboboxOption<string>) => {
+      const uid = option.value || undefined;
+      const title = selectableLabel(option) || (uid ? uid : GENERAL_FOLDER_TITLE);
+      setPendingToolConfirmation((current) => {
+        if (!current?.syncDashboardFolder) {
+          return current;
+        }
+        return {
+          ...current,
+          syncDashboardFolder: {
+            uid,
+            title,
+          },
+        };
+      });
+    },
+    [setPendingToolConfirmation]
   );
 
   const buildSkillRuntime = useCallback(
     (prompt: string) => {
       const selection = selectGrafanaSkills(prompt, skills);
       const skillTools = createSkillTools(selection.activeSkills);
-      const beforeToolCall: NonNullable<GrafanaToolRuntime['beforeToolCall']> = async ({ toolCall, args }, signal) =>
-        requestToolConfirmation(toolCall.name, args, signal);
       const toolOptions = {
         ...jsonData,
         runtime: {
           model: llmModel,
           streamFn,
           thinkingLevel,
-          beforeToolCall,
+          beforeToolCall: confirmToolCall,
           afterToolCall,
         },
         virtualJsonnetFiles: virtualJsonnetRuntime,
+        dashboardSyncFolders: dashboardSyncFolderRuntime,
         investigationReport: investigationReportRuntime,
         artifacts: artifactRuntime,
+        dashboardMutation: dashboardMutationAPI,
         skillTools,
       };
       const tools =
@@ -354,6 +500,7 @@ export function ChatApp({
       const systemPrompt = renderGrafanaSystemPrompt({
         skills,
         activeSkillNames: selection.activeSkillNames,
+        liveDashboardEditingAvailable,
       });
       const dashboardLaunchContext = dashboardLaunchRef.current
         ? renderDashboardAssistantContextBlock(dashboardLaunchRef.current)
@@ -368,9 +515,12 @@ export function ChatApp({
       investigationReportRuntime,
       afterToolCall,
       artifactRuntime,
+      confirmToolCall,
+      dashboardMutationAPI,
+      dashboardSyncFolderRuntime,
+      liveDashboardEditingAvailable,
       jsonData,
       llmModel,
-      requestToolConfirmation,
       skills,
       streamFn,
       thinkingLevel,
@@ -417,14 +567,50 @@ export function ChatApp({
     [llmModel.id, persistIndex, storage]
   );
 
-  const stopCurrentAgentForSessionChange = useCallback(() => {
-    toolConfirmationResolverRef.current?.(false);
-    toolConfirmationResolverRef.current = undefined;
-    setPendingToolConfirmation(undefined);
-    unsubscribeRef.current?.();
-    unsubscribeRef.current = undefined;
-    agentRef.current?.abort();
-  }, []);
+  const handleAgentEvent = useCallback(
+    (event: AgentEvent, eventAgent: Agent) => {
+      emitBenchmarkEvent(event);
+      if (shouldBatchRevision(event)) {
+        scheduleRevision();
+      } else {
+        flushRevision();
+      }
+      setToolRuns((value) => {
+        const next = reduceToolRuns(value, event);
+        const sessionId = sessionIdRef.current;
+        const run = getChatRun(sessionId);
+        if (run?.agent === eventAgent) {
+          run.toolRuns = next;
+          run.updatedAt = Date.now();
+        }
+        return next;
+      });
+      if (event.type === 'agent_end') {
+        const sessionId = sessionIdRef.current;
+        if (sessionId) {
+          void saveSession(sessionId, titleRef.current, eventAgent.state.messages);
+        }
+      }
+    },
+    [flushRevision, saveSession, scheduleRevision]
+  );
+
+  const stopCurrentAgentForSessionChange = useCallback(
+    (options?: { preserveLiveRun?: boolean }) => {
+      toolConfirmationResolverRef.current?.(false);
+      toolConfirmationResolverRef.current = undefined;
+      setPendingToolConfirmation(undefined);
+      unsubscribeRef.current?.();
+      unsubscribeRef.current = undefined;
+      const currentAgent = agentRef.current;
+      const currentSessionId = sessionIdRef.current;
+      if (!options?.preserveLiveRun || !isStoredChatRunAgent(currentSessionId, currentAgent)) {
+        removeChatRun(currentSessionId);
+        currentAgent?.abort();
+      }
+    },
+    [setPendingToolConfirmation]
+  );
 
   const buildAgent = useCallback(
     (messages: AgentMessage[] = []) => {
@@ -441,24 +627,10 @@ export function ChatApp({
         convertToLlm: convertChatMessagesToLlm,
         streamFn,
         afterToolCall,
-        beforeToolCall: async ({ toolCall, args }, signal) => requestToolConfirmation(toolCall.name, args, signal),
+        beforeToolCall: confirmToolCall,
       });
 
-      unsubscribeRef.current = nextAgent.subscribe((event) => {
-        emitBenchmarkEvent(event);
-        if (shouldBatchRevision(event)) {
-          scheduleRevision();
-        } else {
-          flushRevision();
-        }
-        setToolRuns((value) => reduceToolRuns(value, event));
-        if (event.type === 'agent_end') {
-          const sessionId = sessionIdRef.current;
-          if (sessionId) {
-            void saveSession(sessionId, titleRef.current, nextAgent.state.messages);
-          }
-        }
-      });
+      unsubscribeRef.current = nextAgent.subscribe((event) => handleAgentEvent(event, nextAgent));
 
       setAgent(nextAgent);
       agentRef.current = nextAgent;
@@ -468,11 +640,10 @@ export function ChatApp({
     [
       buildSkillRuntime,
       afterToolCall,
+      confirmToolCall,
       flushRevision,
+      handleAgentEvent,
       llmModel,
-      requestToolConfirmation,
-      saveSession,
-      scheduleRevision,
       stopCurrentAgentForSessionChange,
       streamFn,
       thinkingLevel,
@@ -526,6 +697,71 @@ export function ChatApp({
       buildAgent([]);
     },
     [buildAgent, clearArtifacts, settleToolConfirmation, stopCurrentAgentForSessionChange]
+  );
+
+  const preserveCurrentRunForHandoff = useCallback(() => {
+    const currentAgent = agentRef.current;
+    const id = sessionIdRef.current;
+    if (!currentAgent || !id) {
+      return false;
+    }
+
+    storeChatRun({
+      id,
+      title: titleRef.current,
+      agent: currentAgent,
+      dashboardLaunch: dashboardLaunchRef.current,
+      virtualJsonnetFiles: { ...virtualJsonnetFilesRef.current },
+      virtualJsonnetHydrated: { ...virtualJsonnetHydratedRef.current },
+      investigationReport: investigationReportRef.current,
+      artifacts: { ...artifactsRef.current },
+      artifactCounter: artifactCounterRef.current,
+      toolRuns,
+      requestToolConfirmation,
+    });
+    return true;
+  }, [requestToolConfirmation, toolRuns]);
+
+  const attachLiveRun = useCallback(
+    (run: ChatRunSnapshot) => {
+      stopCurrentAgentForSessionChange();
+      setChatRunConfirmationHandler(run.id, requestToolConfirmation);
+      dashboardLaunchRef.current = run.dashboardLaunch;
+      sessionIdRef.current = run.id;
+      titleRef.current = run.title;
+      virtualJsonnetFilesRef.current = run.virtualJsonnetFiles;
+      virtualJsonnetHydratedRef.current = run.virtualJsonnetHydrated;
+      investigationReportRef.current = run.investigationReport;
+      setArtifactSnapshots(run.artifacts, run.artifactCounter);
+      autoScrollRef.current = true;
+      setIsAutoScrollPaused(false);
+      setCurrentSessionId(run.id);
+      setCurrentTitle(run.title);
+      setError(undefined);
+      setInput('');
+      setToolRuns(run.toolRuns);
+      setInvestigationReport(run.investigationReport);
+      settleToolConfirmation(false);
+      unsubscribeRef.current = run.agent.subscribe((event) => handleAgentEvent(event, run.agent));
+      agentRef.current = run.agent;
+      setAgent(run.agent);
+      flushRevision();
+
+      if (!run.agent.state.isStreaming && hasPersistableMessages(run.agent.state.messages)) {
+        void saveSession(run.id, run.title, run.agent.state.messages);
+      }
+
+      return true;
+    },
+    [
+      flushRevision,
+      handleAgentEvent,
+      requestToolConfirmation,
+      saveSession,
+      setArtifactSnapshots,
+      settleToolConfirmation,
+      stopCurrentAgentForSessionChange,
+    ]
   );
 
   useEffect(() => {
@@ -847,6 +1083,10 @@ export function ChatApp({
       }
 
       const initialSessionId = sessionId ?? chatSessionIdFromSearch(location.search);
+      const liveRun = getChatRun(initialSessionId);
+      if (liveRun && attachLiveRun(liveRun)) {
+        return;
+      }
       if (initialSessionId && (await loadSession(initialSessionId))) {
         return;
       }
@@ -864,13 +1104,17 @@ export function ChatApp({
 
     return () => {
       mounted = false;
-      toolConfirmationResolverRef.current?.(false);
-      toolConfirmationResolverRef.current = undefined;
-      unsubscribeRef.current?.();
-      unsubscribeRef.current = undefined;
-      agentRef.current?.abort();
+      stopCurrentAgentForSessionChange({ preserveLiveRun: true });
     };
-  }, [launchContextId, loadSession, sessionId, startDashboardLaunchSession, startNewSession]);
+  }, [
+    attachLiveRun,
+    launchContextId,
+    loadSession,
+    sessionId,
+    startDashboardLaunchSession,
+    startNewSession,
+    stopCurrentAgentForSessionChange,
+  ]);
 
   const deleteSession = async (id: string) => {
     const next = sessions.filter((session) => session.id !== id);
@@ -945,8 +1189,13 @@ export function ChatApp({
     const request = { path: targetRoute };
 
     try {
-      if (currentAgent && currentSessionId && hasPersistableMessages(currentAgent.state.messages)) {
-        await saveSession(currentSessionId, titleRef.current, currentAgent.state.messages);
+      if (currentAgent && currentSessionId) {
+        if (currentAgent.state.isStreaming) {
+          preserveCurrentRunForHandoff();
+        }
+        if (!currentAgent.state.isStreaming && hasPersistableMessages(currentAgent.state.messages)) {
+          await saveSession(currentSessionId, titleRef.current, currentAgent.state.messages);
+        }
         storeAssistantSidebarDockRequest({
           ...request,
           sessionId: currentSessionId,
@@ -969,10 +1218,49 @@ export function ChatApp({
 
     allowNextLocationChangeRef.current = true;
     locationService.push(targetRoute);
-  }, [saveSession]);
+  }, [preserveCurrentRunForHandoff, saveSession]);
+
+  const handleOpenDashboard = useCallback<DashboardOpenHandler>(
+    async (action: DashboardAction) => {
+      const targetRoute = dashboardActionRoute(action);
+      if (!targetRoute) {
+        setError('The dashboard sync result did not include a dashboard URL or UID.');
+        return;
+      }
+
+      const currentAgent = agentRef.current;
+      const currentSessionId = sessionIdRef.current;
+
+      try {
+        if (PLUGIN_ID === ASSISTANT_SIDEBAR_PLUGIN_ID && currentAgent && currentSessionId) {
+          if (currentAgent.state.isStreaming) {
+            preserveCurrentRunForHandoff();
+          }
+          if (!currentAgent.state.isStreaming && hasPersistableMessages(currentAgent.state.messages)) {
+            await saveSession(currentSessionId, titleRef.current, currentAgent.state.messages);
+          }
+          storeAssistantSidebarDockRequest({
+            path: targetRoute,
+            sessionId: currentSessionId,
+          });
+        } else if (currentAgent && currentSessionId && !currentAgent.state.isStreaming) {
+          if (hasPersistableMessages(currentAgent.state.messages)) {
+            await saveSession(currentSessionId, titleRef.current, currentAgent.state.messages);
+          }
+        }
+      } catch (err) {
+        setError(err instanceof Error ? err.message : String(err));
+        return;
+      }
+
+      allowNextLocationChangeRef.current = true;
+      locationService.push(targetRoute);
+    },
+    [preserveCurrentRunForHandoff, saveSession]
+  );
 
   const requestDockToSidebar = () => {
-    if (!canDockToSidebar || isBusy) {
+    if (!canDockToSidebar || pendingToolConfirmation) {
       return;
     }
 
@@ -1122,6 +1410,10 @@ export function ChatApp({
     >
       <ToolConfirmationModal
         confirmation={pendingToolConfirmation}
+        folderOptions={dashboardFolderOptions}
+        foldersLoading={dashboardFoldersLoading}
+        foldersError={dashboardFoldersError}
+        onFolderChange={handleDashboardFolderChange}
         onApprove={() => settleToolConfirmation(true)}
         onDeny={() => settleToolConfirmation(false)}
       />
@@ -1220,7 +1512,7 @@ export function ChatApp({
             {canDockToSidebar && (
               <Button
                 aria-label="Dock to side"
-                disabled={isBusy}
+                disabled={Boolean(pendingToolConfirmation)}
                 fill="text"
                 icon="gf-movepane-right"
                 title="Dock to side"
@@ -1298,6 +1590,7 @@ export function ChatApp({
                   key={messageKey(message, index, isStreaming)}
                   message={message}
                   isStreaming={isStreaming}
+                  onOpenDashboard={handleOpenDashboard}
                 />
               ))
             )}
@@ -1363,15 +1656,27 @@ export function ChatApp({
 
 function ToolConfirmationModal({
   confirmation,
+  folderOptions,
+  foldersLoading,
+  foldersError,
+  onFolderChange,
   onApprove,
   onDeny,
 }: {
   confirmation?: ToolConfirmationView;
+  folderOptions: Array<ComboboxOption<string>>;
+  foldersLoading: boolean;
+  foldersError?: string;
+  onFolderChange: (option: ComboboxOption<string>) => void;
   onApprove: () => void;
   onDeny: () => void;
 }) {
   const styles = useStyles2(getStyles);
   const args = useMemo(() => formatConfirmationArgs(confirmation?.args), [confirmation?.args]);
+  const selectedFolderOption = useMemo(
+    () => selectedDashboardFolderOption(confirmation?.syncDashboardFolder, folderOptions),
+    [confirmation?.syncDashboardFolder, folderOptions]
+  );
 
   return (
     <Modal
@@ -1399,6 +1704,20 @@ function ToolConfirmationModal({
               </div>
             ))}
           </dl>
+          {confirmation.syncDashboardFolder && (
+            <div className={styles.toolConfirmationFolder}>
+              <label htmlFor="assistant-sync-dashboard-folder">Folder</label>
+              <Combobox<string>
+                id="assistant-sync-dashboard-folder"
+                loading={foldersLoading}
+                noOptionsMessage="No folders found"
+                options={folderOptions}
+                value={selectedFolderOption}
+                onChange={onFolderChange}
+              />
+              {foldersError && <div className={styles.toolConfirmationFolderError}>{foldersError}</div>}
+            </div>
+          )}
           <details className={styles.toolConfirmationDetails}>
             <summary>Tool arguments</summary>
             <pre>{args}</pre>
@@ -1518,9 +1837,11 @@ function InvestigationReportPanel({ report }: { report: InvestigationReport }) {
 const MessageView = memo(function MessageView({
   message,
   isStreaming,
+  onOpenDashboard,
 }: {
   message: AgentMessage;
   isStreaming?: boolean;
+  onOpenDashboard?: DashboardOpenHandler;
 }) {
   const styles = useStyles2(getStyles);
   const isUser = message.role === 'user';
@@ -1537,12 +1858,12 @@ const MessageView = memo(function MessageView({
       )}
     >
       {roleLabel && <div className={styles.messageHeader}>{roleLabel}</div>}
-      <div className={styles.messageBody}>{renderMessageContent(message, Boolean(isStreaming))}</div>
+      <div className={styles.messageBody}>{renderMessageContent(message, Boolean(isStreaming), onOpenDashboard)}</div>
     </article>
   );
 });
 
-function renderMessageContent(message: AgentMessage, isStreaming: boolean) {
+function renderMessageContent(message: AgentMessage, isStreaming: boolean, onOpenDashboard?: DashboardOpenHandler) {
   if (message.role === 'user') {
     return <ContentBlocks content={message.content} markdown={false} />;
   }
@@ -1561,6 +1882,7 @@ function renderMessageContent(message: AgentMessage, isStreaming: boolean) {
         content={message.content}
         details={message.details}
         isError={message.isError}
+        onOpenDashboard={onOpenDashboard}
       />
     );
   }
@@ -1594,29 +1916,32 @@ function AssistantErrorNotice({ error }: { error: AssistantErrorView }) {
   );
 }
 
-function buildToolConfirmation(toolName: string, args: unknown): ToolConfirmationView | undefined {
+function buildToolConfirmation(toolCallId: string, toolName: string, args: unknown): ToolConfirmationView | undefined {
   if (!PERSISTENT_WRITE_TOOLS.has(toolName)) {
     return undefined;
   }
 
   const record = isRecord(args) ? args : {};
-  const id = `confirm-${toolName}-${Date.now()}`;
+  const id = `confirm-${toolCallId || toolName}-${Date.now()}`;
 
   if (toolName === 'sync_dashboard') {
+    const folderUid = stringValue(record.folderUid);
     return {
       id,
+      toolCallId,
       toolName,
       title: 'Approve dashboard sync',
       description:
         'The assistant wants to create or update a Grafana dashboard from managed Jsonnet source. Approve only if this is the dashboard change you requested.',
       fields: compactConfirmationFields([
         confirmationField('UID', stringValue(record.uid) ?? 'compiled dashboard UID'),
-        confirmationField('Folder UID', stringValue(record.folderUid)),
+        confirmationField('Folder UID', folderUid),
         confirmationField('Overwrite', booleanValue(record.overwrite, true)),
         confirmationField('Source path', stringValue(record.path) ?? 'dashboard.jsonnet'),
         confirmationField('Tags', stringArrayValue(record.tags)),
       ]),
       args,
+      syncDashboardFolder: folderUid ? undefined : { title: GENERAL_FOLDER_TITLE },
     };
   }
 
@@ -1624,6 +1949,7 @@ function buildToolConfirmation(toolName: string, args: unknown): ToolConfirmatio
     const dashboard = parseConfirmationDashboard(record.dashboard_json);
     return {
       id,
+      toolCallId,
       toolName,
       title: 'Approve dashboard upload',
       description: 'The assistant wants to create or update a raw Grafana dashboard JSON model as the current user.',
@@ -1637,14 +1963,79 @@ function buildToolConfirmation(toolName: string, args: unknown): ToolConfirmatio
     };
   }
 
+  if (LIVE_DASHBOARD_WRITE_TOOLS.has(toolName) && toolName !== 'apply_live_dashboard_mutation') {
+    return {
+      id,
+      toolCallId,
+      toolName,
+      title: 'Approve live dashboard edit',
+      description:
+        'The assistant wants to change the currently open dashboard using Grafana live dashboard editing. Approve only if this is the dashboard edit you requested.',
+      fields: compactConfirmationFields([
+        confirmationField('Action', liveDashboardToolAction(toolName)),
+        confirmationField('Element', stringValue(record.elementName)),
+        confirmationField('Title', stringValue(record.title)),
+        confirmationField('Variable', stringValue(record.name)),
+        confirmationField('New variable', stringValue(record.newName)),
+        confirmationField('Parent path', stringValue(record.parentPath)),
+        confirmationField(
+          'Query',
+          truncateConfirmationValue(stringValue(record.queryExpression) ?? stringValue(record.query))
+        ),
+        confirmationField('Grid', liveDashboardGridSummary(record)),
+        confirmationField('Tags', stringArrayValue(record.tags)),
+      ]),
+      args,
+    };
+  }
+
+  if (toolName === 'apply_live_dashboard_mutation') {
+    const payload = record.payload;
+    const payloadRecord = isRecord(payload) ? payload : {};
+    const element = isRecord(payloadRecord.element) ? payloadRecord.element : undefined;
+    const panel = isRecord(payloadRecord.panel) ? payloadRecord.panel : undefined;
+    const panelSpec = isRecord(panel?.spec) ? panel.spec : undefined;
+    const elements = Array.isArray(payloadRecord.elements) ? payloadRecord.elements.length : undefined;
+
+    return {
+      id,
+      toolCallId,
+      toolName,
+      title: 'Approve live dashboard edit',
+      description:
+        'The assistant wants to change the currently open dashboard using Grafana live dashboard editing. Approve only if this is the dashboard edit you requested.',
+      fields: compactConfirmationFields([
+        confirmationField('Command', stringValue(record.type)),
+        confirmationField('Element', stringValue(element?.name)),
+        confirmationField('Panel title', stringValue(panelSpec?.title)),
+        confirmationField('Parent path', stringValue(payloadRecord.parentPath)),
+        confirmationField('Affected panels', elements),
+      ]),
+      args,
+    };
+  }
+
   return {
     id,
+    toolCallId,
     toolName,
     title: 'Approve dashboard deletion',
     description: 'The assistant wants to delete a Grafana dashboard. This removes the dashboard by UID.',
     fields: compactConfirmationFields([confirmationField('UID', stringValue(record.uid))]),
     args,
   };
+}
+
+function hasActiveDashboardMutationCommands(dashboardMutationAPI: DashboardMutationAPI | undefined) {
+  if (!dashboardMutationAPI) {
+    return false;
+  }
+
+  try {
+    return dashboardMutationAPI.getAvailableCommands().length > 0;
+  } catch {
+    return false;
+  }
 }
 
 function confirmationField(label: string, value: unknown) {
@@ -1656,6 +2047,41 @@ function confirmationField(label: string, value: unknown) {
 
 function compactConfirmationFields(fields: Array<{ label: string; value: string } | undefined>) {
   return fields.filter((field): field is { label: string; value: string } => Boolean(field));
+}
+
+function liveDashboardToolAction(toolName: string) {
+  switch (toolName) {
+    case 'rename_live_dashboard_panel':
+      return 'Rename panel';
+    case 'update_live_dashboard_panel_query':
+      return 'Update panel query';
+    case 'add_live_dashboard_panel':
+      return 'Add panel';
+    case 'move_or_resize_live_dashboard_panel':
+      return 'Move or resize panel';
+    case 'update_live_dashboard_settings':
+      return 'Update dashboard settings';
+    case 'add_live_dashboard_variable':
+      return 'Add variable';
+    case 'update_live_dashboard_variable':
+      return 'Update variable';
+    default:
+      return toolName;
+  }
+}
+
+function liveDashboardGridSummary(record: Record<string, unknown>) {
+  const fields = ['x', 'y', 'width', 'height']
+    .map((field) => {
+      const value = record[field];
+      return typeof value === 'number' ? `${field}=${value}` : undefined;
+    })
+    .filter(Boolean);
+  return fields.length > 0 ? fields.join(', ') : undefined;
+}
+
+function truncateConfirmationValue(value: string | undefined) {
+  return value && value.length > 140 ? `${value.slice(0, 140)}...` : value;
 }
 
 function stringValue(value: unknown) {
@@ -1691,6 +2117,84 @@ function formatConfirmationArgs(value: unknown) {
   } catch {
     return String(value);
   }
+}
+
+function dashboardFolderOption(folder: DashboardFolderApiItem): ComboboxOption<string> | undefined {
+  const uid = stringValue(folder.uid);
+  const title = stringValue(folder.fullTitle) ?? stringValue(folder.title);
+  if (!uid || !title) {
+    return undefined;
+  }
+  return {
+    label: title,
+    value: uid,
+    description: uid,
+  };
+}
+
+function isSelectableFolderOption(value: ComboboxOption<string> | undefined): value is ComboboxOption<string> {
+  return Boolean(value);
+}
+
+function dedupeFolderOptions(options: Array<ComboboxOption<string>>) {
+  const seen = new Set<string>();
+  return options.filter((option) => {
+    const key = option.value ?? '';
+    if (seen.has(key)) {
+      return false;
+    }
+    seen.add(key);
+    return true;
+  });
+}
+
+function selectableLabel(option: ComboboxOption<string> | undefined) {
+  return typeof option?.label === 'string' ? option.label : undefined;
+}
+
+function selectedDashboardFolderOption(
+  selection: DashboardSyncFolderSelection | undefined,
+  options: Array<ComboboxOption<string>>
+) {
+  const uid = selection?.uid ?? '';
+  return (
+    options.find((option) => (option.value ?? '') === uid) ?? {
+      label: selection?.title ?? (uid ? uid : GENERAL_FOLDER_TITLE),
+      value: uid,
+    }
+  );
+}
+
+function dashboardActionRoute(action: DashboardAction) {
+  return (
+    (action.url ? grafanaRelativePath(action.url) : undefined) ??
+    (action.uid ? `/d/${encodeURIComponent(action.uid)}` : undefined)
+  );
+}
+
+function grafanaRelativePath(rawUrl: string) {
+  const value = rawUrl.trim();
+  if (!value || value.startsWith('//')) {
+    return undefined;
+  }
+
+  if (value.startsWith('/')) {
+    return value;
+  }
+
+  try {
+    const parsed = new URL(value, window.location.origin);
+    if (!isSafeGrafanaRoute(parsed.pathname)) {
+      return undefined;
+    }
+    return `${parsed.pathname}${parsed.search}${parsed.hash}`;
+  } catch {
+    return undefined;
+  }
+}
+
+function isSafeGrafanaRoute(pathname: string) {
+  return pathname.startsWith('/d/') || pathname === '/dashboards' || pathname.startsWith('/dashboards/');
 }
 
 function chatSessionIdFromSearch(search: string) {
@@ -2638,6 +3142,19 @@ const getStyles = (theme: GrafanaTheme2) => ({
       gridTemplateColumns: '1fr',
       gap: theme.spacing(0.25),
     },
+  }),
+  toolConfirmationFolder: css({
+    display: 'grid',
+    gap: theme.spacing(0.75),
+    '& label': {
+      color: theme.colors.text.secondary,
+      fontSize: theme.typography.bodySmall.fontSize,
+      fontWeight: theme.typography.fontWeightMedium,
+    },
+  }),
+  toolConfirmationFolderError: css({
+    color: theme.colors.error.text,
+    fontSize: theme.typography.bodySmall.fontSize,
   }),
   toolConfirmationDetails: css({
     '& summary': {

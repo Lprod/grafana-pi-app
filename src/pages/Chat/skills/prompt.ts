@@ -6,20 +6,49 @@ type RenderGrafanaSystemPromptOptions = {
   basePrompt?: string;
   skills?: readonly GrafanaSkill[];
   activeSkillNames?: readonly string[];
+  liveDashboardEditingAvailable?: boolean;
 };
 
 export function renderGrafanaSystemPrompt({
   basePrompt = BASE_SYSTEM_PROMPT,
   skills = GRAFANA_SKILLS,
   activeSkillNames = [],
+  liveDashboardEditingAvailable,
 }: RenderGrafanaSystemPromptOptions = {}) {
   const activeSkillNameSet = new Set(activeSkillNames);
   const modelVisibleSkills = skills.filter((skill) => !skill.disableModelInvocation);
   const activeSkills = modelVisibleSkills.filter((skill) => activeSkillNameSet.has(skill.name));
 
-  return [basePrompt.trim(), renderAvailableSkills(modelVisibleSkills), renderActiveSkills(activeSkills)]
+  return [
+    basePrompt.trim(),
+    renderDashboardEditingCapability(liveDashboardEditingAvailable),
+    renderAvailableSkills(modelVisibleSkills),
+    renderActiveSkills(activeSkills),
+  ]
     .filter(Boolean)
     .join('\n\n');
+}
+
+function renderDashboardEditingCapability(liveDashboardEditingAvailable: boolean | undefined) {
+  if (liveDashboardEditingAvailable === undefined) {
+    return '';
+  }
+
+  if (liveDashboardEditingAvailable) {
+    return `## Dashboard Editing Capability
+Live dashboard editing is available for the currently loaded dashboard.
+- For on-the-fly panel or dashboard edits, prefer typed live tools such as rename_live_dashboard_panel, update_live_dashboard_panel_query, add_live_dashboard_panel, move_or_resize_live_dashboard_panel, update_live_dashboard_settings, add_live_dashboard_variable, and update_live_dashboard_variable.
+- Call list_live_dashboard_panels, get_live_dashboard_layout, get_live_dashboard_info, or list_live_dashboard_variables first when you need exact element names, layout paths, dashboard UID, or variable names.
+- Apply one small mutation at a time, then verify the changed panel, layout, dashboard settings, or variable list.
+- add_live_dashboard_panel and move_or_resize_live_dashboard_panel automatically attach screenshot verification when Grafana image rendering is configured.
+- Use apply_live_dashboard_mutation only for advanced commands that do not have a typed tool.
+- Use managed Jsonnet render/sync for durable generated dashboards or managed copies, not for small live edits to the current dashboard unless the user asks for that path.`;
+  }
+
+  return `## Dashboard Editing Capability
+Live dashboard editing is not available in this plugin/runtime context.
+- Do not claim that you can directly edit the currently open dashboard.
+- For dashboard changes, offer managed Jsonnet dashboard generation, raw dashboard upload when available, or clear manual edit guidance.`;
 }
 
 function renderAvailableSkills(skills: readonly GrafanaSkill[]) {

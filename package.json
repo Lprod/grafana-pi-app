@@ -20,6 +20,7 @@
     "benchmark:analysis": "node scripts/benchmark-analysis.mjs",
     "benchmark:artifact-jq": "node scripts/benchmark-artifact-jq.mjs",
     "benchmark:dashboard-context": "node scripts/benchmark-dashboard-context.mjs",
+    "benchmark:dashboard-editing": "node scripts/benchmark-dashboard-editing.mjs",
     "benchmark:explore-metrics": "node scripts/benchmark-explore-metrics.mjs",
     "package:variant": "node scripts/package-plugin-variant.mjs",
     "server": "docker compose up --build",

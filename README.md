@@ -11,6 +11,7 @@ Observability Analyst is a Grafana app plugin that embeds an LLM analyst for obs
 - Lists, fetches, and screenshots dashboards through Grafana APIs.
 - Adds dashboard panel menu actions for contextual Assistant prompts.
 - Optionally runs as the `grafana-assistant-app` variant with Grafana's extension sidebar integration enabled.
+- In the `grafana-assistant-app` variant, can use Grafana's restricted dashboard mutation API for approved typed live edits to the currently open dashboard, including panel rename/query/add/move, dashboard settings, and custom/query variables.
 - Keeps broad metric reconnaissance available through a restricted metrics subagent.
 - Stores chat sessions per Grafana user with plugin user storage.
 
@@ -27,8 +28,9 @@ In the sidebar-capable variant:
 - The sidebar can open the same chat on the full Assistant page.
 - The full Assistant page has `Dock to side`, which saves the current chat session or dashboard-launch context, returns to the last non-Assistant route, and reopens the same chat in the sidebar.
 - The Assistant app route hides its own global sidebar entry, so users do not open Assistant beside Assistant.
+- When Grafana exposes `dashboardMutationAPI` to `grafana-assistant-app`, Assistant can list the currently open dashboard panels/layout/settings/variables and apply approved typed live edits such as renaming a panel, changing a query, adding or moving a panel, updating dashboard settings, and adding or updating variables. Layout-affecting typed edits attach screenshot verification when Grafana image rendering is configured.
 
-The alternate release asset name intentionally does not include `sidebar`; the feature is implicit in the `grafana-assistant-app` plugin ID. If you install the alternate asset unsigned in a local or self-managed instance, configure Grafana to allow the `grafana-assistant-app` unsigned plugin ID.
+The alternate release asset name intentionally does not include `sidebar`; the feature is implicit in the `grafana-assistant-app` plugin ID. If you install the alternate asset unsigned in a local or self-managed instance, configure Grafana to allow the `grafana-assistant-app` unsigned plugin ID. Live dashboard editing also requires Grafana's restricted plugin API feature and allow-list entry for `dashboardMutationAPI = grafana-assistant-app`; Grafana 13 defaults include that allow-list, and the local variant Compose service enables the feature toggle.
 
 ## Configuration
 
@@ -215,6 +217,15 @@ npm run benchmark:dashboard-context
 ```
 
 This benchmark seeds a stale dashboard, then runs a rich-context repair that must use `inspect_dashboard_context`, render, and sync a managed dashboard copy. It writes the report to `test-results/dashboard-context-benchmark/latest-report.txt` with separate event and answer files for the run.
+
+To benchmark approved live dashboard editing in the sidebar-capable variant, run:
+
+```bash
+npm run benchmark:dashboard-editing
+```
+
+This benchmark starts the `grafana-assistant-app` variant on http://localhost:3001 and validates three flows: typed multi-step live edits from a dashboard sidebar, recovery after an intentionally failed typed live edit, and graceful fallback when Assistant is open without an active dashboard mutation client. It writes reports to `test-results/dashboard-editing-benchmark/latest-report.txt`, `latest-answer.md`, and `latest-events.json`.
+If you already have a compatible OpenAI-compatible model server running, set `BENCH_MANAGE_LLAMA=0` so the benchmark reuses it instead of starting `llama-server`.
 
 To benchmark only the `explore_metrics` discovery path, run:
 

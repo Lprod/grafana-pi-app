@@ -11,6 +11,7 @@ export {
   DEFAULT_JSONNET_FILE_PATH,
   filterAllowedPrometheusDatasourceSettings,
   getUnavailableDashboardDatasourceUids,
+  LIVE_DASHBOARD_WRITE_TOOLS,
   normalizeJsonnetPath,
 } from './tools';
 export type {
@@ -19,6 +20,7 @@ export type {
   ArtifactRef,
   ArtifactRuntime,
   CreateGrafanaToolsOptions,
+  DashboardSyncFolderSelection,
   GrafanaToolConfig,
   GrafanaToolRegistry,
   GrafanaToolRuntime,

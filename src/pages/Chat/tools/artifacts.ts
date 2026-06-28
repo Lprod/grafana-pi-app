@@ -88,6 +88,12 @@ const ARTIFACT_TOOL_NAMES = new Set([
   'get_dashboard',
   'grafana_get_dashboard',
   'inspect_dashboard_context',
+  'list_live_dashboard_panels',
+  'get_live_dashboard_layout',
+  'get_live_dashboard_info',
+  'list_live_dashboard_variables',
+  'add_live_dashboard_panel',
+  'move_or_resize_live_dashboard_panel',
   'get_dashboard_source',
   'grafana_get_managed_dashboard_source',
   'render_dashboard',
@@ -101,6 +107,12 @@ const ALWAYS_ARTIFACT_TOOL_NAMES = new Set([
   'get_dashboard',
   'grafana_get_dashboard',
   'inspect_dashboard_context',
+  'list_live_dashboard_panels',
+  'get_live_dashboard_layout',
+  'get_live_dashboard_info',
+  'list_live_dashboard_variables',
+  'add_live_dashboard_panel',
+  'move_or_resize_live_dashboard_panel',
   'get_dashboard_source',
   'grafana_get_managed_dashboard_source',
   'render_dashboard',
@@ -369,6 +381,8 @@ function artifactKind(toolName: string, data: unknown, details: unknown): Artifa
     toolName === 'get_dashboard' ||
     toolName === 'grafana_get_dashboard' ||
     toolName === 'inspect_dashboard_context' ||
+    toolName === 'list_live_dashboard_panels' ||
+    toolName === 'get_live_dashboard_layout' ||
     toolName === 'render_dashboard' ||
     toolName === 'grafana_render_managed_dashboard'
   ) {

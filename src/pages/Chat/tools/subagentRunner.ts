@@ -313,6 +313,21 @@ function buildSpecialistFollowUp(
     return undefined;
   }
 
+  if (
+    hasAnySuccessfulToolCall(toolCalls, [
+      'rename_live_dashboard_panel',
+      'update_live_dashboard_panel_query',
+      'add_live_dashboard_panel',
+      'move_or_resize_live_dashboard_panel',
+      'update_live_dashboard_settings',
+      'add_live_dashboard_variable',
+      'update_live_dashboard_variable',
+      'apply_live_dashboard_mutation',
+    ])
+  ) {
+    return undefined;
+  }
+
   if (hasSuccessfulToolCall(toolCalls, 'sync_dashboard')) {
     return undefined;
   }
@@ -343,6 +358,13 @@ function dashboardTaskRequiresSync(task: string) {
     return false;
   }
   if (/\b(draft|preview|plan only|design only|no-sync|no sync|do not sync|without syncing)\b/.test(normalized)) {
+    return false;
+  }
+  if (
+    /\b(live dashboard|currently open dashboard|current dashboard|on-the-fly|in-place edit|live edit)\b/.test(
+      normalized
+    )
+  ) {
     return false;
   }
   return /\bintent:\s*(create|update)\b/.test(normalized) || /\b(create|build|update|apply|sync)\b/.test(normalized);

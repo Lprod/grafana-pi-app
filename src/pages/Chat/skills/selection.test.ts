@@ -69,6 +69,22 @@ describe('Grafana skill selection', () => {
     expect(prompt).not.toContain('references/promql-patterns.md');
   });
 
+  it('renders typed live dashboard editing guidance when available', () => {
+    const prompt = renderGrafanaSystemPrompt({ liveDashboardEditingAvailable: true });
+
+    expect(prompt).toContain('rename_live_dashboard_panel');
+    expect(prompt).toContain('add_live_dashboard_panel');
+    expect(prompt).toContain('automatically attach screenshot verification');
+    expect(prompt).toContain('Use apply_live_dashboard_mutation only for advanced commands');
+  });
+
+  it('renders a direct-edit fallback warning when live dashboard editing is unavailable', () => {
+    const prompt = renderGrafanaSystemPrompt({ liveDashboardEditingAvailable: false });
+
+    expect(prompt).toContain('Live dashboard editing is not available');
+    expect(prompt).toContain('Do not claim that you can directly edit');
+  });
+
   it('activates configured skills by explicit reference', () => {
     const skills = getGrafanaSkills(
       {

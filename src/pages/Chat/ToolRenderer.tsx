@@ -10,7 +10,7 @@ import {
   SceneQueryRunner,
   SceneTimeRange,
 } from '@grafana/scenes';
-import { Badge, Icon, LinkButton, Spinner, useStyles2 } from '@grafana/ui';
+import { Badge, Button, Icon, LinkButton, Spinner, useStyles2 } from '@grafana/ui';
 import type { ArtifactPreview, ArtifactRef, SubagentRunDetails, SubagentToolCall } from './tools';
 import {
   highlightJsonnetLines,
@@ -31,6 +31,16 @@ export type ToolRunView = {
   isError?: boolean;
   updatedAt: number;
 };
+
+export type DashboardAction = {
+  title: string;
+  status?: string;
+  uid?: string;
+  url?: string;
+  sourceChecksum?: string;
+};
+
+export type DashboardOpenHandler = (action: DashboardAction) => void;
 
 export function ContentBlocks({
   content,
@@ -105,16 +115,20 @@ export function ToolResultMessageBody({
   content,
   details,
   isError,
+  onOpenDashboard,
 }: {
   toolName?: string;
   content: unknown;
   details: unknown;
   isError?: boolean;
+  onOpenDashboard?: DashboardOpenHandler;
 }) {
   const styles = useStyles2(getToolStyles);
   const subagentDetails = asSubagentDetails(details);
   const artifactResult = isError ? undefined : asArtifactResult(details);
-  const structuredResult = isError ? undefined : renderStructuredToolResult(toolName, details, content);
+  const structuredResult = isError
+    ? undefined
+    : renderStructuredToolResult(toolName, details, content, undefined, onOpenDashboard);
   const error = isError ? extractToolError(toolName, details, content) : undefined;
 
   if (subagentDetails) {
@@ -123,7 +137,7 @@ export function ToolResultMessageBody({
         <ToolHeader name={toolName ?? subagentDetails.agent} status={subagentDetails.status} />
         {subagentDetails.status === 'failed' && <ToolErrorView error={extractToolError(toolName, details, content)} />}
         <SubagentResultView content={content} details={subagentDetails} />
-        <SubagentDetailsView details={subagentDetails} />
+        <SubagentDetailsView details={subagentDetails} onOpenDashboard={onOpenDashboard} />
       </div>
     );
   }
@@ -503,6 +517,30 @@ function asSimpleToolCallSummary(
       return dashboardToolCallSummary('Get dashboard', record);
     case 'inspect_dashboard_context':
       return dashboardToolCallSummary('Inspect dashboard context', record);
+    case 'list_live_dashboard_panels':
+      return liveDashboardToolCallSummary('List live dashboard panels', record);
+    case 'get_live_dashboard_layout':
+      return liveDashboardToolCallSummary('Get live dashboard layout', record);
+    case 'get_live_dashboard_info':
+      return liveDashboardToolCallSummary('Get live dashboard info', record);
+    case 'list_live_dashboard_variables':
+      return liveDashboardToolCallSummary('List live dashboard variables', record);
+    case 'rename_live_dashboard_panel':
+      return liveDashboardToolCallSummary('Rename live dashboard panel', record);
+    case 'update_live_dashboard_panel_query':
+      return liveDashboardToolCallSummary('Update live dashboard panel query', record);
+    case 'add_live_dashboard_panel':
+      return liveDashboardToolCallSummary('Add live dashboard panel', record);
+    case 'move_or_resize_live_dashboard_panel':
+      return liveDashboardToolCallSummary('Move or resize live dashboard panel', record);
+    case 'update_live_dashboard_settings':
+      return liveDashboardToolCallSummary('Update live dashboard settings', record);
+    case 'add_live_dashboard_variable':
+      return liveDashboardToolCallSummary('Add live dashboard variable', record);
+    case 'update_live_dashboard_variable':
+      return liveDashboardToolCallSummary('Update live dashboard variable', record);
+    case 'apply_live_dashboard_mutation':
+      return liveDashboardToolCallSummary('Apply live dashboard mutation', record);
     case 'get_dashboard_source':
     case 'grafana_get_managed_dashboard_source':
       return dashboardToolCallSummary('Read managed dashboard source', record);
@@ -695,6 +733,22 @@ function dashboardToolCallSummary(action: string, record: Record<string, unknown
       { label: 'Folder', value: folder },
       { label: 'Panel', value: stringOrNumberField(record, 'panelId') },
       { label: 'Dry run', value: booleanLabel(record, 'dryRun') },
+    ],
+  };
+}
+
+function liveDashboardToolCallSummary(action: string, record: Record<string, unknown>): SimpleToolCallSummary {
+  const query = stringField(record, 'queryExpression') ?? stringField(record, 'query');
+  const command = stringField(record, 'type');
+  return {
+    summary: summaryLine([action, stringField(record, 'elementName') ?? stringField(record, 'name') ?? command]),
+    items: [
+      { label: 'Command', value: command },
+      { label: 'Element', value: formatSummaryFieldValue(record, 'elementName') },
+      { label: 'Title', value: stringField(record, 'title') },
+      { label: 'Variable', value: stringField(record, 'name') },
+      { label: 'Parent path', value: formatSummaryFieldValue(record, 'parentPath') },
+      { label: 'Query', value: query ? <code>{query}</code> : undefined },
     ],
   };
 }
@@ -1082,6 +1136,18 @@ const TOOL_ICONS: Record<string, IconName> = {
   get_dashboard: 'dashboard',
   grafana_get_dashboard: 'dashboard',
   inspect_dashboard_context: 'dashboard',
+  list_live_dashboard_panels: 'list-ul',
+  get_live_dashboard_layout: 'dashboard',
+  get_live_dashboard_info: 'dashboard',
+  list_live_dashboard_variables: 'list-ul',
+  rename_live_dashboard_panel: 'edit',
+  update_live_dashboard_panel_query: 'search',
+  add_live_dashboard_panel: 'plus',
+  move_or_resize_live_dashboard_panel: 'dashboard',
+  update_live_dashboard_settings: 'cog',
+  add_live_dashboard_variable: 'plus',
+  update_live_dashboard_variable: 'edit',
+  apply_live_dashboard_mutation: 'dashboard',
   get_dashboard_source: 'file-alt',
   grafana_get_managed_dashboard_source: 'file-alt',
   render_dashboard: 'dashboard',
@@ -1135,7 +1201,15 @@ function subagentResultLabel(details: SubagentRunDetails) {
   return `${agentLabel} result`;
 }
 
-function SubagentDetailsView({ details, compact }: { details: SubagentRunDetails; compact?: boolean }) {
+function SubagentDetailsView({
+  details,
+  compact,
+  onOpenDashboard,
+}: {
+  details: SubagentRunDetails;
+  compact?: boolean;
+  onOpenDashboard?: DashboardOpenHandler;
+}) {
   const styles = useStyles2(getToolStyles);
   return (
     <div className={styles.subagent}>
@@ -1152,7 +1226,7 @@ function SubagentDetailsView({ details, compact }: { details: SubagentRunDetails
       )}
       <div className={styles.toolTimeline}>
         {details.toolCalls.map((call) => (
-          <SubagentToolCallRow call={call} key={call.id} />
+          <SubagentToolCallRow call={call} key={call.id} onOpenDashboard={onOpenDashboard} />
         ))}
       </div>
     </div>
@@ -1176,7 +1250,13 @@ function subagentLabel(agent: SubagentRunDetails['agent']) {
   }
 }
 
-function SubagentToolCallRow({ call }: { call: SubagentToolCall }) {
+function SubagentToolCallRow({
+  call,
+  onOpenDashboard,
+}: {
+  call: SubagentToolCall;
+  onOpenDashboard?: DashboardOpenHandler;
+}) {
   const styles = useStyles2(getToolStyles);
   const shouldAutoOpen = shouldExpandSubagentToolCall(call);
   const [manualOpen, setManualOpen] = useState<boolean | undefined>(undefined);
@@ -1211,7 +1291,7 @@ function SubagentToolCallRow({ call }: { call: SubagentToolCall }) {
               {error ? (
                 <ToolErrorView content={resultContent} details={resultDetails} error={error} />
               ) : (
-                (renderStructuredToolResult(call.name, resultDetails, resultContent, call.args) ??
+                (renderStructuredToolResult(call.name, resultDetails, resultContent, call.args, onOpenDashboard) ??
                 (!artifactResult ? (
                   <>
                     <ContentBlocks content={resultContent} isStreaming={isStreaming} />
@@ -1248,7 +1328,8 @@ function renderStructuredToolResult(
   toolName: string | undefined,
   details: unknown,
   content: unknown,
-  args?: unknown
+  args?: unknown,
+  onOpenDashboard?: DashboardOpenHandler
 ): React.ReactNode | undefined {
   const artifactResult = asArtifactResult(details);
   const datasources = asDatasourceResult(toolName, details, content);
@@ -1342,7 +1423,7 @@ function renderStructuredToolResult(
 
   const action = asDashboardAction(toolName, details);
   if (action) {
-    return <DashboardActionView action={action} />;
+    return <DashboardActionView action={action} onOpenDashboard={onOpenDashboard} />;
   }
 
   return undefined;
@@ -2293,15 +2374,13 @@ function DashboardSummaryView({ result }: { result: DashboardSummaryResult }) {
   );
 }
 
-type DashboardAction = {
-  title: string;
-  status?: string;
-  uid?: string;
-  url?: string;
-  sourceChecksum?: string;
-};
-
-function DashboardActionView({ action }: { action: DashboardAction }) {
+function DashboardActionView({
+  action,
+  onOpenDashboard,
+}: {
+  action: DashboardAction;
+  onOpenDashboard?: DashboardOpenHandler;
+}) {
   const styles = useStyles2(getToolStyles);
   return (
     <div className={styles.actionCard}>
@@ -2314,7 +2393,24 @@ function DashboardActionView({ action }: { action: DashboardAction }) {
             label: 'Source',
             value: action.sourceChecksum ? <code>{shortChecksum(action.sourceChecksum)}</code> : undefined,
           },
-          { label: 'Open', value: action.url ? <ExternalLink href={action.url}>Open</ExternalLink> : undefined },
+          {
+            label: 'Open',
+            value: action.url ? (
+              onOpenDashboard ? (
+                <Button
+                  icon="external-link-alt"
+                  size="sm"
+                  type="button"
+                  variant="secondary"
+                  onClick={() => onOpenDashboard(action)}
+                >
+                  Open dashboard
+                </Button>
+              ) : (
+                <ExternalLink href={action.url}>Open dashboard</ExternalLink>
+              )
+            ) : undefined,
+          },
         ]}
       />
     </div>
