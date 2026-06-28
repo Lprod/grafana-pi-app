@@ -12,7 +12,7 @@ import {
 } from '@earendil-works/pi-agent-core';
 import { SceneComponentProps, SceneObjectBase, SceneObjectState } from '@grafana/scenes';
 import { Alert, Badge, Button, EmptyState, Icon, Modal, Spinner, TextArea, useStyles2 } from '@grafana/ui';
-import { usePluginUserStorage } from '@grafana/runtime';
+import { locationService, usePluginUserStorage } from '@grafana/runtime';
 import type { GrafanaTheme2 } from '@grafana/data';
 import { PLUGIN_ID } from '../../constants';
 import { testIds } from '../../components/testIds';
@@ -65,11 +65,21 @@ type ToolConfirmationView = {
   args: unknown;
 };
 
+type ChatLeaveGuardAction = {
+  title: string;
+  description: string;
+  confirmLabel: string;
+  stopCurrentAgent?: boolean;
+};
+
 const SESSION_INDEX_KEY = 'sessions:index';
 const CHAT_SESSION_EXPORT_KIND = 'g42-pi-app.chat-session';
 const LEGACY_CHAT_SESSION_EXPORT_KINDS = ['grafana-pi-app.chat-session'];
 const CHAT_SESSION_EXPORT_SCHEMA_VERSION = 1;
 const PERSISTENT_WRITE_TOOLS = new Set(['sync_dashboard', 'upload_dashboard', 'delete_dashboard']);
+const ACTIVE_CHAT_LEAVE_MESSAGE =
+  'The assistant is still working. Leaving now will stop the run and discard any partial response.';
+const DRAFT_CHAT_LEAVE_MESSAGE = 'The current draft message will be discarded.';
 const sessionKey = (id: string) => `sessions:${id}`;
 
 type ChatSessionExport = {
@@ -227,6 +237,11 @@ function ChatApp() {
   const lastScrollTopRef = useRef(0);
   const touchStartYRef = useRef<number>();
   const toolConfirmationResolverRef = useRef<(approved: boolean) => void>();
+  const isChatDirtyRef = useRef(false);
+  const pendingLeaveActionRef = useRef<() => void>();
+  const allowNextLocationChangeRef = useRef(false);
+  const [leaveGuardAction, setLeaveGuardAction] = useState<ChatLeaveGuardAction>();
+  const [blockedLocation, setBlockedLocation] = useState<ReturnType<typeof locationService.getLocation>>();
   const [isAutoScrollPaused, setIsAutoScrollPaused] = useState(false);
 
   const settleToolConfirmation = useCallback((approved: boolean) => {
@@ -370,9 +385,18 @@ function ChatApp() {
     [llmModel.id, persistIndex, storage]
   );
 
+  const stopCurrentAgentForSessionChange = useCallback(() => {
+    toolConfirmationResolverRef.current?.(false);
+    toolConfirmationResolverRef.current = undefined;
+    setPendingToolConfirmation(undefined);
+    unsubscribeRef.current?.();
+    unsubscribeRef.current = undefined;
+    agentRef.current?.abort();
+  }, []);
+
   const buildAgent = useCallback(
     (messages: AgentMessage[] = []) => {
-      unsubscribeRef.current?.();
+      stopCurrentAgentForSessionChange();
       const runtime = buildSkillRuntime('');
       const nextAgent = new Agent({
         initialState: {
@@ -417,6 +441,7 @@ function ChatApp() {
       requestToolConfirmation,
       saveSession,
       scheduleRevision,
+      stopCurrentAgentForSessionChange,
       streamFn,
       thinkingLevel,
     ]
@@ -424,6 +449,7 @@ function ChatApp() {
 
   const startNewSession = useCallback(() => {
     const id = createSessionId();
+    stopCurrentAgentForSessionChange();
     sessionIdRef.current = id;
     titleRef.current = 'New chat';
     virtualJsonnetFilesRef.current = {};
@@ -435,11 +461,12 @@ function ChatApp() {
     setCurrentSessionId(id);
     setCurrentTitle('New chat');
     setError(undefined);
+    setInput('');
     setToolRuns({});
     setInvestigationReport(undefined);
     settleToolConfirmation(false);
     buildAgent([]);
-  }, [buildAgent, clearArtifacts, settleToolConfirmation]);
+  }, [buildAgent, clearArtifacts, settleToolConfirmation, stopCurrentAgentForSessionChange]);
 
   const startNewSessionRef = useRef(startNewSession);
 
@@ -478,6 +505,8 @@ function ChatApp() {
       toolConfirmationResolverRef.current?.(false);
       toolConfirmationResolverRef.current = undefined;
       unsubscribeRef.current?.();
+      unsubscribeRef.current = undefined;
+      agentRef.current?.abort();
     };
   }, []);
 
@@ -563,11 +592,17 @@ function ChatApp() {
   );
 
   const abortAgent = useCallback(() => {
-    agent?.abort();
-  }, [agent]);
+    settleToolConfirmation(false);
+    agentRef.current?.abort();
+    flushRevision();
+  }, [flushRevision, settleToolConfirmation]);
 
   const isStreaming = Boolean(agent?.state.isStreaming);
   const isBusy = isStreaming;
+  const hasDraft = Boolean(input.trim());
+  const chatLeaveDescription =
+    isStreaming || pendingToolConfirmation ? ACTIVE_CHAT_LEAVE_MESSAGE : DRAFT_CHAT_LEAVE_MESSAGE;
+  const isChatDirty = isStreaming || Boolean(pendingToolConfirmation) || hasDraft;
 
   const keepAutoScrollEnabled = useCallback(() => {
     setAutoScrollEnabled(true);
@@ -582,6 +617,103 @@ function ChatApp() {
       scrollMessagesToBottom();
     }
   }, [revision, scrollMessagesToBottom]);
+
+  useEffect(() => {
+    isChatDirtyRef.current = isChatDirty;
+  }, [isChatDirty]);
+
+  useEffect(() => {
+    const handleBeforeUnload = (event: BeforeUnloadEvent) => {
+      if (!isChatDirtyRef.current) {
+        return;
+      }
+
+      event.preventDefault();
+      // Required by current browsers to trigger the native leave-page prompt.
+      // eslint-disable-next-line @typescript-eslint/no-deprecated
+      event.returnValue = '';
+    };
+
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => {
+      window.removeEventListener('beforeunload', handleBeforeUnload);
+    };
+  }, []);
+
+  useEffect(() => {
+    const history = locationService.getHistory();
+    const unblock = history.block((location: ReturnType<typeof locationService.getLocation>) => {
+      if (allowNextLocationChangeRef.current) {
+        allowNextLocationChangeRef.current = false;
+        return true;
+      }
+
+      if (!isChatDirtyRef.current) {
+        return true;
+      }
+
+      if (locationService.getLocation().pathname === location.pathname) {
+        return true;
+      }
+
+      const isActive = Boolean(agentRef.current?.state.isStreaming || toolConfirmationResolverRef.current);
+      pendingLeaveActionRef.current = undefined;
+      setBlockedLocation(location);
+      setLeaveGuardAction({
+        title: 'Leave active chat?',
+        description: isActive ? ACTIVE_CHAT_LEAVE_MESSAGE : DRAFT_CHAT_LEAVE_MESSAGE,
+        confirmLabel: isActive ? 'Stop and leave' : 'Discard and leave',
+        stopCurrentAgent: true,
+      });
+      return false;
+    });
+
+    return () => {
+      unblock();
+    };
+  }, []);
+
+  const cancelLeaveGuard = useCallback(() => {
+    pendingLeaveActionRef.current = undefined;
+    setBlockedLocation(undefined);
+    setLeaveGuardAction(undefined);
+  }, []);
+
+  const confirmLeaveGuard = useCallback(() => {
+    const action = pendingLeaveActionRef.current;
+    const location = blockedLocation;
+    const shouldStopCurrentAgent = leaveGuardAction?.stopCurrentAgent !== false;
+    pendingLeaveActionRef.current = undefined;
+    setBlockedLocation(undefined);
+    setLeaveGuardAction(undefined);
+    setInput('');
+    if (shouldStopCurrentAgent) {
+      stopCurrentAgentForSessionChange();
+    }
+    flushRevision();
+
+    if (location) {
+      allowNextLocationChangeRef.current = true;
+      setTimeout(() => locationService.push(location), 10);
+      return;
+    }
+
+    action?.();
+  }, [blockedLocation, flushRevision, leaveGuardAction?.stopCurrentAgent, stopCurrentAgentForSessionChange]);
+
+  const requestGuardedAction = useCallback(
+    (action: () => void, guardAction: ChatLeaveGuardAction) => {
+      if (!isChatDirty) {
+        action();
+        return;
+      }
+
+      pendingLeaveActionRef.current = action;
+      setBlockedLocation(undefined);
+      setLeaveGuardAction(guardAction);
+    },
+    [isChatDirty]
+  );
 
   const submitPrompt = async (event: FormEvent) => {
     event.preventDefault();
@@ -613,9 +745,13 @@ function ChatApp() {
       currentAgent.state.tools = runtime.tools;
       await currentAgent.prompt(prompt);
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      if (agentRef.current === currentAgent && sessionIdRef.current === sessionId) {
+        setError(err instanceof Error ? err.message : String(err));
+      }
     } finally {
-      flushRevision();
+      if (agentRef.current === currentAgent && sessionIdRef.current === sessionId) {
+        flushRevision();
+      }
     }
   };
 
@@ -627,6 +763,7 @@ function ChatApp() {
     }
 
     const stored = JSON.parse(raw) as StoredSession;
+    stopCurrentAgentForSessionChange();
     sessionIdRef.current = id;
     titleRef.current = stored.title;
     virtualJsonnetFilesRef.current = stored.virtualJsonnetFiles ?? {};
@@ -637,6 +774,7 @@ function ChatApp() {
     setCurrentSessionId(id);
     setCurrentTitle(stored.title);
     setError(undefined);
+    setInput('');
     setToolRuns({});
     setInvestigationReport(stored.investigationReport);
     settleToolConfirmation(false);
@@ -649,6 +787,26 @@ function ChatApp() {
     if (id === currentSessionId) {
       startNewSession();
     }
+  };
+
+  const requestNewSession = () => {
+    requestGuardedAction(startNewSession, {
+      title: 'Start a new session?',
+      description: chatLeaveDescription,
+      confirmLabel: 'Discard and start',
+    });
+  };
+
+  const requestLoadSession = (id: string) => {
+    if (id === currentSessionId) {
+      return;
+    }
+
+    requestGuardedAction(() => void loadSession(id), {
+      title: 'Switch sessions?',
+      description: chatLeaveDescription,
+      confirmLabel: 'Discard and switch',
+    });
   };
 
   const handleExportDownloadClick = useCallback(
@@ -704,8 +862,13 @@ function ChatApp() {
       return;
     }
 
-    importSessionInputRef.current?.click();
-  }, []);
+    requestGuardedAction(() => importSessionInputRef.current?.click(), {
+      title: 'Import a session?',
+      description: chatLeaveDescription,
+      confirmLabel: 'Discard and import',
+      stopCurrentAgent: false,
+    });
+  }, [chatLeaveDescription, requestGuardedAction]);
 
   const importSessionFromFile = useCallback(
     async (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -726,6 +889,7 @@ function ChatApp() {
         const id = createSessionId();
         const title = imported.title || importTitleFromFilename(file.name) || 'Imported chat';
 
+        stopCurrentAgentForSessionChange();
         sessionIdRef.current = id;
         titleRef.current = title;
         virtualJsonnetFilesRef.current = imported.virtualJsonnetFiles ?? {};
@@ -736,6 +900,7 @@ function ChatApp() {
         setCurrentSessionId(id);
         setCurrentTitle(title);
         setError(undefined);
+        setInput('');
         setToolRuns({});
         setInvestigationReport(imported.investigationReport);
         settleToolConfirmation(false);
@@ -746,7 +911,14 @@ function ChatApp() {
         setError(`Could not import chat session: ${message}`);
       }
     },
-    [buildAgent, keepAutoScrollEnabled, saveSession, setArtifactSnapshots, settleToolConfirmation]
+    [
+      buildAgent,
+      keepAutoScrollEnabled,
+      saveSession,
+      setArtifactSnapshots,
+      settleToolConfirmation,
+      stopCurrentAgentForSessionChange,
+    ]
   );
 
   const visibleMessages = agent
@@ -768,6 +940,7 @@ function ChatApp() {
         onApprove={() => settleToolConfirmation(true)}
         onDeny={() => settleToolConfirmation(false)}
       />
+      <ChatLeaveGuardModal action={leaveGuardAction} onCancel={cancelLeaveGuard} onConfirm={confirmLeaveGuard} />
       <aside className={styles.sidebar}>
         <div className={styles.sidebarHeader}>
           <div>
@@ -795,7 +968,7 @@ function ChatApp() {
               variant="secondary"
               onClick={openImportSessionPicker}
             />
-            <Button icon="plus" size="sm" variant="secondary" onClick={startNewSession} aria-label="New session" />
+            <Button icon="plus" size="sm" variant="secondary" onClick={requestNewSession} aria-label="New session" />
           </div>
         </div>
         <div className={styles.sessionList}>
@@ -803,7 +976,7 @@ function ChatApp() {
             <button
               className={cx(styles.sessionButton, session.id === currentSessionId && styles.sessionButtonActive)}
               key={session.id}
-              onClick={() => loadSession(session.id)}
+              onClick={() => requestLoadSession(session.id)}
               type="button"
             >
               <span className={styles.sessionTitle}>{session.title}</span>
@@ -1025,6 +1198,42 @@ function ToolConfirmationModal({
               Approve
             </Button>
           </div>
+        </div>
+      )}
+    </Modal>
+  );
+}
+
+function ChatLeaveGuardModal({
+  action,
+  onCancel,
+  onConfirm,
+}: {
+  action?: ChatLeaveGuardAction;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  const styles = useStyles2(getStyles);
+
+  return (
+    <Modal
+      title={action?.title ?? 'Leave chat?'}
+      isOpen={Boolean(action)}
+      closeOnEscape
+      onDismiss={onCancel}
+      className={styles.leaveGuardModal}
+    >
+      {action && (
+        <div className={styles.leaveGuard}>
+          <div>{action.description}</div>
+          <Modal.ButtonRow>
+            <Button type="button" variant="secondary" fill="outline" onClick={onCancel}>
+              Stay
+            </Button>
+            <Button type="button" variant="destructive" onClick={onConfirm}>
+              {action.confirmLabel}
+            </Button>
+          </Modal.ButtonRow>
         </div>
       )}
     </Modal>
@@ -2189,5 +2398,13 @@ const getStyles = (theme: GrafanaTheme2) => ({
     justifyContent: 'flex-end',
     gap: theme.spacing(1),
     flexWrap: 'wrap',
+  }),
+  leaveGuardModal: css({
+    width: 'min(500px, calc(100vw - 32px))',
+  }),
+  leaveGuard: css({
+    display: 'grid',
+    gap: theme.spacing(2),
+    color: theme.colors.text.primary,
   }),
 });
