@@ -824,7 +824,10 @@ describe('ToolRenderer', () => {
 
     expect(row?.open).toBe(true);
     expect(screen.getByText('Managed dashboard synced')).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: 'Open' })).toHaveAttribute('href', '/d/service-health/service-health');
+    expect(screen.getByRole('link', { name: 'Open dashboard' })).toHaveAttribute(
+      'href',
+      '/d/service-health/service-health'
+    );
   });
 
   it('renders object-shaped failed tool results as readable errors', () => {
@@ -912,8 +915,9 @@ describe('ToolRenderer', () => {
       />
     );
 
-    fireEvent.click(screen.getByText('inspect_metric_series'));
+    const row = screen.getByText('inspect_metric_series').closest('details') as HTMLDetailsElement | null;
 
+    expect(row?.open).toBe(true);
     expect(container.textContent).toContain('http_server_requests_seconds_bucket');
     expect(container.textContent).toContain('inspect_metric_series failed');
     expect(container.textContent).toContain('Series endpoint failed');

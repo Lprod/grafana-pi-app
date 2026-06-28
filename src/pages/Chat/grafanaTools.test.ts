@@ -70,6 +70,7 @@ import {
   createGrafanaToolsForSkillGroups,
   createSkillTools,
   buildNavigationPath,
+  extractDashboardMetricUsage,
   filterAllowedPrometheusDatasourceSettings,
   getUnavailableDashboardDatasourceUids,
   type VirtualJsonnetFileSnapshot,
@@ -1453,6 +1454,313 @@ describe('grafana datasource tool policy', () => {
     });
   });
 
+  it('extracts dashboard metric usage with PromQL parser-backed labels and relations', () => {
+    const result = extractDashboardMetricUsage(makeDashboardMetricUsageFixture('metric-context', 'Metric Context'), {
+      uid: 'metric-context',
+      meta: {
+        folderTitle: 'Observability',
+        url: '/d/metric-context/metric-context',
+      },
+      allowedPrometheusDatasourceUids: ['prom-a'],
+    });
+
+    expect(result.metrics.map((metric) => metric.metric)).toEqual(
+      expect.arrayContaining(['http_requests_total', 'http_request_duration_seconds_bucket', 'node_load1'])
+    );
+    expect(result.metrics.find((metric) => metric.metric === 'http_requests_total')).toMatchObject({
+      labels: expect.arrayContaining(['route', 'status']),
+      groupingLabels: expect.arrayContaining(['route', 'status', 'vm']),
+      functions: expect.arrayContaining(['rate', 'sum']),
+      dashboardCount: 1,
+    });
+    expect(result.usages.find((usage) => usage.metric === 'http_requests_total')).toMatchObject({
+      datasourceUid: 'prom-a',
+      dashboardUid: 'metric-context',
+      panelTitle: 'HTTP errors and host load',
+      selector: 'http_requests_total{status=~"5..",route="$route"}',
+    });
+    expect(result.relations).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          source: 'http_requests_total',
+          target: 'node_load1',
+          reasons: expect.arrayContaining(['same panel']),
+        }),
+      ])
+    );
+  });
+
+  it('searches visible dashboards for metric usage and ranks seed metric neighborhoods', async () => {
+    const fetch = jest.fn(({ url }) => {
+      if (url === '/api/search') {
+        return of({
+          data: [
+            {
+              uid: 'metric-context',
+              title: 'Metric Context',
+              url: '/d/metric-context/metric-context',
+              folderTitle: 'Observability',
+            },
+            {
+              uid: 'infra-context',
+              title: 'Infra Context',
+              url: '/d/infra-context/infra-context',
+              folderTitle: 'Observability',
+            },
+          ],
+        });
+      }
+
+      if (url === '/api/dashboards/uid/metric-context') {
+        return of({
+          data: {
+            dashboard: makeDashboardMetricUsageFixture('metric-context', 'Metric Context'),
+            meta: {
+              folderTitle: 'Observability',
+              url: '/d/metric-context/metric-context',
+            },
+          },
+        });
+      }
+
+      if (url === '/api/dashboards/uid/infra-context') {
+        return of({
+          data: {
+            dashboard: {
+              uid: 'infra-context',
+              title: 'Infra Context',
+              panels: [
+                {
+                  id: 1,
+                  title: 'CPU busy',
+                  type: 'timeseries',
+                  datasource: { uid: 'prom-a', type: 'prometheus' },
+                  targets: [
+                    {
+                      refId: 'A',
+                      expr: '100 - (avg by(instance) (rate(node_cpu_seconds_total{mode="idle"}[$__rate_interval])) * 100)',
+                    },
+                  ],
+                },
+              ],
+            },
+            meta: {
+              folderTitle: 'Observability',
+              url: '/d/infra-context/infra-context',
+            },
+          },
+        });
+      }
+
+      return throwError(() => new Error(`unexpected fetch: ${url}`));
+    });
+    (getBackendSrv as jest.Mock).mockReturnValue({ fetch });
+
+    const searchTool = getTool(
+      createGrafanaTools({ allowedPrometheusDatasourceUids: ['prom-a'] }),
+      'search_dashboard_metric_usage'
+    );
+    const search = await searchTool.execute(
+      'call-1',
+      { query: 'Context', seedMetric: 'http_requests_total' },
+      undefined
+    );
+    const searchBody = JSON.parse(search.content[0].text);
+
+    expect(searchBody.dashboards).toHaveLength(2);
+    expect(searchBody.metrics.map((metric: { metric: string }) => metric.metric)).toEqual(
+      expect.arrayContaining([
+        'http_requests_total',
+        'http_request_duration_seconds_bucket',
+        'node_load1',
+        'node_cpu_seconds_total',
+      ])
+    );
+    expect(search.details).toMatchObject({
+      dashboardCount: 2,
+      seedMetrics: ['http_requests_total'],
+      summarized: true,
+    });
+
+    const neighborhoodTool = getTool(
+      createGrafanaTools({ allowedPrometheusDatasourceUids: ['prom-a'] }),
+      'get_metric_neighborhood'
+    );
+    const neighborhood = await neighborhoodTool.execute(
+      'call-2',
+      { metric: 'http_requests_total', query: 'Context' },
+      undefined
+    );
+    const neighborhoodBody = JSON.parse(neighborhood.content[0].text);
+
+    expect(neighborhoodBody.neighbors.map((metric: { metric: string }) => metric.metric)).toEqual(
+      expect.arrayContaining(['http_request_duration_seconds_bucket', 'node_load1'])
+    );
+    expect(neighborhood.details).toMatchObject({
+      seedMetrics: ['http_requests_total'],
+      dashboardCount: 2,
+      summarized: true,
+    });
+  });
+
+  it('returns stable empty arrays when dashboard metric search has no matches', async () => {
+    const fetch = jest.fn(({ url }) => {
+      if (url === '/api/search') {
+        return of({ data: [] });
+      }
+
+      return throwError(() => new Error(`unexpected fetch: ${url}`));
+    });
+    (getBackendSrv as jest.Mock).mockReturnValue({ fetch });
+
+    const searchTool = getTool(
+      createGrafanaTools({ allowedPrometheusDatasourceUids: ['prom-a'] }),
+      'search_dashboard_metric_usage'
+    );
+    const search = await searchTool.execute(
+      'call-1',
+      { query: 'Missing Context', seedMetric: 'http_requests_total' },
+      undefined
+    );
+    const searchBody = JSON.parse(search.content[0].text);
+
+    expect(searchBody).toMatchObject({
+      seedMetrics: ['http_requests_total'],
+      dashboards: [],
+      metrics: [],
+      usages: [],
+      relations: [],
+    });
+    expect(search.details).toMatchObject({
+      dashboardCount: 0,
+      metricCount: 0,
+      usageCount: 0,
+      relationCount: 0,
+      seedMetrics: ['http_requests_total'],
+    });
+
+    const neighborhoodTool = getTool(
+      createGrafanaTools({ allowedPrometheusDatasourceUids: ['prom-a'] }),
+      'get_metric_neighborhood'
+    );
+    const neighborhood = await neighborhoodTool.execute(
+      'call-2',
+      { metric: 'http_requests_total', query: 'Missing Context' },
+      undefined
+    );
+    const neighborhoodBody = JSON.parse(neighborhood.content[0].text);
+
+    expect(neighborhoodBody).toMatchObject({
+      seedMetrics: ['http_requests_total'],
+      dashboards: [],
+      neighbors: [],
+      relations: [],
+      usages: [],
+    });
+    expect(neighborhood.details).toMatchObject({
+      seedMetrics: ['http_requests_total'],
+      dashboardCount: 0,
+      neighborCount: 0,
+      relationCount: 0,
+    });
+  });
+
+  it('relaxes dashboard metric search for non-contiguous dashboard title terms', async () => {
+    const fetch = jest.fn(({ url, params }) => {
+      if (url === '/api/search' && params?.query === 'Metric Context abc123') {
+        return of({ data: [] });
+      }
+
+      if (url === '/api/search' && params?.query === 'metric context') {
+        return of({
+          data: [
+            {
+              uid: 'metric-context-service-abc123',
+              title: 'Metric Context Service abc123',
+              url: '/d/metric-context-service-abc123/metric-context-service-abc123',
+              folderTitle: 'Observability',
+            },
+          ],
+        });
+      }
+
+      if (url === '/api/dashboards/uid/metric-context-service-abc123') {
+        return of({
+          data: {
+            dashboard: makeDashboardMetricUsageFixture(
+              'metric-context-service-abc123',
+              'Metric Context Service abc123'
+            ),
+            meta: {
+              folderTitle: 'Observability',
+              url: '/d/metric-context-service-abc123/metric-context-service-abc123',
+            },
+          },
+        });
+      }
+
+      return throwError(() => new Error(`unexpected fetch: ${url}`));
+    });
+    (getBackendSrv as jest.Mock).mockReturnValue({ fetch });
+
+    const searchTool = getTool(
+      createGrafanaTools({ allowedPrometheusDatasourceUids: ['prom-a'] }),
+      'search_dashboard_metric_usage'
+    );
+    const search = await searchTool.execute(
+      'call-1',
+      { query: 'Metric Context abc123', seedMetric: 'http_requests_total' },
+      undefined
+    );
+    const body = JSON.parse(search.content[0].text);
+
+    expect(fetch).toHaveBeenCalledWith(expect.objectContaining({ url: '/api/search' }));
+    expect(body.dashboards).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          uid: 'metric-context-service-abc123',
+          title: 'Metric Context Service abc123',
+        }),
+      ])
+    );
+    expect(body.metrics.map((metric: { metric: string }) => metric.metric)).toContain('http_requests_total');
+    expect(search.details).toMatchObject({ dashboardCount: 1, metricCount: expect.any(Number) });
+  });
+
+  it('normalizes dashboard metric context tool arguments before validation', () => {
+    const searchTool = getTool(
+      createGrafanaTools({ allowedPrometheusDatasourceUids: ['prom-a'] }),
+      'search_dashboard_metric_usage'
+    );
+    expect(
+      searchTool.prepareArguments?.({
+        query: ['Metric', 'Context'],
+        seedMetrics: 'http_requests_total',
+        maxDashboards: '2',
+      })
+    ).toMatchObject({
+      query: 'Metric Context',
+      seedMetrics: ['http_requests_total'],
+      maxDashboards: 2,
+    });
+
+    const neighborhoodTool = getTool(
+      createGrafanaTools({ allowedPrometheusDatasourceUids: ['prom-a'] }),
+      'get_metric_neighborhood'
+    );
+    expect(
+      neighborhoodTool.prepareArguments?.({
+        seedMetric: 'http_requests_total',
+        metrics: 'node_load1,node_cpu_seconds_total',
+        uid: 'metric-context',
+      })
+    ).toMatchObject({
+      metric: 'http_requests_total',
+      metrics: ['node_load1', 'node_cpu_seconds_total'],
+      dashboardUid: 'metric-context',
+    });
+  });
+
   it('exposes narrow read-only subagent tools for skill-selected turns', () => {
     const names = createGrafanaToolsForSkillGroups(
       {
@@ -1462,11 +1770,13 @@ describe('grafana datasource tool policy', () => {
           thinkingLevel: 'off',
         },
       },
-      ['metrics', 'subagents']
+      ['metrics', 'dashboardMetricContext', 'subagents']
     ).map((tool) => tool.name);
 
     expect(names).toContain('list_datasources');
     expect(names).toContain('query_prometheus');
+    expect(names).toContain('search_dashboard_metric_usage');
+    expect(names).toContain('get_metric_neighborhood');
     expect(names).toContain('run_query_agent');
     expect(names).toContain('run_dashboard_agent');
     expect(names).toContain('run_investigation_agent');
@@ -1542,6 +1852,8 @@ describe('grafana datasource tool policy', () => {
         'list_metrics',
         'inspect_metric_series',
         'query_prometheus',
+        'search_dashboard_metric_usage',
+        'get_metric_neighborhood',
         'write_jsonnet',
         'edit_jsonnet',
         'fix_jsonnet',
@@ -1648,6 +1960,59 @@ function createVirtualJsonnetRuntime(sessionId: string, initialFile?: VirtualJso
     markHydrated: (path: string, version: number) => {
       hydrated[path] = version;
     },
+  };
+}
+
+function makeDashboardMetricUsageFixture(uid: string, title: string) {
+  return {
+    uid,
+    title,
+    tags: ['metric-context'],
+    templating: {
+      list: [
+        {
+          name: 'route',
+          type: 'custom',
+          current: { text: '/render/report', value: '/render/report' },
+          query: '/,/render/report',
+        },
+      ],
+    },
+    panels: [
+      {
+        id: 1,
+        title: 'HTTP errors and host load',
+        type: 'timeseries',
+        datasource: { uid: 'prom-a', type: 'prometheus' },
+        fieldConfig: { defaults: { unit: 'reqps' } },
+        targets: [
+          {
+            refId: 'A',
+            expr: 'sum by (vm, route, status) (rate(http_requests_total{status=~"5..",route="$route"}[$__rate_interval]))',
+            legendFormat: '{{vm}} {{route}} {{status}}',
+          },
+          {
+            refId: 'B',
+            expr: 'avg by(instance) (node_load1{job="node"})',
+            legendFormat: '{{instance}} load',
+          },
+        ],
+      },
+      {
+        id: 2,
+        title: 'Route p95 latency',
+        type: 'timeseries',
+        datasource: { uid: 'prom-a', type: 'prometheus' },
+        fieldConfig: { defaults: { unit: 's' } },
+        targets: [
+          {
+            refId: 'A',
+            expr: 'histogram_quantile(0.95, sum by (le, vm, route) (rate(http_request_duration_seconds_bucket{route="$route"}[$__rate_interval])))',
+            legendFormat: '{{vm}} {{route}}',
+          },
+        ],
+      },
+    ],
   };
 }
 

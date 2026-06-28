@@ -1,7 +1,7 @@
 import { GRAFANA_SKILLS } from './catalog';
 import type { GrafanaSkill, GrafanaSkillSelection, SkillToolGroup } from './types';
 
-const BASE_TOOL_GROUPS: readonly SkillToolGroup[] = ['metrics', 'subagents'];
+const BASE_TOOL_GROUPS: readonly SkillToolGroup[] = ['metrics', 'dashboardMetricContext', 'subagents'];
 const DASHBOARD_INTENT =
   /\b(dashboard|dashboards|panel|panels|row|rows|variable|variables|jsonnet|render|sync|managed dashboard|grafana view)\b/i;
 const DASHBOARD_WRITE_INTENT =

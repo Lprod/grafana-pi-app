@@ -17,6 +17,7 @@ type SpecialistToolParams = {
 type SpecialistToolOptions = {
   runtime: GrafanaToolRuntime;
   metricsTools: AgentTool[];
+  dashboardMetricContextTools?: AgentTool[];
   dashboardReadTools?: AgentTool[];
   liveDashboardTools?: AgentTool[];
   jsonnetFileTools?: AgentTool[];
@@ -35,7 +36,11 @@ export function createSubagentTools(options: SpecialistToolOptions): AgentTool[]
       description: 'Delegate Prometheus metric discovery and PromQL validation to a focused query specialist.',
       kind: 'query',
       runtime: options.runtime,
-      tools: dedupeTools([...(options.metricsTools ?? []), ...(options.artifactTools ?? [])]),
+      tools: dedupeTools([
+        ...(options.metricsTools ?? []),
+        ...(options.dashboardMetricContextTools ?? []),
+        ...(options.artifactTools ?? []),
+      ]),
       systemPrompt: QUERY_AGENT_PROMPT,
       params: queryAgentParameters(),
       taskPrefix: queryTaskPrefix,
@@ -49,6 +54,7 @@ export function createSubagentTools(options: SpecialistToolOptions): AgentTool[]
       runtime: options.runtime,
       tools: dedupeTools([
         ...(options.metricsTools ?? []),
+        ...(options.dashboardMetricContextTools ?? []),
         ...(options.dashboardReadTools ?? []),
         ...(options.liveDashboardTools ?? []),
         ...(options.jsonnetFileTools ?? []),
@@ -69,6 +75,7 @@ export function createSubagentTools(options: SpecialistToolOptions): AgentTool[]
       runtime: options.runtime,
       tools: dedupeTools([
         ...(options.metricsTools ?? []),
+        ...(options.dashboardMetricContextTools ?? []),
         ...(options.investigationTools ?? []),
         ...(options.artifactTools ?? []),
         ...(options.skillTools ?? []),
@@ -247,6 +254,7 @@ const QUERY_AGENT_PROMPT = `You are the query-agent for a Grafana observability 
 
 Scope:
 - Discover Prometheus datasources, metric names, labels, and label values.
+- Use inspect_dashboard_metric_usage, search_dashboard_metric_usage, or get_metric_neighborhood before broad metric scans when existing dashboards may encode relevant PromQL, labels, or related metrics.
 - Inspect metric series before naming label selectors; do not infer names like status/status_code/path/route from convention.
 - Validate PromQL with query_prometheus before recommending it.
 - Do not create, update, delete, upload, render, or sync dashboards.
@@ -268,6 +276,7 @@ const DASHBOARD_AGENT_PROMPT = `You are the dashboard-agent for a Grafana observ
 Scope:
 - Create, update, review, render, and sync Grafana dashboards when the user explicitly asks for dashboard or persistent artifact work.
 - Discover Prometheus datasources, metric names, labels, and label values before selecting panel queries.
+- Use dashboard-derived metric usage tools to find existing PromQL, label conventions, and related metrics before inventing new dashboard queries.
 - Inspect existing dashboards when a dashboard UID is provided or the task is an update or review.
 - Use inspect_dashboard_context for existing-dashboard review/update work because it returns typed panel/layout context and validates current-variable-substituted PromQL.
 - When live dashboard editing tools are available and the task is an on-the-fly edit to the currently open dashboard, prefer typed live tools such as rename_live_dashboard_panel, update_live_dashboard_panel_query, add_live_dashboard_panel, move_or_resize_live_dashboard_panel, update_live_dashboard_settings, add_live_dashboard_variable, and update_live_dashboard_variable over managed Jsonnet sync.
@@ -302,6 +311,7 @@ Scope:
 - Investigate incidents, failures, latency spikes, error spikes, degradations, and root-cause questions.
 - Define the scope: service, host, route, symptom, datasource UID, and time range when available.
 - Gather evidence with metric discovery and PromQL validation.
+- Use dashboard-derived metric usage tools when existing dashboards may identify relevant metrics, labels, or neighbor signals.
 - Use update_report early and at the final material summary for longer investigations. When the task or benchmark has a tight call budget, consolidate findings instead of updating after every minor check.
 - Keep hypotheses separate from evidence. Evidence must come from tool results or user-provided context.
 - Do not create dashboards or navigate unless the supervisor explicitly delegates that to another specialist.

@@ -4,8 +4,15 @@ import type { PiAppJsonData } from '../../../types';
 import type { GrafanaSkill, SkillToolGroup } from './types';
 
 const TOOL_GROUPS_BY_SKILL: Record<string, readonly SkillToolGroup[]> = {
-  'grafana-dashboard': ['dashboardRead', 'liveDashboardEditing', 'jsonnetFiles', 'managedDashboards', 'skillResources'],
-  investigation: ['metrics', 'subagents', 'investigation', 'skillResources'],
+  'grafana-dashboard': [
+    'dashboardMetricContext',
+    'dashboardRead',
+    'liveDashboardEditing',
+    'jsonnetFiles',
+    'managedDashboards',
+    'skillResources',
+  ],
+  investigation: ['metrics', 'dashboardMetricContext', 'subagents', 'investigation', 'skillResources'],
 };
 
 export const GRAFANA_SKILLS: readonly GrafanaSkill[] = BUNDLED_GRAFANA_SKILLS.map((skill) => ({

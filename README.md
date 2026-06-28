@@ -7,6 +7,7 @@ Observability Analyst is a Grafana app plugin that embeds an LLM analyst for obs
 - Discovers Prometheus datasources visible to the current user.
 - Lists metric names and label values through Grafana datasource resource APIs.
 - Runs PromQL through Grafana datasource query APIs, returning compact min/max/last/sample summaries for range queries by default.
+- Extracts Prometheus metric usage from existing dashboards, including panel co-usage, labels, grouping labels, functions, and related metric neighborhoods.
 - Creates app-managed dashboards from model-authored Jsonnet source. The source is stored with each dashboard so future edits can update the Jsonnet and re-sync through the app.
 - Lists, fetches, and screenshots dashboards through Grafana APIs.
 - Adds dashboard panel menu actions for contextual Assistant prompts.
@@ -74,13 +75,13 @@ The default chat toolset does not expose raw dashboard JSON upload/delete tools,
 
 ## Subagents
 
-The default chat toolset includes `explore_metrics` as a high-level fallback for broad metric and PromQL reconnaissance and `design_dashboard` as a design-only dashboard specialist. Both start nested agents with narrow tool allow-lists: the metrics subagent can only discover datasources, inspect Prometheus metadata, and validate PromQL; the dashboard designer can inspect metrics and dashboards but cannot write, render managed dashboard previews, sync, upload, delete, or otherwise persist dashboard artifacts. Dashboard write tools stay available only to the parent assistant.
+The default chat toolset includes `run_query_agent` as a high-level fallback for broad metric and PromQL reconnaissance and `run_dashboard_agent` for dashboard work. Both start nested agents with narrow tool allow-lists: the query subagent can discover datasources, inspect Prometheus metadata, validate PromQL, and mine dashboard-derived metric context; the dashboard subagent can inspect metrics and dashboards and use managed dashboard tools, while persistent writes still require the parent assistant's existing approval flow.
 
 ## Skills
 
 Dashboard instructions are split into repo-local skills under `.agents/skills/<skill-name>/SKILL.md`, using the same default `SKILL.md` directory shape as local agent skill installs. `npm run generate:skills` validates those files and bundles them into `src/pages/Chat/skills/bundledSkills.generated.ts` for the frontend.
 
-The chat agent always has metric discovery tools and `explore_metrics` available. Dashboard guidance activates when the prompt asks for dashboard, panel, Jsonnet, render, or sync work, which also enables the managed dashboard and Jsonnet tool groups for that turn. New bundled skills can be added by creating another `.agents/skills/<name>/SKILL.md`; add optional text resources under `references/`, `templates/`, or `assets/`.
+The chat agent always has metric discovery tools, dashboard-derived metric context tools, and `run_query_agent` available. Dashboard guidance activates when the prompt asks for dashboard, panel, Jsonnet, render, or sync work, which also enables the managed dashboard and Jsonnet tool groups for that turn. New bundled skills can be added by creating another `.agents/skills/<name>/SKILL.md`; add optional text resources under `references/`, `templates/`, or `assets/`.
 
 Admins can also add small instance-specific custom skills through plugin configuration:
 
@@ -104,7 +105,7 @@ Admins can also add small instance-specific custom skills through plugin configu
 ]
 ```
 
-Custom skills are non-secret frontend configuration and are sent to the configured LLM when active. Supported custom skill tool groups are `metrics`, `dashboardRead`, `jsonnetFiles`, `managedDashboards`, `subagents`, and `skillResources`.
+Custom skills are non-secret frontend configuration and are sent to the configured LLM when active. Supported custom skill tool groups are `metrics`, `dashboardMetricContext`, `dashboardRead`, `jsonnetFiles`, `managedDashboards`, `subagents`, and `skillResources`.
 The bundled investigation skill also uses the `investigation` tool group to maintain the structured report shown in the chat workspace.
 
 ## Development
@@ -227,12 +228,20 @@ npm run benchmark:dashboard-editing
 This benchmark starts the `grafana-assistant-app` variant on http://localhost:3001 and validates three flows: typed multi-step live edits from a dashboard sidebar, recovery after an intentionally failed typed live edit, and graceful fallback when Assistant is open without an active dashboard mutation client. It writes reports to `test-results/dashboard-editing-benchmark/latest-report.txt`, `latest-answer.md`, and `latest-events.json`.
 If you already have a compatible OpenAI-compatible model server running, set `BENCH_MANAGE_LLAMA=0` so the benchmark reuses it instead of starting `llama-server`.
 
-To benchmark only the `explore_metrics` discovery path, run:
+To benchmark dashboard-derived metric discovery, run:
+
+```bash
+npm run benchmark:dashboard-metric-discovery
+```
+
+This benchmark seeds dashboards with overlapping HTTP, latency, node load, and CPU panels. It requires exactly one top-level `run_query_agent` call, checks that the query specialist uses `search_dashboard_metric_usage` or `get_metric_neighborhood` before validating PromQL, and writes reports to `test-results/dashboard-metric-discovery-benchmark/latest-report.txt`, `latest-answer.md`, and `latest-events.json`.
+
+To benchmark only the `run_query_agent` discovery path, run:
 
 ```bash
 npm run benchmark:explore-metrics
 ```
 
-This benchmark requires exactly one top-level `explore_metrics` call, checks the returned metric coverage and nested tool count, and writes reports to `test-results/explore-metrics-benchmark/latest-report.txt`, `latest-answer.md`, and `latest-events.json`.
+This benchmark requires exactly one top-level `run_query_agent` call, checks the returned metric coverage and nested tool count, and writes reports to `test-results/explore-metrics-benchmark/latest-report.txt`, `latest-answer.md`, and `latest-events.json`.
 
 Open Grafana at http://localhost:3000 and navigate to the Observability Analyst app page.

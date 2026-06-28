@@ -289,7 +289,11 @@ export function ChatApp({
       if (signal?.aborted || context.isError) {
         return undefined;
       }
-      return artifactizeToolResult(artifactRuntime, context.toolCall.name, context.result);
+      try {
+        return artifactizeToolResult(artifactRuntime, context.toolCall.name, context.result);
+      } catch {
+        return undefined;
+      }
     },
     [artifactRuntime]
   );

@@ -12,8 +12,9 @@ export function textResult<TDetails extends Record<string, unknown>>(
   };
 }
 
-export function truncateText(value: string, maxLength: number): string {
-  return value.length > maxLength ? `${value.slice(0, maxLength)}\n... (truncated)` : value;
+export function truncateText(value: unknown, maxLength: number): string {
+  const text = typeof value === 'string' ? value : String(value);
+  return text.length > maxLength ? `${text.slice(0, maxLength)}\n... (truncated)` : text;
 }
 
 export function throwIfAborted(signal?: AbortSignal) {

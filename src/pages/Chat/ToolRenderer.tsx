@@ -517,6 +517,12 @@ function asSimpleToolCallSummary(
       return dashboardToolCallSummary('Get dashboard', record);
     case 'inspect_dashboard_context':
       return dashboardToolCallSummary('Inspect dashboard context', record);
+    case 'inspect_dashboard_metric_usage':
+      return dashboardToolCallSummary('Inspect dashboard metric usage', record);
+    case 'search_dashboard_metric_usage':
+      return dashboardMetricSearchToolCallSummary(record);
+    case 'get_metric_neighborhood':
+      return metricNeighborhoodToolCallSummary(record);
     case 'list_live_dashboard_panels':
       return liveDashboardToolCallSummary('List live dashboard panels', record);
     case 'get_live_dashboard_layout':
@@ -734,6 +740,53 @@ function dashboardToolCallSummary(action: string, record: Record<string, unknown
       { label: 'Panel', value: stringOrNumberField(record, 'panelId') },
       { label: 'Dry run', value: booleanLabel(record, 'dryRun') },
     ],
+  };
+}
+
+function dashboardMetricSearchToolCallSummary(record: Record<string, unknown>): SimpleToolCallSummary {
+  const query = stringField(record, 'query');
+  const tag = stringField(record, 'tag');
+  const seed = stringField(record, 'seedMetric');
+  const seeds = stringArrayField(record, 'seedMetrics') ?? [];
+  const seedCode = seeds.length > 0 ? seeds.join('\n') : seed;
+
+  return {
+    summary: summaryLine(['Search dashboard metric usage', query, tag ? `tag ${tag}` : undefined]),
+    items: [
+      { label: 'Query', value: query },
+      { label: 'Tag', value: tag },
+      { label: 'Datasource', value: formatDatasourceMetaValue(record) },
+      {
+        label: seeds.length > 0 ? 'Seed metrics' : 'Seed metric',
+        value: seedCode ? <code>{seedCode}</code> : undefined,
+      },
+      { label: 'Max dashboards', value: stringOrNumberField(record, 'maxDashboards') },
+    ],
+    code: seedCode,
+  };
+}
+
+function metricNeighborhoodToolCallSummary(record: Record<string, unknown>): SimpleToolCallSummary {
+  const metric = stringField(record, 'metric');
+  const metrics = stringArrayField(record, 'metrics') ?? [];
+  const seedCode = metrics.length > 0 ? metrics.join('\n') : metric;
+
+  return {
+    summary: summaryLine([
+      'Get metric neighborhood',
+      metric ?? (metrics.length > 0 ? `${metrics.length} seeds` : undefined),
+    ]),
+    items: [
+      {
+        label: metrics.length > 0 ? 'Seed metrics' : 'Seed metric',
+        value: seedCode ? <code>{seedCode}</code> : undefined,
+      },
+      { label: 'Dashboard', value: formatSummaryFieldValue(record, 'dashboardUid') },
+      { label: 'Query', value: stringField(record, 'query') },
+      { label: 'Datasource', value: formatDatasourceMetaValue(record) },
+      { label: 'Max results', value: stringOrNumberField(record, 'maxResults') },
+    ],
+    code: seedCode,
   };
 }
 
@@ -1136,6 +1189,9 @@ const TOOL_ICONS: Record<string, IconName> = {
   get_dashboard: 'dashboard',
   grafana_get_dashboard: 'dashboard',
   inspect_dashboard_context: 'dashboard',
+  inspect_dashboard_metric_usage: 'dashboard',
+  search_dashboard_metric_usage: 'search',
+  get_metric_neighborhood: 'search',
   list_live_dashboard_panels: 'list-ul',
   get_live_dashboard_layout: 'dashboard',
   get_live_dashboard_info: 'dashboard',
@@ -1314,9 +1370,11 @@ function SubagentToolCallRow({
 
 function shouldExpandSubagentToolCall(call: SubagentToolCall) {
   return (
-    call.status === 'completed' &&
-    !call.isError &&
-    (call.name === 'sync_dashboard' || call.name === 'grafana_sync_managed_dashboard')
+    call.status === 'failed' ||
+    call.isError ||
+    (call.status === 'completed' &&
+      !call.isError &&
+      (call.name === 'sync_dashboard' || call.name === 'grafana_sync_managed_dashboard'))
   );
 }
 

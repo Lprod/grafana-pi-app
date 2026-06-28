@@ -43,6 +43,21 @@ describe('artifact tools', () => {
     expect(artifacts.artifact_1.data).toMatchObject({ rows: expect.any(Array) });
   });
 
+  it('skips artifactization when a tool result has no content array', () => {
+    const { runtime } = createTestArtifactRuntime();
+
+    expect(() =>
+      artifactizeToolResult(runtime, 'search_dashboard_metric_usage', {
+        details: { summarized: true },
+      } as any)
+    ).not.toThrow();
+    expect(
+      artifactizeToolResult(runtime, 'search_dashboard_metric_usage', {
+        details: { summarized: true },
+      } as any)
+    ).toBeUndefined();
+  });
+
   it('reads fields, slices, and jq output from stored artifacts', async () => {
     const { runtime } = createTestArtifactRuntime();
     const stored = runtime.register({

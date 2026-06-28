@@ -1,5 +1,6 @@
 export type SkillToolGroup =
   | 'metrics'
+  | 'dashboardMetricContext'
   | 'dashboardRead'
   | 'liveDashboardEditing'
   | 'jsonnetFiles'

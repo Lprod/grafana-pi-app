@@ -218,6 +218,8 @@ Tool groups:
 
 - `metrics`: Prometheus datasource discovery, metric metadata, label values,
   series inspection, and summarized PromQL queries.
+- `dashboardMetricContext`: read-only dashboard metric usage extraction,
+  dashboard corpus search, and seed metric neighborhood ranking.
 - `dashboardRead`: list, fetch, inspect, and screenshot dashboards.
 - `jsonnetFiles`: session virtual Jsonnet write, edit, fix, and read tools.
 - `managedDashboards`: list managed dashboards, fetch source, render, and sync.
@@ -315,10 +317,19 @@ Main tools:
 - `inspect_metric_series`: inspect label names and example series.
 - `query_prometheus`: run instant or range PromQL through Grafana and return a
   compact validation summary.
+- `inspect_dashboard_metric_usage`: extract Prometheus metric usage, labels,
+  grouping labels, functions, panel locations, and relations from one dashboard.
+- `search_dashboard_metric_usage`: search visible dashboards and build a compact
+  metric usage corpus.
+- `get_metric_neighborhood`: rank metrics related to seed metrics using
+  dashboard co-usage, shared panels, shared dashboards, metric families, and
+  label overlap.
 
 Important safety and cost controls:
 
 - Datasources are filtered by `allowedPrometheusDatasourceUids` when configured.
+- Dashboard-derived metric context is read-only and filters extracted usage by
+  the same Prometheus datasource allow-list.
 - The default query tool returns min/max/last/sample summaries, not full raw
   data frames.
 - Raw Prometheus data frames are behind `query_prometheus_raw`, which is only
@@ -452,10 +463,11 @@ object for Pi compatibility.
 
 Every prompt rebuilds the tool list.
 
-Before a user prompt is submitted, the newly created agent has only subagent and
-artifact tools. For normal prompts, the base tool groups are metrics,
-subagents, and artifacts. Direct dashboard read, Jsonnet, and managed-dashboard
-tools are added to the parent agent only when dashboard skills are active.
+Before a user prompt is submitted, the newly created agent has only selected
+read-only context, subagent, and artifact tools. For normal prompts, the base
+tool groups are metrics, dashboardMetricContext, subagents, and artifacts.
+Direct dashboard read, Jsonnet, and managed-dashboard tools are added to the
+parent agent only when dashboard skills are active.
 
 The dashboard specialist subagent is available as a delegation route, but it has
 its own narrow prompt, tool-call budget, write-approval hook, and backend checks.
@@ -607,6 +619,7 @@ Benchmarks and e2e tests:
 - `npm run benchmark:agent`,
 - `npm run benchmark:analysis`,
 - `npm run benchmark:dashboard-context`,
+- `npm run benchmark:dashboard-metric-discovery`,
 - `npm run benchmark:explore-metrics`,
 - `npm run e2e`.
 

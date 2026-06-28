@@ -1,6 +1,6 @@
 # Observability Analyst
 
-Observability Analyst adds an LLM analyst to Grafana for metric exploration, PromQL validation, investigations, and dashboard authoring.
+Observability Analyst adds an LLM analyst to Grafana for metric exploration, dashboard-derived metric discovery, PromQL validation, investigations, and dashboard authoring.
 
 The assistant uses the current Grafana user's datasource and dashboard permissions. LLM requests are proxied through the app plugin backend with an OpenAI-compatible API key stored in secure plugin settings.
 The default chat toolset exposes supervisor delegation tools (`run_query_agent`, `run_dashboard_agent`, `run_investigation_agent`, `run_support_agent`, and `run_navigation_agent`). Specialist agents receive the direct Grafana tools they need for their domain; dashboard writes still require the existing in-chat confirmation before syncing, uploading, or deleting persistent Grafana artifacts.
@@ -25,4 +25,4 @@ The assistant page does not expose model, thinking, system prompt, datasource po
 
 Managed dashboards are compiled from model-authored Jsonnet source in the backend. During chat, the assistant keeps that source in a session-scoped virtual Jsonnet file so it can render, edit, auto-repair common invalid Grafonnet-style constructor output during render, and sync dashboards without resending unchanged source. The source is stored on the plugin-managed dashboard resource and should be changed by fetching, editing, and re-syncing through the app.
 
-For existing dashboards, the dashboard specialist uses `inspect_dashboard_context` to read typed dashboard structure, current-variable-substituted panel queries, layout and field config, and best-effort Prometheus validation summaries.
+For existing dashboards, the assistant can use `inspect_dashboard_metric_usage`, `search_dashboard_metric_usage`, and `get_metric_neighborhood` to extract Prometheus metric usage, labels, grouping labels, functions, and panel co-usage from dashboards before broader metric scans. The dashboard specialist also uses `inspect_dashboard_context` to read typed dashboard structure, current-variable-substituted panel queries, layout and field config, and best-effort Prometheus validation summaries.

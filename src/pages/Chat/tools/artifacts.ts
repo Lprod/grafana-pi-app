@@ -88,6 +88,9 @@ const ARTIFACT_TOOL_NAMES = new Set([
   'get_dashboard',
   'grafana_get_dashboard',
   'inspect_dashboard_context',
+  'inspect_dashboard_metric_usage',
+  'search_dashboard_metric_usage',
+  'get_metric_neighborhood',
   'list_live_dashboard_panels',
   'get_live_dashboard_layout',
   'get_live_dashboard_info',
@@ -381,6 +384,9 @@ function artifactKind(toolName: string, data: unknown, details: unknown): Artifa
     toolName === 'get_dashboard' ||
     toolName === 'grafana_get_dashboard' ||
     toolName === 'inspect_dashboard_context' ||
+    toolName === 'inspect_dashboard_metric_usage' ||
+    toolName === 'search_dashboard_metric_usage' ||
+    toolName === 'get_metric_neighborhood' ||
     toolName === 'list_live_dashboard_panels' ||
     toolName === 'get_live_dashboard_layout' ||
     toolName === 'render_dashboard' ||
@@ -698,8 +704,8 @@ function parseJson(text: string): { ok: true; value: unknown } | { ok: false } {
   }
 }
 
-function getSingleTextContent(content: AgentToolResult<any>['content']): string | undefined {
-  if (content.length !== 1) {
+function getSingleTextContent(content: AgentToolResult<any>['content'] | undefined): string | undefined {
+  if (!Array.isArray(content) || content.length !== 1) {
     return undefined;
   }
 
@@ -707,7 +713,10 @@ function getSingleTextContent(content: AgentToolResult<any>['content']): string 
   return block.type === 'text' && typeof block.text === 'string' ? block.text : undefined;
 }
 
-function firstImageBlock(content: AgentToolResult<any>['content']): ToolImageBlock | undefined {
+function firstImageBlock(content: AgentToolResult<any>['content'] | undefined): ToolImageBlock | undefined {
+  if (!Array.isArray(content)) {
+    return undefined;
+  }
   return content.find(isToolImageBlock);
 }
 

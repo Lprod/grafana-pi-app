@@ -1,6 +1,7 @@
 import type { AgentTool } from '@earendil-works/pi-agent-core';
 import { createArtifactTools } from './artifacts';
 import { createDashboardTools } from './dashboards';
+import { createDashboardMetricContextTools } from './dashboardMetricContext';
 import { createLiveDashboardMutationTools } from './dashboardMutation';
 import { createJsonnetFileTools } from './jsonnetFiles';
 import { createJsonnetLibTools } from './jsonnetLibs';
@@ -13,6 +14,7 @@ import type { CreateGrafanaToolsOptions, GrafanaToolRegistry, SkillToolGroup } f
 
 export { artifactByteSize, artifactizeToolResult, createArtifactTools, readArtifact } from './artifacts';
 export type { Artifact, ArtifactPreview, ArtifactRef, ArtifactRuntime } from './artifacts';
+export { createDashboardMetricContextTools, extractDashboardMetricUsage } from './dashboardMetricContext';
 export { getUnavailableDashboardDatasourceUids } from './dashboardPolicy';
 export { createLiveDashboardMutationTools, LIVE_DASHBOARD_WRITE_TOOLS } from './dashboardMutation';
 export { DEFAULT_JSONNET_FILE_PATH, normalizeJsonnetPath } from './jsonnetFiles';
@@ -36,6 +38,7 @@ export type { SubagentRunDetails, SubagentToolCall, SubagentUsage } from './suba
 
 export function createGrafanaToolRegistry(options: CreateGrafanaToolsOptions = {}): GrafanaToolRegistry {
   const metrics = createMetricTools(options);
+  const dashboardMetricContext = createDashboardMetricContextTools(options);
   const dashboards = createDashboardTools(options, options.includeAdHocDashboardTools);
   const dashboardReadTools = createDashboardTools(options, false);
   const liveDashboardEditing = createLiveDashboardMutationTools(options.dashboardMutation);
@@ -51,6 +54,7 @@ export function createGrafanaToolRegistry(options: CreateGrafanaToolsOptions = {
     ? createSubagentTools({
         runtime: options.runtime,
         metricsTools: metrics,
+        dashboardMetricContextTools: dashboardMetricContext,
         dashboardReadTools,
         liveDashboardTools: liveDashboardEditing,
         jsonnetFileTools: jsonnetFiles.all,
@@ -64,6 +68,7 @@ export function createGrafanaToolRegistry(options: CreateGrafanaToolsOptions = {
 
   return {
     metrics,
+    dashboardMetricContext,
     dashboards,
     liveDashboardEditing,
     jsonnetFiles,
@@ -75,6 +80,7 @@ export function createGrafanaToolRegistry(options: CreateGrafanaToolsOptions = {
     skills,
     all: [
       ...metrics,
+      ...dashboardMetricContext,
       ...liveDashboardEditing,
       ...jsonnetFiles.all,
       ...parentManagedDashboardTools,
@@ -111,6 +117,10 @@ export function createGrafanaToolsForSkillGroups(
 
   if (groupSet.has('metrics')) {
     selected.push(...registry.metrics);
+  }
+
+  if (groupSet.has('dashboardMetricContext')) {
+    selected.push(...registry.dashboardMetricContext);
   }
 
   if (groupSet.has('jsonnetFiles')) {
