@@ -1,3 +1,10 @@
+## [2.6.1](https://github.com/elohmeier/grafana-pi-app/compare/v2.6.0...v2.6.1) (2026-06-28)
+
+
+### Bug Fixes
+
+* **chat:** guard dirty navigation ([1ecdd50](https://github.com/elohmeier/grafana-pi-app/commit/1ecdd50123ec3c49c498414cef11cc5cd3a2d707))
+
 # [2.6.0](https://github.com/elohmeier/grafana-pi-app/compare/v2.5.3...v2.6.0) (2026-06-25)
 
 
