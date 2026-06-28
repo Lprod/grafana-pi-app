@@ -114,3 +114,52 @@ jobs:
           files: |
             ./${{ steps.package-plugin.outputs.archive }}
             ./${{ steps.package-plugin.outputs.archive-sha1sum }}
+
+  package-plugin-variant:
+    name: Build and package alternate plugin ID release asset
+    needs: release
+    if: needs.release.outputs.released == 'true'
+    permissions:
+      id-token: write
+      contents: write
+      attestations: write
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out release tag
+        uses: actions/checkout@v6
+        with:
+          ref: v${{ needs.release.outputs.version }}
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
+      - name: Build alternate plugin ID asset
+        id: package-plugin-variant
+        run: npm run package:variant
+        env:
+          PLUGIN_VARIANT_ID: grafana-assistant-app
+
+      - name: Generate artifact attestation
+        uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4.1.0
+        with:
+          subject-path: ${{ steps.package-plugin-variant.outputs.archive }}
+
+      - name: Attach alternate plugin ID asset to GitHub release
+        uses: softprops/action-gh-release@b4309332981a82ec1c5618f44dd2e27cc8bfbfda # v3.0.0
+        with:
+          tag_name: v${{ needs.release.outputs.version }}
+          files: |
+            ./${{ steps.package-plugin-variant.outputs.archive }}
+            ./${{ steps.package-plugin-variant.outputs.archive-sha1sum }}

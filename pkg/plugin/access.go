@@ -13,7 +13,6 @@ import (
 )
 
 const (
-	appAccessAction = "g42-pi-app.app:access"
 	grafanaIDHeader = "X-Grafana-Id"
 
 	accessModeAll    = "all"
@@ -58,10 +57,14 @@ func (a *App) hasAppAccess(req *http.Request) (bool, error) {
 		if isOrgAdmin(user) {
 			return true, nil
 		}
-		return a.hasRBACAccess(req, appAccessAction)
+		return a.hasRBACAccess(req, appAccessAction())
 	default:
 		return false, nil
 	}
+}
+
+func appAccessAction() string {
+	return pluginID + ".app:access"
 }
 
 func (a *App) hasRBACAccess(req *http.Request, action string) (bool, error) {

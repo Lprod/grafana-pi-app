@@ -21,6 +21,7 @@
     "benchmark:artifact-jq": "node scripts/benchmark-artifact-jq.mjs",
     "benchmark:dashboard-context": "node scripts/benchmark-dashboard-context.mjs",
     "benchmark:explore-metrics": "node scripts/benchmark-explore-metrics.mjs",
+    "package:variant": "node scripts/package-plugin-variant.mjs",
     "server": "docker compose up --build",
     "sign": "npx --yes @grafana/sign-plugin@latest",
     "validate": "ID=$(jq -r .id dist/plugin.json) && VER=$(jq -r .info.version dist/plugin.json) && EXE=$(jq -r .executable dist/plugin.json) && find dist -maxdepth 1 -type f -name 'gpx_*' ! -name \"$EXE*\" -delete && ln -sfn dist $ID && zip -r $ID-$VER.zip $ID/ && rm $ID && npx --yes @grafana/plugin-validator@latest -sourceCodeUri file://./ $ID-$VER.zip; rm -f $ID-$VER.zip"

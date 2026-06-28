@@ -6,3 +6,11 @@ run = [
   "docker compose up -d --build --remove-orphans",
   "docker compose restart grafana",
 ]
+
+[tasks."dev:reload:variant"]
+description = "Build the grafana-assistant-app variant and start or reload the local Docker stack on port 3001."
+run = [
+  "PLUGIN_VARIANT_ID=grafana-assistant-app npm run package:variant",
+  "docker compose --profile assistant-variant up -d --build --remove-orphans grafana-assistant-variant",
+  "docker compose restart grafana-assistant-variant",
+]

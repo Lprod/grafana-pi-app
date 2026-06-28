@@ -1,15 +1,54 @@
 import React, { Suspense, lazy } from 'react';
-import { AppPlugin, type AppRootProps } from '@grafana/data';
+import {
+  AppPlugin,
+  BusEventWithPayload,
+  PluginExtensionPoints,
+  type AppRootProps,
+  type PluginExtensionEventHelpers,
+  type PluginExtensionPanelContext,
+} from '@grafana/data';
 import { initPluginTranslations } from '@grafana/i18n';
+import { getAppEvents, locationService } from '@grafana/runtime';
 import { loadResources } from '@grafana/scenes';
 import { LoadingPlaceholder } from '@grafana/ui';
 import type { AppConfigProps } from './components/AppConfig/AppConfig';
+import {
+  buildDashboardAssistantChatUrl,
+  storeDashboardAssistantContext,
+  type DashboardAssistantAction,
+} from './pages/Chat/dashboardLaunch';
+import {
+  consumeAssistantSidebarDockRequest,
+  rememberAssistantDockRoute,
+  routeFromLocation,
+  type AssistantSidebarDockRequest,
+} from './pages/Chat/sidebarDock';
 import pluginJson from 'plugin.json';
 
 await initPluginTranslations(pluginJson.id, [loadResources]);
 
 const LazyApp = lazy(() => import('./components/App/App'));
 const LazyAppConfig = lazy(() => import('./components/AppConfig/AppConfig'));
+const LazyAssistantSidebar = lazy(() => import('./pages/Chat/AssistantSidebar'));
+const ASSISTANT_PLUGIN_ID = 'grafana-assistant-app';
+const ASSISTANT_SIDEBAR_TITLE = 'Assistant';
+const ASSISTANT_SIDEBAR_OPEN_RETRY_DELAYS_MS = [0, 100, 300];
+
+type OpenExtensionSidebarPayload = {
+  props?: Record<string, unknown>;
+  pluginId: string;
+  componentTitle: string;
+};
+
+class OpenExtensionSidebarEvent extends BusEventWithPayload<OpenExtensionSidebarPayload> {
+  static type = 'open-extension-sidebar';
+}
+
+declare global {
+  interface Window {
+    __G42_PI_APP_ASSISTANT_SIDEBAR_DOCKING__?: boolean;
+  }
+}
 
 const App = (props: AppRootProps) => (
   <Suspense fallback={<LoadingPlaceholder text="" />}>
@@ -23,9 +62,150 @@ const AppConfig = (props: AppConfigProps) => (
   </Suspense>
 );
 
-export const plugin = new AppPlugin<{}>().setRootPage(App).addConfigPage({
-  title: 'Configuration',
-  icon: 'cog',
-  body: AppConfig,
-  id: 'configuration',
-});
+const AssistantSidebar = (props: {
+  action?: DashboardAssistantAction;
+  contextId?: string;
+  path?: string;
+  sessionId?: string;
+}) => (
+  <Suspense fallback={<LoadingPlaceholder text="" />}>
+    <LazyAssistantSidebar {...props} />
+  </Suspense>
+);
+
+let appPlugin = new AppPlugin<{}>()
+  .setRootPage(App)
+  .addConfigPage({
+    title: 'Configuration',
+    icon: 'cog',
+    body: AppConfig,
+    id: 'configuration',
+  })
+  .addLink<PluginExtensionPanelContext>({
+    title: 'Explain in Assistant',
+    description: 'Explain what this panel shows',
+    targets: [PluginExtensionPoints.DashboardPanelMenu],
+    onClick: openDashboardAssistant('explain'),
+  })
+  .addLink<PluginExtensionPanelContext>({
+    title: 'Troubleshoot panel',
+    description: 'Diagnose why this panel may be empty, noisy, misleading, or unhealthy',
+    targets: [PluginExtensionPoints.DashboardPanelMenu],
+    onClick: openDashboardAssistant('troubleshoot'),
+  })
+  .addLink<PluginExtensionPanelContext>({
+    title: 'Suggest improvements',
+    description: 'Suggest query, visualization, threshold, and layout improvements for this panel',
+    targets: [PluginExtensionPoints.DashboardPanelMenu],
+    onClick: openDashboardAssistant('improve'),
+  });
+
+if (pluginJson.id === ASSISTANT_PLUGIN_ID) {
+  setupAssistantSidebarDocking();
+  appPlugin = appPlugin
+    .addComponent({
+      title: ASSISTANT_SIDEBAR_TITLE,
+      description: 'Open Assistant in the Grafana extension sidebar',
+      targets: [PluginExtensionPoints.ExtensionSidebar],
+      component: AssistantSidebar,
+    })
+    .addLink<{ path?: string }>({
+      title: ASSISTANT_SIDEBAR_TITLE,
+      description: 'Show Assistant in the Grafana extension sidebar',
+      targets: [PluginExtensionPoints.ExtensionSidebar],
+      configure: (context) => {
+        const path = typeof context?.path === 'string' ? context.path : locationService.getLocation().pathname;
+        return isAssistantAppPath(path) ? undefined : {};
+      },
+      onClick: (event, { context, toggleSidebar }) => {
+        event?.preventDefault();
+        toggleSidebar(ASSISTANT_SIDEBAR_TITLE, {
+          path: typeof context?.path === 'string' ? context.path : locationService.getLocation().pathname,
+        });
+      },
+    });
+}
+
+export const plugin = appPlugin;
+
+function openDashboardAssistant(action: DashboardAssistantAction) {
+  return (
+    event: React.MouseEvent | undefined,
+    { context, openSidebar }: PluginExtensionEventHelpers<PluginExtensionPanelContext>
+  ) => {
+    event?.preventDefault();
+
+    let contextId: string | undefined;
+    if (context) {
+      try {
+        contextId = storeDashboardAssistantContext(context, action);
+      } catch (err) {
+        console.warn('Could not store dashboard Assistant context', err);
+      }
+    }
+
+    if (pluginJson.id === ASSISTANT_PLUGIN_ID) {
+      openSidebar(ASSISTANT_SIDEBAR_TITLE, {
+        action,
+        contextId,
+        path: locationService.getLocation().pathname,
+      });
+      return;
+    }
+
+    locationService.push(buildDashboardAssistantChatUrl(action, contextId));
+  };
+}
+
+function isAssistantAppPath(path: string) {
+  const appPath = `/a/${ASSISTANT_PLUGIN_ID}`;
+  return path === appPath || path.startsWith(`${appPath}/`);
+}
+
+function setupAssistantSidebarDocking() {
+  if (typeof window === 'undefined' || window.__G42_PI_APP_ASSISTANT_SIDEBAR_DOCKING__) {
+    return;
+  }
+
+  window.__G42_PI_APP_ASSISTANT_SIDEBAR_DOCKING__ = true;
+  const handleLocation = (location: ReturnType<typeof locationService.getLocation>) => {
+    const route = routeFromLocation(location);
+    if (!route || isAssistantAppPath(location.pathname)) {
+      return;
+    }
+
+    rememberAssistantDockRoute(route);
+    const request = consumeAssistantSidebarDockRequest();
+    if (request) {
+      openAssistantSidebarWithRetry(request);
+    }
+  };
+
+  handleLocation(locationService.getLocation());
+  locationService.getLocationObservable().subscribe(handleLocation);
+}
+
+function openAssistantSidebarWithRetry(request: AssistantSidebarDockRequest) {
+  const props = compactRecord({
+    action: request.action,
+    contextId: request.contextId,
+    path: request.path,
+    sessionId: request.sessionId,
+  });
+
+  for (const delay of ASSISTANT_SIDEBAR_OPEN_RETRY_DELAYS_MS) {
+    window.setTimeout(() => {
+      getAppEvents().publish(
+        new OpenExtensionSidebarEvent({
+          pluginId: ASSISTANT_PLUGIN_ID,
+          componentTitle: ASSISTANT_SIDEBAR_TITLE,
+          props,
+        })
+      );
+    }, delay);
+  }
+}
+
+function compactRecord<T extends Record<string, unknown>>(record: T) {
+  return Object.fromEntries(Object.entries(record).filter(([, value]) => value !== undefined)) as T;
+}

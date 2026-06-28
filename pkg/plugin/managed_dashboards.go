@@ -18,9 +18,14 @@ import (
 	"github.com/grafana/grafana-plugin-sdk-go/config"
 )
 
-const (
-	pluginID = "g42-pi-app"
+var pluginID = "g42-pi-app"
 
+// ID returns the plugin ID compiled into the backend binary.
+func ID() string {
+	return pluginID
+}
+
+const (
 	annotationFolder         = "grafana.app/folder"
 	annotationManagedBy      = "grafana.app/managedBy"
 	annotationManagerID      = "grafana.app/managerId"

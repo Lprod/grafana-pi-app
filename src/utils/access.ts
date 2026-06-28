@@ -1,7 +1,8 @@
 import { OrgRole, type CurrentUserDTO } from '@grafana/data';
+import { PLUGIN_ID } from '../constants';
 import type { PiAppAccessMode, PiAppJsonData } from '../types';
 
-export const APP_ACCESS_ACTION = 'g42-pi-app.app:access';
+export const APP_ACCESS_ACTION = `${PLUGIN_ID}.app:access`;
 
 export type AppAccessUser = Pick<CurrentUserDTO, 'isSignedIn' | 'login' | 'email' | 'orgRole' | 'isGrafanaAdmin'>;
 

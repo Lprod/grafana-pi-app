@@ -9,8 +9,26 @@ Observability Analyst is a Grafana app plugin that embeds an LLM analyst for obs
 - Runs PromQL through Grafana datasource query APIs, returning compact min/max/last/sample summaries for range queries by default.
 - Creates app-managed dashboards from model-authored Jsonnet source. The source is stored with each dashboard so future edits can update the Jsonnet and re-sync through the app.
 - Lists, fetches, and screenshots dashboards through Grafana APIs.
+- Adds dashboard panel menu actions for contextual Assistant prompts.
+- Optionally runs as the `grafana-assistant-app` variant with Grafana's extension sidebar integration enabled.
 - Keeps broad metric reconnaissance available through a restricted metrics subagent.
 - Stores chat sessions per Grafana user with plugin user storage.
+
+## Plugin variants
+
+The default plugin ID is `g42-pi-app`. This is the normal build and keeps Assistant in the app route at `/a/g42-pi-app/chat`.
+
+Release builds also include an alternate plugin ID asset named `grafana-assistant-app-<version>.zip`. This variant is intended for self-managed Grafana instances whose admins want the extra Grafana extension sidebar behavior. The variant keeps the same Assistant implementation, but changes the plugin ID to `grafana-assistant-app` and adds the extension-sidebar declarations that Grafana requires for the global sidebar.
+
+In the sidebar-capable variant:
+
+- Grafana's topbar shows an `Open Assistant` button on non-Assistant routes.
+- Dashboard panel menu actions such as `Explain in Assistant`, `Troubleshoot panel`, and `Suggest improvements` open Assistant in the sidebar with panel context.
+- The sidebar can open the same chat on the full Assistant page.
+- The full Assistant page has `Dock to side`, which saves the current chat session or dashboard-launch context, returns to the last non-Assistant route, and reopens the same chat in the sidebar.
+- The Assistant app route hides its own global sidebar entry, so users do not open Assistant beside Assistant.
+
+The alternate release asset name intentionally does not include `sidebar`; the feature is implicit in the `grafana-assistant-app` plugin ID. If you install the alternate asset unsigned in a local or self-managed instance, configure Grafana to allow the `grafana-assistant-app` unsigned plugin ID.
 
 ## Configuration
 
@@ -134,6 +152,22 @@ Or rebuild both plugin artifacts and start/reload the local Docker stack:
 ```bash
 mise run dev:reload
 ```
+
+To build and run the sidebar-capable variant locally on port 3001:
+
+```bash
+mise run dev:reload:variant
+```
+
+This runs `npm run package:variant`, mounts `dist` as `grafana-assistant-app`, starts the `assistant-variant` Compose profile, and reloads the `grafana-assistant-variant` service. Open the variant at http://localhost:3001.
+
+To create only the alternate plugin ID zip and checksum:
+
+```bash
+PLUGIN_VARIANT_ID=grafana-assistant-app npm run package:variant
+```
+
+The generated files are `grafana-assistant-app-<version>.zip` and `grafana-assistant-app-<version>.zip.sha1`. The packaging script temporarily rewrites `src/plugin.json` during the build and restores it before exiting.
 
 The local Compose stack also seeds Prometheus with six hours of synthetic RED/USE metrics derived from the `agentic-observability` demo. It includes one hour of current-query overlap by default, so short-window `now` queries remain useful during a manual demo. To refresh the generated history after it ages out, remove the demo volumes before starting Grafana again:
 

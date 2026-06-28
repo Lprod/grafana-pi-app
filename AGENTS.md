@@ -5,6 +5,7 @@ This repository contains a **Grafana plugin**. You must Read @./.config/AGENTS/i
 ## Local development
 
 - Use `mise run dev:reload` (defined in @mise.toml) to rebuild the frontend (`npm run build`) and backend (`mage -v build:linux`) plugin artifacts, then start or reload the local Docker stack (`docker compose up -d --build --remove-orphans` followed by `docker compose restart grafana`).
+- Use `mise run dev:reload:variant` to build the alternate `grafana-assistant-app` plugin ID variant, start the `assistant-variant` Docker Compose profile, and test the Grafana extension sidebar integration on http://localhost:3001.
 - The default local LLM config expects an OpenAI-compatible llama-server running on the host. See the `llama-server` invocation in @README.md for the exact flags (Qwen3.6-35B model, port 8080, speculative draft-mtp decoding).
 
 ## Reference sources

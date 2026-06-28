@@ -14,7 +14,7 @@ import { SceneComponentProps, SceneObjectBase, SceneObjectState } from '@grafana
 import { Alert, Badge, Button, EmptyState, Icon, Modal, Spinner, TextArea, useStyles2 } from '@grafana/ui';
 import { locationService, usePluginUserStorage } from '@grafana/runtime';
 import type { GrafanaTheme2 } from '@grafana/data';
-import { PLUGIN_ID } from '../../constants';
+import { PLUGIN_BASE_URL, PLUGIN_ID } from '../../constants';
 import { testIds } from '../../components/testIds';
 import { usePluginMeta } from '../../utils/utils.plugin';
 import {
@@ -35,6 +35,18 @@ import { createOpenAICompatibleModel, getConfiguredThinkingLevel, type PiAppJson
 import { convertChatMessagesToLlm, hasPersistableMessages } from './chatMessages';
 import { getGrafanaSkills, renderGrafanaSystemPrompt, selectGrafanaSkills } from './skills';
 import { ContentBlocks, ToolActivityPanel, ToolResultMessageBody, type ToolRunView } from './ToolRenderer';
+import {
+  buildDashboardAssistantChatUrl,
+  consumeDashboardAssistantLaunch,
+  consumeDashboardAssistantStoredLaunch,
+  dashboardAssistantPrompt,
+  dashboardAssistantSessionTitle,
+  removeDashboardAssistantLaunchParams,
+  renderDashboardAssistantContextBlock,
+  storeDashboardAssistantLaunch,
+  type DashboardAssistantLaunch,
+} from './dashboardLaunch';
+import { getAssistantDockRoute, storeAssistantSidebarDockRequest } from './sidebarDock';
 
 type ChatSceneObjectState = SceneObjectState;
 
@@ -72,6 +84,8 @@ type ChatLeaveGuardAction = {
   stopCurrentAgent?: boolean;
 };
 
+type ChatAppVariant = 'page' | 'sidebar';
+
 const SESSION_INDEX_KEY = 'sessions:index';
 const CHAT_SESSION_EXPORT_KIND = 'g42-pi-app.chat-session';
 const LEGACY_CHAT_SESSION_EXPORT_KINDS = ['grafana-pi-app.chat-session'];
@@ -80,6 +94,8 @@ const PERSISTENT_WRITE_TOOLS = new Set(['sync_dashboard', 'upload_dashboard', 'd
 const ACTIVE_CHAT_LEAVE_MESSAGE =
   'The assistant is still working. Leaving now will stop the run and discard any partial response.';
 const DRAFT_CHAT_LEAVE_MESSAGE = 'The current draft message will be discarded.';
+const CHAT_SESSION_PARAM = 'session';
+const ASSISTANT_SIDEBAR_PLUGIN_ID = 'grafana-assistant-app';
 const sessionKey = (id: string) => `sessions:${id}`;
 
 type ChatSessionExport = {
@@ -111,7 +127,17 @@ function ChatSceneRenderer({ model }: SceneComponentProps<ChatSceneObject>) {
   return <ChatApp />;
 }
 
-function ChatApp() {
+export function ChatApp({
+  variant = 'page',
+  launchContextId,
+  sessionId,
+}: {
+  variant?: ChatAppVariant;
+  launchContextId?: string;
+  sessionId?: string;
+}) {
+  const isSidebarVariant = variant === 'sidebar';
+  const canDockToSidebar = !isSidebarVariant && PLUGIN_ID === ASSISTANT_SIDEBAR_PLUGIN_ID;
   const styles = useStyles2(getStyles);
   const storage = usePluginUserStorage();
   const pluginMeta = usePluginMeta();
@@ -134,6 +160,7 @@ function ChatApp() {
   const investigationReportRef = useRef<InvestigationReport>();
   const artifactsRef = useRef<Record<string, Artifact>>({});
   const artifactCounterRef = useRef(0);
+  const dashboardLaunchRef = useRef<DashboardAssistantLaunch>();
   const [investigationReport, setInvestigationReport] = useState<InvestigationReport>();
   const setVirtualJsonnetFile = useCallback((file: VirtualJsonnetFileSnapshot, options?: { hydrated?: boolean }) => {
     const path = normalizeJsonnetPath(file.path);
@@ -237,6 +264,7 @@ function ChatApp() {
   const lastScrollTopRef = useRef(0);
   const touchStartYRef = useRef<number>();
   const toolConfirmationResolverRef = useRef<(approved: boolean) => void>();
+  const initialLoadStartedRef = useRef(false);
   const isChatDirtyRef = useRef(false);
   const pendingLeaveActionRef = useRef<() => void>();
   const allowNextLocationChangeRef = useRef(false);
@@ -323,12 +351,16 @@ function ChatApp() {
         prompt.trim() === ''
           ? createGrafanaSupervisorTools(toolOptions)
           : createGrafanaToolsForSkillGroups(toolOptions, selection.toolGroups);
+      const systemPrompt = renderGrafanaSystemPrompt({
+        skills,
+        activeSkillNames: selection.activeSkillNames,
+      });
+      const dashboardLaunchContext = dashboardLaunchRef.current
+        ? renderDashboardAssistantContextBlock(dashboardLaunchRef.current)
+        : undefined;
 
       return {
-        systemPrompt: renderGrafanaSystemPrompt({
-          skills,
-          activeSkillNames: selection.activeSkillNames,
-        }),
+        systemPrompt: [systemPrompt, dashboardLaunchContext].filter(Boolean).join('\n\n'),
         tools,
       };
     },
@@ -450,6 +482,8 @@ function ChatApp() {
   const startNewSession = useCallback(() => {
     const id = createSessionId();
     stopCurrentAgentForSessionChange();
+    dashboardLaunchRef.current = undefined;
+    clearChatSessionParamFromLocation();
     sessionIdRef.current = id;
     titleRef.current = 'New chat';
     virtualJsonnetFilesRef.current = {};
@@ -468,47 +502,35 @@ function ChatApp() {
     buildAgent([]);
   }, [buildAgent, clearArtifacts, settleToolConfirmation, stopCurrentAgentForSessionChange]);
 
-  const startNewSessionRef = useRef(startNewSession);
+  const startDashboardLaunchSession = useCallback(
+    (launch: DashboardAssistantLaunch) => {
+      const id = createSessionId();
+      const title = dashboardAssistantSessionTitle(launch);
+      stopCurrentAgentForSessionChange();
+      dashboardLaunchRef.current = launch;
+      sessionIdRef.current = id;
+      titleRef.current = title;
+      virtualJsonnetFilesRef.current = {};
+      virtualJsonnetHydratedRef.current = {};
+      investigationReportRef.current = undefined;
+      clearArtifacts();
+      autoScrollRef.current = true;
+      setIsAutoScrollPaused(false);
+      setCurrentSessionId(id);
+      setCurrentTitle(title);
+      setError(undefined);
+      setInput(dashboardAssistantPrompt(launch));
+      setToolRuns({});
+      setInvestigationReport(undefined);
+      settleToolConfirmation(false);
+      buildAgent([]);
+    },
+    [buildAgent, clearArtifacts, settleToolConfirmation, stopCurrentAgentForSessionChange]
+  );
 
   useEffect(() => {
     storageRef.current = storage;
   }, [storage]);
-
-  useEffect(() => {
-    startNewSessionRef.current = startNewSession;
-  }, [startNewSession]);
-
-  useEffect(() => {
-    let mounted = true;
-
-    async function loadIndex() {
-      const raw = await storageRef.current.getItem(SESSION_INDEX_KEY);
-      const parsed = raw ? (JSON.parse(raw) as SessionIndexItem[]) : [];
-      if (!mounted) {
-        return;
-      }
-      sessionsRef.current = parsed;
-      setSessions(parsed);
-      startNewSessionRef.current();
-    }
-
-    loadIndex().catch((err) => {
-      if (!mounted) {
-        return;
-      }
-      setError(err instanceof Error ? err.message : String(err));
-      startNewSessionRef.current();
-    });
-
-    return () => {
-      mounted = false;
-      toolConfirmationResolverRef.current?.(false);
-      toolConfirmationResolverRef.current = undefined;
-      unsubscribeRef.current?.();
-      unsubscribeRef.current = undefined;
-      agentRef.current?.abort();
-    };
-  }, []);
 
   const setAutoScrollEnabled = useCallback((enabled: boolean) => {
     autoScrollRef.current = enabled;
@@ -750,36 +772,105 @@ function ChatApp() {
       }
     } finally {
       if (agentRef.current === currentAgent && sessionIdRef.current === sessionId) {
+        dashboardLaunchRef.current = undefined;
         flushRevision();
       }
     }
   };
 
-  const loadSession = async (id: string) => {
-    const raw = await storage.getItem(sessionKey(id));
-    if (!raw) {
-      setError('Session not found');
+  const loadSession = useCallback(
+    async (id: string) => {
+      const raw = await storage.getItem(sessionKey(id));
+      if (!raw) {
+        setError('Session not found');
+        return false;
+      }
+
+      const stored = JSON.parse(raw) as StoredSession;
+      stopCurrentAgentForSessionChange();
+      dashboardLaunchRef.current = undefined;
+      sessionIdRef.current = id;
+      titleRef.current = stored.title;
+      setChatSessionParamInLocation(id);
+      virtualJsonnetFilesRef.current = stored.virtualJsonnetFiles ?? {};
+      virtualJsonnetHydratedRef.current = {};
+      investigationReportRef.current = stored.investigationReport;
+      setArtifactSnapshots(stored.artifacts ?? {}, stored.artifactCounter);
+      keepAutoScrollEnabled();
+      setCurrentSessionId(id);
+      setCurrentTitle(stored.title);
+      setError(undefined);
+      setInput('');
+      setToolRuns({});
+      setInvestigationReport(stored.investigationReport);
+      settleToolConfirmation(false);
+      buildAgent(stored.messages);
+      return true;
+    },
+    [
+      buildAgent,
+      keepAutoScrollEnabled,
+      setArtifactSnapshots,
+      settleToolConfirmation,
+      stopCurrentAgentForSessionChange,
+      storage,
+    ]
+  );
+
+  useEffect(() => {
+    if (initialLoadStartedRef.current) {
       return;
     }
+    initialLoadStartedRef.current = true;
+    let mounted = true;
 
-    const stored = JSON.parse(raw) as StoredSession;
-    stopCurrentAgentForSessionChange();
-    sessionIdRef.current = id;
-    titleRef.current = stored.title;
-    virtualJsonnetFilesRef.current = stored.virtualJsonnetFiles ?? {};
-    virtualJsonnetHydratedRef.current = {};
-    investigationReportRef.current = stored.investigationReport;
-    setArtifactSnapshots(stored.artifacts ?? {}, stored.artifactCounter);
-    keepAutoScrollEnabled();
-    setCurrentSessionId(id);
-    setCurrentTitle(stored.title);
-    setError(undefined);
-    setInput('');
-    setToolRuns({});
-    setInvestigationReport(stored.investigationReport);
-    settleToolConfirmation(false);
-    buildAgent(stored.messages);
-  };
+    async function loadInitialState() {
+      const raw = await storageRef.current.getItem(SESSION_INDEX_KEY);
+      const parsed = raw ? (JSON.parse(raw) as SessionIndexItem[]) : [];
+      if (!mounted) {
+        return;
+      }
+
+      sessionsRef.current = parsed;
+      setSessions(parsed);
+
+      const location = locationService.getLocation();
+      const launch = launchContextId
+        ? consumeDashboardAssistantStoredLaunch(launchContextId)
+        : consumeDashboardAssistantLaunch(location.search);
+      if (launch) {
+        startDashboardLaunchSession(launch);
+        if (!launchContextId) {
+          locationService.partial(removeDashboardAssistantLaunchParams(), true);
+        }
+        return;
+      }
+
+      const initialSessionId = sessionId ?? chatSessionIdFromSearch(location.search);
+      if (initialSessionId && (await loadSession(initialSessionId))) {
+        return;
+      }
+
+      startNewSession();
+    }
+
+    loadInitialState().catch((err) => {
+      if (!mounted) {
+        return;
+      }
+      setError(err instanceof Error ? err.message : String(err));
+      startNewSession();
+    });
+
+    return () => {
+      mounted = false;
+      toolConfirmationResolverRef.current?.(false);
+      toolConfirmationResolverRef.current = undefined;
+      unsubscribeRef.current?.();
+      unsubscribeRef.current = undefined;
+      agentRef.current?.abort();
+    };
+  }, [launchContextId, loadSession, sessionId, startDashboardLaunchSession, startNewSession]);
 
   const deleteSession = async (id: string) => {
     const next = sessions.filter((session) => session.id !== id);
@@ -806,6 +897,96 @@ function ChatApp() {
       title: 'Switch sessions?',
       description: chatLeaveDescription,
       confirmLabel: 'Discard and switch',
+    });
+  };
+
+  const openFullPage = useCallback(async () => {
+    const currentAgent = agentRef.current;
+    const sessionId = sessionIdRef.current;
+    let url = `${PLUGIN_BASE_URL}/chat`;
+
+    if (currentAgent && sessionId && hasPersistableMessages(currentAgent.state.messages)) {
+      await saveSession(sessionId, titleRef.current, currentAgent.state.messages);
+      url = buildChatSessionUrl(sessionId);
+    } else if (dashboardLaunchRef.current) {
+      try {
+        const launch = dashboardLaunchRef.current;
+        const contextId = storeDashboardAssistantLaunch(launch);
+        url = buildDashboardAssistantChatUrl(launch.action, contextId);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : String(err));
+        return;
+      }
+    }
+
+    allowNextLocationChangeRef.current = true;
+    locationService.push(url);
+  }, [saveSession]);
+
+  const requestOpenFullPage = () => {
+    const launch = dashboardLaunchRef.current;
+    if (launch && input.trim() === dashboardAssistantPrompt(launch)) {
+      void openFullPage();
+      return;
+    }
+
+    requestGuardedAction(() => void openFullPage(), {
+      title: 'Open full Assistant page?',
+      description: chatLeaveDescription,
+      confirmLabel: 'Open full page',
+      stopCurrentAgent: false,
+    });
+  };
+
+  const dockToSidebar = useCallback(async () => {
+    const currentAgent = agentRef.current;
+    const currentSessionId = sessionIdRef.current;
+    const targetRoute = getAssistantDockRoute() ?? '/';
+    const request = { path: targetRoute };
+
+    try {
+      if (currentAgent && currentSessionId && hasPersistableMessages(currentAgent.state.messages)) {
+        await saveSession(currentSessionId, titleRef.current, currentAgent.state.messages);
+        storeAssistantSidebarDockRequest({
+          ...request,
+          sessionId: currentSessionId,
+        });
+      } else if (dashboardLaunchRef.current) {
+        const launch = dashboardLaunchRef.current;
+        const contextId = storeDashboardAssistantLaunch(launch);
+        storeAssistantSidebarDockRequest({
+          ...request,
+          action: launch.action,
+          contextId,
+        });
+      } else {
+        storeAssistantSidebarDockRequest(request);
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+      return;
+    }
+
+    allowNextLocationChangeRef.current = true;
+    locationService.push(targetRoute);
+  }, [saveSession]);
+
+  const requestDockToSidebar = () => {
+    if (!canDockToSidebar || isBusy) {
+      return;
+    }
+
+    const launch = dashboardLaunchRef.current;
+    if (launch && input.trim() === dashboardAssistantPrompt(launch)) {
+      void dockToSidebar();
+      return;
+    }
+
+    requestGuardedAction(() => void dockToSidebar(), {
+      title: 'Dock Assistant to side?',
+      description: chatLeaveDescription,
+      confirmLabel: 'Dock to side',
+      stopCurrentAgent: false,
     });
   };
 
@@ -890,6 +1071,7 @@ function ChatApp() {
         const title = imported.title || importTitleFromFilename(file.name) || 'Imported chat';
 
         stopCurrentAgentForSessionChange();
+        dashboardLaunchRef.current = undefined;
         sessionIdRef.current = id;
         titleRef.current = title;
         virtualJsonnetFilesRef.current = imported.virtualJsonnetFiles ?? {};
@@ -934,66 +1116,95 @@ function ChatApp() {
   const hasCurrentMessages = hasPersistableMessages(agent?.state.messages ?? []);
 
   return (
-    <div className={styles.container} data-testid={testIds.chat.container}>
+    <div
+      className={cx(styles.container, isSidebarVariant && styles.containerSidebar)}
+      data-testid={testIds.chat.container}
+    >
       <ToolConfirmationModal
         confirmation={pendingToolConfirmation}
         onApprove={() => settleToolConfirmation(true)}
         onDeny={() => settleToolConfirmation(false)}
       />
       <ChatLeaveGuardModal action={leaveGuardAction} onCancel={cancelLeaveGuard} onConfirm={confirmLeaveGuard} />
-      <aside className={styles.sidebar}>
-        <div className={styles.sidebarHeader}>
-          <div>
-            <div className={styles.sidebarTitle}>Sessions</div>
-            <div className={styles.sidebarSubtle}>{sessions.length} saved</div>
+      <input
+        accept="application/json,.json"
+        data-testid={testIds.chat.importInput}
+        disabled={isBusy}
+        hidden
+        ref={importSessionInputRef}
+        type="file"
+        onChange={importSessionFromFile}
+      />
+      {!isSidebarVariant && (
+        <aside className={styles.sidebar}>
+          <div className={styles.sidebarHeader}>
+            <div>
+              <div className={styles.sidebarTitle}>Sessions</div>
+              <div className={styles.sidebarSubtle}>{sessions.length} saved</div>
+            </div>
+            <div className={styles.sidebarActions}>
+              <Button
+                aria-label="Import session"
+                data-testid={testIds.chat.import}
+                disabled={isBusy}
+                icon="import"
+                size="sm"
+                title="Import session"
+                type="button"
+                variant="secondary"
+                onClick={openImportSessionPicker}
+              />
+              <Button icon="plus" size="sm" variant="secondary" onClick={requestNewSession} aria-label="New session" />
+            </div>
           </div>
-          <div className={styles.sidebarActions}>
-            <input
-              accept="application/json,.json"
-              data-testid={testIds.chat.importInput}
-              disabled={isBusy}
-              hidden
-              ref={importSessionInputRef}
-              type="file"
-              onChange={importSessionFromFile}
-            />
-            <Button
-              aria-label="Import session"
-              data-testid={testIds.chat.import}
-              disabled={isBusy}
-              icon="import"
-              size="sm"
-              title="Import session"
-              type="button"
-              variant="secondary"
-              onClick={openImportSessionPicker}
-            />
-            <Button icon="plus" size="sm" variant="secondary" onClick={requestNewSession} aria-label="New session" />
+          <div className={styles.sessionList}>
+            {sessions.map((session) => (
+              <button
+                className={cx(styles.sessionButton, session.id === currentSessionId && styles.sessionButtonActive)}
+                key={session.id}
+                onClick={() => requestLoadSession(session.id)}
+                type="button"
+              >
+                <span className={styles.sessionTitle}>{session.title}</span>
+                <span className={styles.sessionDate}>{formatDate(session.updatedAt)}</span>
+              </button>
+            ))}
+            {sessions.length === 0 && <div className={styles.sidebarSubtle}>No saved chats yet.</div>}
           </div>
-        </div>
-        <div className={styles.sessionList}>
-          {sessions.map((session) => (
-            <button
-              className={cx(styles.sessionButton, session.id === currentSessionId && styles.sessionButtonActive)}
-              key={session.id}
-              onClick={() => requestLoadSession(session.id)}
-              type="button"
-            >
-              <span className={styles.sessionTitle}>{session.title}</span>
-              <span className={styles.sessionDate}>{formatDate(session.updatedAt)}</span>
-            </button>
-          ))}
-          {sessions.length === 0 && <div className={styles.sidebarSubtle}>No saved chats yet.</div>}
-        </div>
-      </aside>
+        </aside>
+      )}
 
       <main className={styles.main}>
-        <div className={styles.toolbar}>
+        <div className={cx(styles.toolbar, isSidebarVariant && styles.toolbarSidebar)}>
           <div className={styles.titleGroup}>
             <h2 className={styles.title}>{currentTitle}</h2>
             <Badge text={isStreaming ? 'Streaming' : 'Ready'} color={isStreaming ? 'blue' : 'green'} />
           </div>
           <div className={styles.toolbarActions}>
+            {isSidebarVariant && (
+              <>
+                <Button
+                  aria-label="New chat"
+                  disabled={isBusy}
+                  icon="plus"
+                  size="sm"
+                  title="New chat"
+                  type="button"
+                  variant="secondary"
+                  onClick={requestNewSession}
+                />
+                <Button
+                  aria-label="Open full page"
+                  disabled={isBusy}
+                  icon="external-link-alt"
+                  size="sm"
+                  title="Open full page"
+                  type="button"
+                  variant="secondary"
+                  onClick={requestOpenFullPage}
+                />
+              </>
+            )}
             {isStreaming && (
               <Button
                 aria-label="Abort response"
@@ -1006,7 +1217,21 @@ function ChatApp() {
                 Stop
               </Button>
             )}
-            {currentSessionId && (
+            {canDockToSidebar && (
+              <Button
+                aria-label="Dock to side"
+                disabled={isBusy}
+                fill="text"
+                icon="gf-movepane-right"
+                title="Dock to side"
+                type="button"
+                variant="secondary"
+                onClick={requestDockToSidebar}
+              >
+                Dock to side
+              </Button>
+            )}
+            {!isSidebarVariant && currentSessionId && (
               <>
                 <Button
                   data-testid={testIds.chat.export}
@@ -1465,6 +1690,36 @@ function formatConfirmationArgs(value: unknown) {
     return JSON.stringify(value, null, 2);
   } catch {
     return String(value);
+  }
+}
+
+function chatSessionIdFromSearch(search: string) {
+  const value = new URLSearchParams(search).get(CHAT_SESSION_PARAM);
+  return value?.trim() || undefined;
+}
+
+function buildChatSessionUrl(sessionId: string) {
+  const params = new URLSearchParams();
+  params.set(CHAT_SESSION_PARAM, sessionId);
+  return `${PLUGIN_BASE_URL}/chat?${params.toString()}`;
+}
+
+function isAssistantChatPath(pathname: string) {
+  const chatPath = `${PLUGIN_BASE_URL}/chat`;
+  return pathname === chatPath || pathname.startsWith(`${chatPath}/`);
+}
+
+function clearChatSessionParamFromLocation() {
+  const location = locationService.getLocation();
+  if (isAssistantChatPath(location.pathname) && chatSessionIdFromSearch(location.search)) {
+    locationService.partial({ [CHAT_SESSION_PARAM]: null }, true);
+  }
+}
+
+function setChatSessionParamInLocation(sessionId: string) {
+  const location = locationService.getLocation();
+  if (isAssistantChatPath(location.pathname) && chatSessionIdFromSearch(location.search) !== sessionId) {
+    locationService.partial({ [CHAT_SESSION_PARAM]: sessionId }, true);
   }
 }
 
@@ -2040,6 +2295,12 @@ const getStyles = (theme: GrafanaTheme2) => ({
       gridTemplateRows: 'auto minmax(0, 1fr)',
     },
   }),
+  containerSidebar: css({
+    gridTemplateColumns: 'minmax(0, 1fr)',
+    height: '100%',
+    minHeight: 0,
+    border: 0,
+  }),
   sidebar: css({
     display: 'grid',
     gridTemplateRows: 'auto minmax(0, 1fr)',
@@ -2130,6 +2391,10 @@ const getStyles = (theme: GrafanaTheme2) => ({
     padding: theme.spacing(2),
     borderBottom: `1px solid ${theme.colors.border.weak}`,
     flexWrap: 'wrap',
+  }),
+  toolbarSidebar: css({
+    gap: theme.spacing(1),
+    padding: theme.spacing(1),
   }),
   titleGroup: css({
     display: 'flex',

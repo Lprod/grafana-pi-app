@@ -1,7 +1,7 @@
 apiVersion: 1
 
 apps:
-  - type: 'g42-pi-app'
+  - type: '$__env{PI_PLUGIN_ID}'
     org_id: 1
     org_name: 'elohmeier'
     disabled: false

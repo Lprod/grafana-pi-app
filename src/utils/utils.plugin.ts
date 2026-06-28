@@ -1,5 +1,5 @@
 import React, { useContext } from 'react';
-import { AppRootProps } from '@grafana/data';
+import { AppRootProps, usePluginContext } from '@grafana/data';
 
 // This is used to be able to retrieve the root plugin props anywhere inside the app.
 export const PluginPropsContext = React.createContext<AppRootProps | null>(null);
@@ -12,6 +12,7 @@ export const usePluginProps = () => {
 
 export const usePluginMeta = () => {
   const pluginProps = usePluginProps();
+  const pluginContext = usePluginContext();
 
-  return pluginProps?.meta;
+  return pluginProps?.meta ?? pluginContext?.meta;
 };

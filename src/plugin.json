@@ -29,6 +29,25 @@
       "icon": "heart-rate"
     }
   ],
+  "extensions": {
+    "addedLinks": [
+      {
+        "targets": ["grafana/dashboard/panel/menu"],
+        "description": "Explain what this panel shows",
+        "title": "Explain in Assistant"
+      },
+      {
+        "targets": ["grafana/dashboard/panel/menu"],
+        "description": "Diagnose why this panel may be empty, noisy, misleading, or unhealthy",
+        "title": "Troubleshoot panel"
+      },
+      {
+        "targets": ["grafana/dashboard/panel/menu"],
+        "description": "Suggest query, visualization, threshold, and layout improvements for this panel",
+        "title": "Suggest improvements"
+      }
+    ]
+  },
   "roles": [
     {
       "role": {
