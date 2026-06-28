@@ -1,3 +1,11 @@
+# [2.8.0](https://github.com/elohmeier/grafana-pi-app/compare/v2.7.0...v2.8.0) (2026-06-28)
+
+
+### Features
+
+* add dashboard assistant editing ([22bf556](https://github.com/elohmeier/grafana-pi-app/commit/22bf5569eb9feb210eb15342f1489b099791bcd9))
+* add dashboard metric discovery ([77577c5](https://github.com/elohmeier/grafana-pi-app/commit/77577c50bb0e598d8e01937f2ddae3922514aae7))
+
 # [2.7.0](https://github.com/elohmeier/grafana-pi-app/compare/v2.6.1...v2.7.0) (2026-06-28)
 
 
