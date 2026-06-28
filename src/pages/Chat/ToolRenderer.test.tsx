@@ -305,6 +305,26 @@ describe('ToolRenderer', () => {
     expect(container.textContent).not.toContain('"path"');
   });
 
+  it('renders live dashboard schema tool calls as summaries', () => {
+    const { container } = render(
+      <ContentBlocks
+        content={[
+          {
+            type: 'toolCall',
+            name: 'get_live_dashboard_mutation_schema',
+            arguments: {
+              command: 'UPDATE_PANEL',
+            },
+          },
+        ]}
+      />
+    );
+
+    expect(container.textContent).toContain('Get live dashboard mutation schema | UPDATE_PANEL');
+    expect(container.textContent).not.toContain('"command"');
+    expect(screen.getByTestId('book')).toBeInTheDocument();
+  });
+
   it('renders batched query_prometheus arguments as a compact query plan', () => {
     const queries = [
       {
@@ -1208,6 +1228,33 @@ describe('ToolRenderer', () => {
     expect(container.textContent).not.toContain('Stored artifact [artifact: artifact_1]');
   });
 
+  it('renders read_artifact output instead of hiding it behind an artifact card', () => {
+    const { container } = render(
+      <ToolResultMessageBody
+        toolName="read_artifact"
+        content={[{ type: 'text', text: 'selected artifact value' }]}
+        details={{
+          artifactRead: true,
+          mode: 'field',
+          path: 'results.0.query',
+          artifactRef: {
+            id: 'artifact_1',
+            kind: 'json',
+            title: 'query_prometheus',
+            toolName: 'query_prometheus',
+            createdAt: '2026-06-05T00:00:00.000Z',
+            bytes: 8192,
+            summary: 'Prometheus batch result.',
+          },
+        }}
+      />
+    );
+
+    expect(screen.queryByTestId('artifact-result')).not.toBeInTheDocument();
+    expect(container.textContent).toContain('selected artifact value');
+    expect(container.textContent).not.toContain('read_artifact {"id":"artifact_1"}');
+  });
+
   it('renders artifactized dashboard summaries from preview data', () => {
     const { container } = render(
       <ToolResultMessageBody
@@ -1323,5 +1370,126 @@ describe('ToolRenderer', () => {
     expect(container.textContent).toContain('Frames');
     expect(container.textContent).not.toContain('Stored artifact [artifact: artifact_1]');
     expect(container.textContent).not.toContain('Raw frames');
+  });
+
+  it('renders empty line-list tool results with the empty state', () => {
+    const { container } = render(
+      <ToolResultMessageBody
+        toolName="list_metrics"
+        content={[{ type: 'text', text: '' }]}
+        details={{ datasourceUid: 'prometheus', count: 0, truncated: false }}
+      />
+    );
+
+    expect(container.textContent).toContain('0 metrics | from prometheus');
+    expect(container.textContent).toContain('No results');
+  });
+
+  it('renders batched list_metrics JSON as grouped metric lists', () => {
+    const content = [
+      {
+        type: 'text',
+        text: JSON.stringify(
+          {
+            datasourceUid: 'prometheus',
+            prefixCount: 2,
+            results: [
+              {
+                prefix: 'http_',
+                count: 2,
+                truncated: false,
+                metrics: ['http_requests_total', 'http_request_duration_seconds_bucket'],
+              },
+              {
+                prefix: 'node_',
+                count: 1,
+                truncated: true,
+                metrics: ['node_cpu_seconds_total'],
+              },
+            ],
+          },
+          null,
+          2
+        ),
+      },
+    ];
+
+    const { container } = render(
+      <ToolResultMessageBody
+        toolName="list_metrics"
+        content={content}
+        details={{ datasourceUid: 'prometheus', batch: true, prefixes: ['http_', 'node_'], count: 3, truncated: true }}
+      />
+    );
+
+    expect(container.textContent).toContain('2 metric prefixes | 3 metrics | from prometheus | truncated');
+    expect(container.textContent).toContain('prefix http_');
+    expect(container.textContent).toContain('http_requests_total');
+    expect(container.textContent).toContain('node_cpu_seconds_total');
+    expect(container.textContent).not.toContain('"prefixCount"');
+    expect(container.textContent).not.toContain('"results"');
+  });
+
+  it('renders live dashboard mutation schema results', () => {
+    const { container } = render(
+      <ToolResultMessageBody
+        toolName="get_live_dashboard_mutation_schema"
+        content={[
+          {
+            type: 'text',
+            text: JSON.stringify({
+              command: 'UPDATE_PANEL',
+              available: true,
+              readOnly: false,
+              guidance: {
+                workflow: ['Use list_live_dashboard_panels first.'],
+              },
+              availableCommands: ['LIST_PANELS', 'UPDATE_PANEL'],
+            }),
+          },
+        ]}
+        details={{
+          command: 'UPDATE_PANEL',
+          availableCommands: ['LIST_PANELS', 'UPDATE_PANEL'],
+          guidanceOnly: true,
+        }}
+      />
+    );
+
+    expect(container.textContent).toContain('Live dashboard mutation schema | UPDATE_PANEL');
+    expect(container.textContent).toContain('LIST_PANELS');
+    expect(container.textContent).toContain('UPDATE_PANEL');
+    expect(container.textContent).toContain('Guidance');
+    expect(container.textContent).not.toContain('Details');
+  });
+
+  it('renders live dashboard mutation results as structured changes', () => {
+    const { container } = render(
+      <ToolResultMessageBody
+        toolName="rename_live_dashboard_panel"
+        content={[
+          {
+            type: 'text',
+            text: 'Live dashboard mutation UPDATE_PANEL succeeded.\nChanges: 1\n{"previousValue":"Old title"}',
+          },
+        ]}
+        details={{
+          command: 'UPDATE_PANEL',
+          success: true,
+          changes: [{ path: '/elements/panel-1/spec/title', previousValue: 'Old title', newValue: 'New title' }],
+          warnings: ['Panel data will refresh after save.'],
+          data: { ok: true },
+          availableCommands: ['LIST_PANELS', 'UPDATE_PANEL'],
+        }}
+      />
+    );
+
+    expect(container.textContent).toContain('Live dashboard mutation succeeded');
+    expect(container.textContent).toContain('UPDATE_PANEL');
+    expect(container.textContent).toContain('/elements/panel-1/spec/title');
+    expect(container.textContent).toContain('Old title');
+    expect(container.textContent).toContain('New title');
+    expect(container.textContent).toContain('Panel data will refresh after save.');
+    expect(container.textContent).not.toContain('"previousValue"');
   });
 });

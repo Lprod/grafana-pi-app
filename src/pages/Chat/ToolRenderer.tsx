@@ -126,6 +126,7 @@ export function ToolResultMessageBody({
   const styles = useStyles2(getToolStyles);
   const subagentDetails = asSubagentDetails(details);
   const artifactResult = isError ? undefined : asArtifactResult(details);
+  const showArtifactCard = Boolean(artifactResult && !isArtifactReadResult(toolName, details));
   const structuredResult = isError
     ? undefined
     : renderStructuredToolResult(toolName, details, content, undefined, onOpenDashboard);
@@ -145,13 +146,15 @@ export function ToolResultMessageBody({
   return (
     <div className={cx(styles.toolFrame, isError && styles.toolFrameError)}>
       <ToolHeader name={toolName ?? 'tool'} status={isError ? 'failed' : 'completed'} />
-      {artifactResult && <ArtifactResultView artifact={artifactResult.ref} preview={artifactResult.preview} />}
+      {showArtifactCard && artifactResult && (
+        <ArtifactResultView artifact={artifactResult.ref} preview={artifactResult.preview} />
+      )}
       {error ? (
         <ToolErrorView content={content} details={details} error={error} />
       ) : (
-        (structuredResult ?? (!artifactResult ? <ContentBlocks content={content} /> : null))
+        (structuredResult ?? (!showArtifactCard ? <ContentBlocks content={content} /> : null))
       )}
-      {!error && !structuredResult && !artifactResult && hasDetails(details) && (
+      {!error && !structuredResult && !showArtifactCard && hasDetails(details) && (
         <details className={styles.collapsible}>
           <summary>Details</summary>
           <pre>{formatJson(details)}</pre>
@@ -531,6 +534,8 @@ function asSimpleToolCallSummary(
       return liveDashboardToolCallSummary('Get live dashboard info', record);
     case 'list_live_dashboard_variables':
       return liveDashboardToolCallSummary('List live dashboard variables', record);
+    case 'get_live_dashboard_mutation_schema':
+      return liveDashboardToolCallSummary('Get live dashboard mutation schema', record);
     case 'rename_live_dashboard_panel':
       return liveDashboardToolCallSummary('Rename live dashboard panel', record);
     case 'update_live_dashboard_panel_query':
@@ -792,7 +797,7 @@ function metricNeighborhoodToolCallSummary(record: Record<string, unknown>): Sim
 
 function liveDashboardToolCallSummary(action: string, record: Record<string, unknown>): SimpleToolCallSummary {
   const query = stringField(record, 'queryExpression') ?? stringField(record, 'query');
-  const command = stringField(record, 'type');
+  const command = stringField(record, 'type') ?? stringField(record, 'command');
   return {
     summary: summaryLine([action, stringField(record, 'elementName') ?? stringField(record, 'name') ?? command]),
     items: [
@@ -1196,6 +1201,7 @@ const TOOL_ICONS: Record<string, IconName> = {
   get_live_dashboard_layout: 'dashboard',
   get_live_dashboard_info: 'dashboard',
   list_live_dashboard_variables: 'list-ul',
+  get_live_dashboard_mutation_schema: 'book',
   rename_live_dashboard_panel: 'edit',
   update_live_dashboard_panel_query: 'search',
   add_live_dashboard_panel: 'plus',
@@ -1322,6 +1328,7 @@ function SubagentToolCallRow({
   const resultDetails = toolResult?.details;
   const isStreaming = call.status === 'running';
   const artifactResult = call.isError ? undefined : asArtifactResult(resultDetails);
+  const showArtifactCard = Boolean(artifactResult && !isArtifactReadResult(call.name, resultDetails));
   const error = call.isError ? extractToolError(call.name, resultDetails, resultContent) : undefined;
 
   return (
@@ -1343,12 +1350,14 @@ function SubagentToolCallRow({
           )}
           {(resultContent || error) && (
             <div className={cx(styles.toolStepResult, call.isError && styles.toolStepResultError)}>
-              {artifactResult && <ArtifactResultView artifact={artifactResult.ref} preview={artifactResult.preview} />}
+              {showArtifactCard && artifactResult && (
+                <ArtifactResultView artifact={artifactResult.ref} preview={artifactResult.preview} />
+              )}
               {error ? (
                 <ToolErrorView content={resultContent} details={resultDetails} error={error} />
               ) : (
                 (renderStructuredToolResult(call.name, resultDetails, resultContent, call.args, onOpenDashboard) ??
-                (!artifactResult ? (
+                (!showArtifactCard ? (
                   <>
                     <ContentBlocks content={resultContent} isStreaming={isStreaming} />
                     {hasDetails(resultDetails) && (
@@ -1395,6 +1404,11 @@ function renderStructuredToolResult(
     return <DatasourceResultView datasources={datasources} />;
   }
 
+  const lineListBatch = asLineListBatchResult(toolName, details, content);
+  if (lineListBatch) {
+    return <LineListBatchResultView result={lineListBatch} />;
+  }
+
   const lineList = asLineListResult(toolName, details, content);
   if (lineList) {
     return <LineListResultView result={lineList} />;
@@ -1437,6 +1451,16 @@ function renderStructuredToolResult(
   const screenshot = asScreenshotResult(toolName, details);
   if (screenshot) {
     return <ScreenshotResultView content={artifactResult ? undefined : content} result={screenshot} />;
+  }
+
+  const liveSchema = asLiveDashboardMutationSchemaResult(toolName, details, content);
+  if (liveSchema) {
+    return <LiveDashboardMutationSchemaResultView result={liveSchema} />;
+  }
+
+  const liveMutation = asLiveDashboardMutationResult(toolName, details);
+  if (liveMutation) {
+    return <LiveDashboardMutationResultView result={liveMutation} />;
   }
 
   const dashboardList = asDashboardList(toolName, details, content);
@@ -1547,7 +1571,9 @@ type LineListResult = {
 
 function LineListResultView({ result }: { result: LineListResult }) {
   const styles = useStyles2(getToolStyles);
-  const summaryParts = [formatCount(result.count ?? result.items.length), result.title.toLowerCase()];
+  const count = result.count ?? result.items.length;
+  const title = result.title === 'Metrics' ? (count === 1 ? 'metric' : 'metrics') : result.title.toLowerCase();
+  const summaryParts = [`${formatCount(count)} ${title}`];
   if (result.datasourceUid) {
     summaryParts.push(`from ${result.datasourceUid}`);
   }
@@ -1570,6 +1596,100 @@ function LineListResultView({ result }: { result: LineListResult }) {
         )}
       </div>
     </div>
+  );
+}
+
+type LineListBatchResult = {
+  groupLabel: string;
+  groupLabelPlural: string;
+  groupIndexLabel: string;
+  itemLabel: string;
+  itemLabelPlural: string;
+  datasourceUid?: string;
+  groupCount: number;
+  totalCount: number;
+  truncated?: boolean;
+  groups: LineListBatchGroup[];
+};
+
+type LineListBatchGroup = {
+  label: string;
+  count: number;
+  truncated: boolean;
+  items: string[];
+};
+
+function LineListBatchResultView({ result }: { result: LineListBatchResult }) {
+  const styles = useStyles2(getToolStyles);
+  const summaryParts = [
+    formatLabeledCount(result.groupCount, result.groupLabel, result.groupLabelPlural),
+    formatLabeledCount(result.totalCount, result.itemLabel, result.itemLabelPlural),
+    result.datasourceUid ? `from ${result.datasourceUid}` : undefined,
+    result.truncated ? 'truncated' : undefined,
+  ].filter(Boolean);
+
+  return (
+    <div className={styles.structuredResult}>
+      <div className={styles.resultSummary}>{summaryParts.join(' | ')}</div>
+      <div className={styles.queryResultList}>
+        {result.groups.map((group, index) => (
+          <LineListBatchResultItem
+            group={group}
+            groupIndexLabel={result.groupIndexLabel}
+            index={index}
+            itemLabel={result.itemLabel}
+            itemLabelPlural={result.itemLabelPlural}
+            key={`${group.label}:${index}`}
+          />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function LineListBatchResultItem({
+  group,
+  groupIndexLabel,
+  index,
+  itemLabel,
+  itemLabelPlural,
+}: {
+  group: LineListBatchGroup;
+  groupIndexLabel: string;
+  index: number;
+  itemLabel: string;
+  itemLabelPlural: string;
+}) {
+  const styles = useStyles2(getToolStyles);
+  const [isOpen, setIsOpen] = useState(index === 0);
+  const meta = [formatLabeledCount(group.count, itemLabel, itemLabelPlural), group.truncated ? 'truncated' : undefined]
+    .filter(Boolean)
+    .join(' | ');
+
+  return (
+    <details className={styles.queryResultItem} open={isOpen} onToggle={(event) => setIsOpen(event.currentTarget.open)}>
+      <summary className={styles.queryResultSummary}>
+        <Icon aria-hidden className={styles.queryResultChevron} name={isOpen ? 'angle-down' : 'angle-right'} />
+        <span className={styles.queryResultIndex}>
+          {groupIndexLabel} {index + 1}
+        </span>
+        <code className={styles.queryResultExpression} title={group.label}>
+          {group.label}
+        </code>
+        <span className={styles.queryResultMeta}>{meta}</span>
+      </summary>
+      <div className={styles.scrollList}>
+        {group.items.length === 0 ? (
+          <span className={styles.muted}>No results</span>
+        ) : (
+          group.items.map((item) => (
+            <div className={styles.listItem} key={item}>
+              {item}
+            </div>
+          ))
+        )}
+      </div>
+    </details>
   );
 }
 
@@ -2066,6 +2186,142 @@ function ScreenshotResultView({ result, content }: { result: ScreenshotResult; c
       />
       {content !== undefined && <ContentBlocks content={content} />}
     </div>
+  );
+}
+
+type LiveDashboardMutationSchemaResult = {
+  command?: string;
+  available?: boolean;
+  readOnly?: boolean;
+  availableCommands: string[];
+  guidance?: unknown;
+};
+
+function LiveDashboardMutationSchemaResultView({ result }: { result: LiveDashboardMutationSchemaResult }) {
+  const styles = useStyles2(getToolStyles);
+  const summary = summaryLine(['Live dashboard mutation schema', result.command]);
+
+  return (
+    <div className={styles.structuredResult}>
+      <div className={styles.resultSummary}>{summary}</div>
+      <ResultMetaGrid
+        items={[
+          { label: 'Command', value: result.command ? <code>{result.command}</code> : undefined },
+          { label: 'Available', value: formatBoolean(result.available) },
+          { label: 'Read only', value: formatBoolean(result.readOnly) },
+          { label: 'Commands', value: formatCount(result.availableCommands.length) },
+        ]}
+      />
+      <StringChips values={result.availableCommands} />
+      {result.guidance !== undefined && (
+        <details className={styles.collapsible}>
+          <summary>Guidance</summary>
+          <pre className={styles.queryBlock}>{formatJson(result.guidance)}</pre>
+        </details>
+      )}
+    </div>
+  );
+}
+
+type LiveDashboardMutationResult = {
+  command: string;
+  success: boolean;
+  error?: string;
+  warnings: string[];
+  changes: LiveDashboardMutationChange[];
+  data?: unknown;
+  availableCommands: string[];
+  visualVerification?: {
+    status?: string;
+    error?: string;
+    details?: unknown;
+  };
+};
+
+type LiveDashboardMutationChange = {
+  path?: string;
+  previousValue?: unknown;
+  newValue?: unknown;
+};
+
+function LiveDashboardMutationResultView({ result }: { result: LiveDashboardMutationResult }) {
+  const styles = useStyles2(getToolStyles);
+  const status = result.success ? 'succeeded' : 'failed';
+  return (
+    <div className={styles.structuredResult}>
+      <div className={styles.resultSummary}>Live dashboard mutation {status}</div>
+      <ResultMetaGrid
+        items={[
+          { label: 'Command', value: <code>{result.command}</code> },
+          { label: 'Status', value: status },
+          { label: 'Changes', value: formatCount(result.changes.length) },
+          { label: 'Warnings', value: result.warnings.length > 0 ? formatCount(result.warnings.length) : undefined },
+          { label: 'Verification', value: result.visualVerification?.status },
+          { label: 'Commands', value: formatCount(result.availableCommands.length) },
+        ]}
+      />
+      {!result.success && result.error && (
+        <div className={styles.errorCard}>
+          <div className={styles.errorTitle}>{result.command} failed</div>
+          <div className={styles.errorMessage}>{result.error}</div>
+        </div>
+      )}
+      {result.warnings.length > 0 && (
+        <div className={styles.noticeList}>
+          {result.warnings.map((warning, index) => (
+            <div className={styles.notice} key={`${index}:${warning}`}>
+              <strong>warning</strong>
+              <span>{warning}</span>
+            </div>
+          ))}
+        </div>
+      )}
+      {result.changes.length > 0 && <LiveDashboardMutationChangesTable changes={result.changes} />}
+      {result.data !== undefined && (
+        <details className={styles.collapsible}>
+          <summary>Data</summary>
+          <pre className={styles.queryBlock}>{formatJson(result.data)}</pre>
+        </details>
+      )}
+      {result.visualVerification?.details !== undefined && (
+        <details className={styles.collapsible}>
+          <summary>Visual verification</summary>
+          <pre className={styles.queryBlock}>{formatJson(result.visualVerification.details)}</pre>
+        </details>
+      )}
+    </div>
+  );
+}
+
+function LiveDashboardMutationChangesTable({ changes }: { changes: LiveDashboardMutationChange[] }) {
+  const styles = useStyles2(getToolStyles);
+  return (
+    <details className={styles.collapsible} open>
+      <summary>Changes</summary>
+      <div className={styles.tableWrap}>
+        <table className={styles.dataTable}>
+          <thead>
+            <tr>
+              <th>Path</th>
+              <th>Previous</th>
+              <th>New</th>
+            </tr>
+          </thead>
+          <tbody>
+            {changes.slice(0, 20).map((change, index) => (
+              <tr key={`${change.path ?? 'change'}:${index}`}>
+                <td className={styles.monospace}>{change.path ?? '-'}</td>
+                <td>{formatShortValue(change.previousValue)}</td>
+                <td>{formatShortValue(change.newValue)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      {changes.length > 20 && (
+        <div className={styles.resultSummary}>{formatCount(changes.length - 20)} more changes</div>
+      )}
+    </details>
   );
 }
 
@@ -2764,6 +3020,10 @@ function asArtifactPreview(value: unknown): ArtifactPreview | undefined {
   return undefined;
 }
 
+function isArtifactReadResult(toolName: string | undefined, details: unknown) {
+  return toolName === 'read_artifact' || (isRecord(details) && details.artifactRead === true);
+}
+
 function asDatasourceResult(
   toolName: string | undefined,
   details: unknown,
@@ -2827,7 +3087,7 @@ function asLineListResult(
   }
 
   const contentText = getSingleTextContent(content);
-  if (!contentText) {
+  if (contentText === undefined) {
     return undefined;
   }
 
@@ -2846,6 +3106,54 @@ function asLineListResult(
     count: numberField(detailRecord, 'count'),
     truncated: booleanField(detailRecord, 'truncated'),
     items,
+  };
+}
+
+function asLineListBatchResult(
+  toolName: string | undefined,
+  details: unknown,
+  content: unknown
+): LineListBatchResult | undefined {
+  if (toolName !== 'list_metrics') {
+    return undefined;
+  }
+
+  const record = parseJsonRecord(content);
+  if (!record) {
+    return undefined;
+  }
+
+  const groups = recordsField(record, 'results').map(metricListBatchGroupFromRecord);
+  if (groups.length === 0) {
+    return undefined;
+  }
+
+  const detailRecord = isRecord(details) ? details : {};
+  const groupCount = numberField(record, 'prefixCount') ?? groups.length;
+  const totalCount = numberField(detailRecord, 'count') ?? groups.reduce((sum, group) => sum + group.count, 0);
+
+  return {
+    groupLabel: 'metric prefix',
+    groupLabelPlural: 'metric prefixes',
+    groupIndexLabel: 'Prefix',
+    itemLabel: 'metric',
+    itemLabelPlural: 'metrics',
+    datasourceUid: stringField(record, 'datasourceUid') ?? stringField(detailRecord, 'datasourceUid'),
+    groupCount,
+    totalCount,
+    truncated: booleanField(detailRecord, 'truncated') ?? groups.some((group) => group.truncated),
+    groups,
+  };
+}
+
+function metricListBatchGroupFromRecord(record: Record<string, unknown>): LineListBatchGroup {
+  const prefix = stringField(record, 'prefix');
+  const metrics = stringArrayField(record, 'metrics') ?? [];
+  return {
+    label: prefix ? `prefix ${prefix}` : 'all metrics',
+    count: numberField(record, 'count') ?? metrics.length,
+    truncated: booleanField(record, 'truncated') ?? false,
+    items: metrics,
   };
 }
 
@@ -3262,6 +3570,87 @@ function asScreenshotResult(toolName: string | undefined, details: unknown): Scr
     panelId: numberField(details, 'panelId'),
     width: numberField(details, 'width'),
     height: numberField(details, 'height'),
+  };
+}
+
+const LIVE_DASHBOARD_TOOL_NAMES = new Set([
+  'list_live_dashboard_panels',
+  'get_live_dashboard_layout',
+  'get_live_dashboard_info',
+  'list_live_dashboard_variables',
+  'get_live_dashboard_mutation_schema',
+  'rename_live_dashboard_panel',
+  'update_live_dashboard_panel_query',
+  'add_live_dashboard_panel',
+  'move_or_resize_live_dashboard_panel',
+  'update_live_dashboard_settings',
+  'add_live_dashboard_variable',
+  'update_live_dashboard_variable',
+  'apply_live_dashboard_mutation',
+]);
+
+function asLiveDashboardMutationSchemaResult(
+  toolName: string | undefined,
+  details: unknown,
+  content: unknown
+): LiveDashboardMutationSchemaResult | undefined {
+  if (toolName !== 'get_live_dashboard_mutation_schema') {
+    return undefined;
+  }
+
+  const detailRecord = isRecord(details) ? details : {};
+  const contentRecord = parseJsonRecord(content);
+  const availableCommands =
+    stringArrayField(detailRecord, 'availableCommands') ??
+    stringArrayField(contentRecord ?? {}, 'availableCommands') ??
+    [];
+
+  return {
+    command: stringField(detailRecord, 'command') ?? stringField(contentRecord, 'command'),
+    available: booleanField(contentRecord, 'available'),
+    readOnly: booleanField(contentRecord, 'readOnly'),
+    availableCommands,
+    guidance: contentRecord?.guidance,
+  };
+}
+
+function asLiveDashboardMutationResult(
+  toolName: string | undefined,
+  details: unknown
+): LiveDashboardMutationResult | undefined {
+  if (!toolName || !LIVE_DASHBOARD_TOOL_NAMES.has(toolName) || toolName === 'get_live_dashboard_mutation_schema') {
+    return undefined;
+  }
+  if (!isRecord(details)) {
+    return undefined;
+  }
+
+  const command = stringField(details, 'command');
+  const success = booleanField(details, 'success');
+  if (!command || success === undefined) {
+    return undefined;
+  }
+
+  const visualVerification = recordField(details, 'visualVerification');
+  return {
+    command,
+    success,
+    error: stringField(details, 'error'),
+    warnings: stringArrayField(details, 'warnings') ?? [],
+    changes: recordsField(details, 'changes').map((change) => ({
+      path: stringField(change, 'path'),
+      previousValue: change.previousValue,
+      newValue: change.newValue,
+    })),
+    data: details.data,
+    availableCommands: stringArrayField(details, 'availableCommands') ?? [],
+    visualVerification: visualVerification
+      ? {
+          status: stringField(visualVerification, 'status'),
+          error: stringField(visualVerification, 'error'),
+          details: visualVerification.details,
+        }
+      : undefined,
   };
 }
 
@@ -3716,6 +4105,38 @@ function formatCount(value: number) {
     return `${(value / 1000).toFixed(value < 10000 ? 1 : 0)}k`;
   }
   return `${(value / 1000000).toFixed(1)}M`;
+}
+
+function formatLabeledCount(value: number, singular: string, plural: string) {
+  return `${formatCount(value)} ${value === 1 ? singular : plural}`;
+}
+
+function formatBoolean(value: boolean | undefined) {
+  return value === undefined ? undefined : value ? 'yes' : 'no';
+}
+
+function formatShortValue(value: unknown) {
+  if (value === undefined || value === null) {
+    return '-';
+  }
+  if (typeof value === 'string') {
+    return truncateInline(value, 96);
+  }
+  if (typeof value === 'number' || typeof value === 'boolean') {
+    return String(value);
+  }
+  if (Array.isArray(value)) {
+    return `${formatCount(value.length)} items`;
+  }
+  if (isRecord(value)) {
+    const kind = stringField(value, 'kind') ?? stringField(value, 'type');
+    return kind ? truncateInline(kind, 96) : truncateInline(formatJson(value), 96);
+  }
+  return truncateInline(String(value), 96);
+}
+
+function truncateInline(value: string, maxLength: number) {
+  return value.length > maxLength ? `${value.slice(0, maxLength - 3)}...` : value;
 }
 
 function formatPoint(point: SummaryPointView | undefined) {
