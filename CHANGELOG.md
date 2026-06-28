@@ -1,3 +1,10 @@
+## [2.8.1](https://github.com/elohmeier/grafana-pi-app/compare/v2.8.0...v2.8.1) (2026-06-28)
+
+
+### Bug Fixes
+
+* render live tool results ([441d648](https://github.com/elohmeier/grafana-pi-app/commit/441d6486ceeb31fe9bb1629043c6280aae16cbac))
+
 # [2.8.0](https://github.com/elohmeier/grafana-pi-app/compare/v2.7.0...v2.8.0) (2026-06-28)
 
 
