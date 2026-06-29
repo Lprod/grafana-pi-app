@@ -1,3 +1,10 @@
+# [2.9.0](https://github.com/elohmeier/grafana-pi-app/compare/v2.8.1...v2.9.0) (2026-06-29)
+
+
+### Features
+
+* improve dashboard Jsonnet tooling ([ede77a2](https://github.com/elohmeier/grafana-pi-app/commit/ede77a2c5374030d842617f4704e1ad95b2c8fd1))
+
 ## [2.8.1](https://github.com/elohmeier/grafana-pi-app/compare/v2.8.0...v2.8.1) (2026-06-28)
 
 
