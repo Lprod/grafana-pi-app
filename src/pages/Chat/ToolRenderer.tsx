@@ -574,7 +574,7 @@ function asSimpleToolCallSummary(
     case 'grafana_read_jsonnet_file':
       return jsonnetPathToolCallSummary('Read Jsonnet source', record);
     case 'read_skill_resource':
-      return jsonnetPathToolCallSummary('Read skill resource', record);
+      return readSkillResourceToolCallSummary(record);
     case 'edit_jsonnet':
     case 'grafana_edit_jsonnet_file':
       return jsonnetPathToolCallSummary('Edit Jsonnet source', record);
@@ -790,17 +790,96 @@ function metricNeighborhoodToolCallSummary(record: Record<string, unknown>): Sim
 function liveDashboardToolCallSummary(action: string, record: Record<string, unknown>): SimpleToolCallSummary {
   const query = stringField(record, 'queryExpression') ?? stringField(record, 'query');
   const command = stringField(record, 'type') ?? stringField(record, 'command');
+  const element = stringField(record, 'elementName');
+  const elements = liveDashboardElementsSummary(record);
+  const title = stringField(record, 'title');
+  const variable = stringField(record, 'name');
+  const code = liveDashboardToolCallCode(record);
   return {
-    summary: summaryLine([action, stringField(record, 'elementName') ?? stringField(record, 'name') ?? command]),
+    summary: summaryLine([action, element ?? elements ?? title ?? variable ?? command]),
     items: [
       { label: 'Command', value: command },
       { label: 'Element', value: formatSummaryFieldValue(record, 'elementName') },
-      { label: 'Title', value: stringField(record, 'title') },
-      { label: 'Variable', value: stringField(record, 'name') },
+      { label: 'Elements', value: elements ? <code>{elements}</code> : undefined },
+      { label: 'Title', value: title },
+      { label: 'Description', value: stringField(record, 'description') },
+      { label: 'Variable', value: variable ? <code>{variable}</code> : undefined },
+      { label: 'New variable', value: formatSummaryFieldValue(record, 'newName') },
+      { label: 'Visualization', value: stringField(record, 'visualizationType') },
+      { label: 'Variable type', value: stringField(record, 'variableType') },
       { label: 'Parent path', value: formatSummaryFieldValue(record, 'parentPath') },
+      { label: 'Datasource', value: liveDashboardDatasourceSummary(record) },
+      { label: 'Ref ID', value: formatSummaryFieldValue(record, 'refId') },
+      { label: 'Hidden', value: booleanLabel(record, 'hidden') },
       { label: 'Query', value: query ? <code>{query}</code> : undefined },
+      { label: 'Unit', value: formatSummaryFieldValue(record, 'unit') },
+      { label: 'Grid', value: liveDashboardGridSummary(record) },
+      { label: 'Time range', value: liveDashboardTimeRangeSummary(record) },
+      { label: 'Refresh', value: stringField(record, 'autoRefresh') },
+      { label: 'Timezone', value: stringField(record, 'timezone') },
+      { label: 'Cursor sync', value: stringField(record, 'cursorSync') },
+      { label: 'Editable', value: booleanLabel(record, 'editable') },
+      { label: 'Live now', value: booleanLabel(record, 'liveNow') },
+      { label: 'Preload', value: booleanLabel(record, 'preload') },
+      { label: 'Current', value: stringField(record, 'current') },
+      { label: 'Position', value: stringOrNumberField(record, 'position') },
+      { label: 'Multi', value: booleanLabel(record, 'multi') },
+      { label: 'Include all', value: booleanLabel(record, 'includeAll') },
+      { label: 'Tags', value: stringArraySummary(record, 'tags') },
+      { label: 'Options', value: stringArraySummary(record, 'options') },
+      { label: 'Evaluate variables', value: booleanLabel(record, 'evaluateVariables') },
+      { label: 'Include status', value: booleanLabel(record, 'includeStatus') },
     ],
+    code,
   };
+}
+
+function liveDashboardElementsSummary(record: Record<string, unknown>) {
+  const elements = stringArrayField(record, 'elements');
+  return elements?.length ? elements.join(', ') : undefined;
+}
+
+function liveDashboardDatasourceSummary(record: Record<string, unknown>) {
+  const datasourceType = stringField(record, 'datasourceType');
+  const datasourceName = stringField(record, 'datasourceName');
+  if (datasourceType && datasourceName) {
+    return `${datasourceType}/${datasourceName}`;
+  }
+  return datasourceName ?? datasourceType;
+}
+
+function liveDashboardGridSummary(record: Record<string, unknown>) {
+  const fields = ['x', 'y', 'width', 'height']
+    .map((key) => {
+      const value = stringOrNumberField(record, key);
+      return value ? `${key} ${value}` : undefined;
+    })
+    .filter(Boolean);
+  return fields.length > 0 ? fields.join(', ') : undefined;
+}
+
+function liveDashboardTimeRangeSummary(record: Record<string, unknown>) {
+  const from = stringField(record, 'from');
+  const to = stringField(record, 'to');
+  if (from && to) {
+    return `${from} -> ${to}`;
+  }
+  return from ?? to;
+}
+
+function stringArraySummary(record: Record<string, unknown>, key: string) {
+  const values = stringArrayField(record, key);
+  return values?.length ? values.join(', ') : undefined;
+}
+
+function liveDashboardToolCallCode(record: Record<string, unknown>) {
+  if (record.payload !== undefined) {
+    return formatJson(record.payload);
+  }
+  if (record.querySpec !== undefined) {
+    return formatJson(record.querySpec);
+  }
+  return undefined;
 }
 
 function screenshotDashboardToolCallSummary(record: Record<string, unknown>): SimpleToolCallSummary {
@@ -844,6 +923,18 @@ function jsonnetPathToolCallSummary(action: string, record: Record<string, unkno
       { label: 'Path', value: path ? <code>{path}</code> : undefined },
       { label: 'Lines', value: lineRange },
       { label: 'Instructions', value: instructions },
+    ],
+  };
+}
+
+function readSkillResourceToolCallSummary(record: Record<string, unknown>): SimpleToolCallSummary {
+  const skill = stringField(record, 'skill');
+  const path = stringField(record, 'path');
+  return {
+    summary: summaryLine(['Read skill resource', skill, path]),
+    items: [
+      { label: 'Skill', value: skill ? <code>{skill}</code> : undefined },
+      { label: 'Resource', value: path ? <code>{path}</code> : undefined },
     ],
   };
 }
@@ -1436,6 +1527,11 @@ function renderStructuredToolResult(
   const screenshot = asScreenshotResult(toolName, details);
   if (screenshot) {
     return <ScreenshotResultView content={artifactResult ? undefined : content} result={screenshot} />;
+  }
+
+  const skillResource = asSkillResourceReadResult(toolName, details, content);
+  if (skillResource) {
+    return <SkillResourceReadResultView result={skillResource} />;
   }
 
   const liveSchema = asLiveDashboardMutationSchemaResult(toolName, details, content);
@@ -2164,6 +2260,39 @@ function ScreenshotResultView({ result, content }: { result: ScreenshotResult; c
   );
 }
 
+type SkillResourceReadResult = {
+  skill: string;
+  path: string;
+  bytes?: number;
+  truncated?: boolean;
+  text?: string;
+};
+
+function SkillResourceReadResultView({ result }: { result: SkillResourceReadResult }) {
+  const styles = useStyles2(getToolStyles);
+  const summary = summaryLine(['Skill resource loaded', result.skill, result.path]);
+
+  return (
+    <div className={styles.structuredResult}>
+      <div className={styles.resultSummary}>{summary}</div>
+      <ResultMetaGrid
+        items={[
+          { label: 'Skill', value: <code>{result.skill}</code> },
+          { label: 'Resource', value: <code>{result.path}</code> },
+          { label: 'Size', value: result.bytes !== undefined ? `${result.bytes} bytes` : undefined },
+          { label: 'Truncated', value: formatBoolean(result.truncated) },
+        ]}
+      />
+      {result.text && (
+        <details className={styles.collapsible}>
+          <summary>Reference text</summary>
+          <ContentBlocks content={[{ type: 'text', text: result.text }]} />
+        </details>
+      )}
+    </div>
+  );
+}
+
 type LiveDashboardMutationSchemaResult = {
   command?: string;
   available?: boolean;
@@ -2204,6 +2333,7 @@ type LiveDashboardMutationResult = {
   error?: string;
   warnings: string[];
   changes: LiveDashboardMutationChange[];
+  payload?: unknown;
   data?: unknown;
   availableCommands: string[];
   visualVerification?: {
@@ -2219,20 +2349,27 @@ type LiveDashboardMutationChange = {
   newValue?: unknown;
 };
 
+const LIVE_DASHBOARD_READ_COMMANDS = new Set(['GET_DASHBOARD_INFO', 'GET_LAYOUT', 'LIST_PANELS', 'LIST_VARIABLES']);
+
 function LiveDashboardMutationResultView({ result }: { result: LiveDashboardMutationResult }) {
   const styles = useStyles2(getToolStyles);
   const status = result.success ? 'succeeded' : 'failed';
+  const resultKind = LIVE_DASHBOARD_READ_COMMANDS.has(result.command) ? 'command' : 'mutation';
+  const summaryItems = liveDashboardResultSummaryItems(result);
   return (
     <div className={styles.structuredResult}>
-      <div className={styles.resultSummary}>Live dashboard mutation {status}</div>
+      <div className={styles.resultSummary}>
+        Live dashboard {resultKind} {status}
+      </div>
       <ResultMetaGrid
         items={[
           { label: 'Command', value: <code>{result.command}</code> },
           { label: 'Status', value: status },
-          { label: 'Changes', value: formatCount(result.changes.length) },
+          ...summaryItems,
+          { label: 'Changes', value: result.changes.length > 0 ? formatCount(result.changes.length) : undefined },
           { label: 'Warnings', value: result.warnings.length > 0 ? formatCount(result.warnings.length) : undefined },
           { label: 'Verification', value: result.visualVerification?.status },
-          { label: 'Commands', value: formatCount(result.availableCommands.length) },
+          { label: 'Verification issue', value: result.visualVerification?.error },
         ]}
       />
       {!result.success && result.error && (
@@ -2268,10 +2405,107 @@ function LiveDashboardMutationResultView({ result }: { result: LiveDashboardMuta
   );
 }
 
+function liveDashboardResultSummaryItems(result: LiveDashboardMutationResult) {
+  const payload = isRecord(result.payload) ? result.payload : undefined;
+  const data = isRecord(result.data) ? result.data : undefined;
+  const element = recordField(payload, 'element');
+  const panel = recordField(payload, 'panel');
+  const panelSpec = recordField(panel, 'spec');
+  const variable = recordField(payload, 'variable');
+  const variableSpec = recordField(variable, 'spec');
+  const timeSettings = recordField(payload, 'timeSettings');
+  const query = liveDashboardResultPanelQuery(panelSpec);
+  const dataSummary = liveDashboardResultDataSummary(result.command, data);
+
+  return [
+    { label: 'Element', value: formatElementReference(element) },
+    { label: 'Affected panels', value: liveDashboardAffectedPanelsSummary(payload) },
+    { label: 'Panel title', value: stringField(panelSpec, 'title') },
+    { label: 'Variable', value: formatSummaryRecordValue(payload, 'name') },
+    { label: 'New variable', value: formatSummaryRecordValue(variableSpec, 'name') },
+    {
+      label: 'Parent path',
+      value: formatSummaryRecordValue(payload, 'parentPath') ?? formatSummaryRecordValue(payload, 'toParent'),
+    },
+    { label: 'Datasource', value: query.datasource },
+    { label: 'Query', value: query.expression ? <code>{query.expression}</code> : undefined },
+    { label: 'Grid', value: liveDashboardResultGridSummary(payload) },
+    { label: 'Dashboard title', value: stringField(payload, 'title') ?? stringField(data, 'title') },
+    { label: 'Time range', value: liveDashboardTimeRangeSummary(timeSettings ?? payload ?? {}) },
+    { label: 'Refresh', value: stringField(timeSettings, 'autoRefresh') },
+    { label: 'Timezone', value: stringField(timeSettings, 'timezone') ?? stringField(payload, 'timezone') },
+    { label: 'Tags', value: stringArraySummary(payload ?? {}, 'tags') },
+    ...dataSummary,
+  ];
+}
+
+function liveDashboardResultPanelQuery(panelSpec: Record<string, unknown> | undefined) {
+  const data = recordField(panelSpec, 'data');
+  const dataSpec = recordField(data, 'spec');
+  const query = recordsField(dataSpec ?? {}, 'queries')[0];
+  const querySpec = recordField(query, 'spec');
+  const dataQuery = recordField(querySpec, 'query');
+  const dataQuerySpec = recordField(dataQuery, 'spec');
+  const datasource = recordField(dataQuery, 'datasource');
+  const datasourceName = stringField(datasource, 'name');
+  const datasourceGroup = stringField(dataQuery, 'group');
+  const expression =
+    stringField(dataQuerySpec, 'expr') ??
+    stringField(dataQuerySpec, 'query') ??
+    stringField(dataQuerySpec, '__grafana_string_value');
+
+  return {
+    expression,
+    datasource:
+      datasourceGroup && datasourceName ? `${datasourceGroup}/${datasourceName}` : (datasourceName ?? datasourceGroup),
+  };
+}
+
+function liveDashboardResultGridSummary(payload: Record<string, unknown> | undefined) {
+  const layoutItem = recordField(payload, 'layoutItem');
+  const layoutSpec = recordField(layoutItem, 'spec');
+  return liveDashboardGridSummary(layoutSpec ?? payload ?? {});
+}
+
+function liveDashboardAffectedPanelsSummary(payload: Record<string, unknown> | undefined) {
+  const names = recordsField(payload ?? {}, 'elements')
+    .map((element) => stringField(element, 'name'))
+    .filter((name): name is string => Boolean(name));
+  return names.length > 0 ? names.join(', ') : undefined;
+}
+
+function liveDashboardResultDataSummary(command: string, data: Record<string, unknown> | undefined) {
+  if (command === 'LIST_PANELS') {
+    const panels = recordsField(data ?? {}, 'elements');
+    return [{ label: 'Panels', value: formatCount(panels.length) }];
+  }
+  if (command === 'LIST_VARIABLES') {
+    const variables = recordsField(data ?? {}, 'variables');
+    return [
+      { label: 'Variables', value: formatCount(variables.length) },
+      { label: 'Scope', value: formatSummaryRecordValue(data, 'scopePath') },
+    ];
+  }
+  if (command === 'GET_DASHBOARD_INFO') {
+    return [{ label: 'Dashboard', value: formatSummaryRecordValue(data, 'uid') }];
+  }
+  return [];
+}
+
+function formatElementReference(record: Record<string, unknown> | undefined) {
+  const name = stringField(record, 'name');
+  return name ? <code>{name}</code> : undefined;
+}
+
+function formatSummaryRecordValue(record: Record<string, unknown> | undefined, key: string) {
+  const value = record ? stringOrNumberField(record, key) : undefined;
+  return value ? <code>{value}</code> : undefined;
+}
+
 function LiveDashboardMutationChangesTable({ changes }: { changes: LiveDashboardMutationChange[] }) {
   const styles = useStyles2(getToolStyles);
   return (
-    <details className={styles.collapsible} open>
+    <details className={styles.collapsible}>
       <summary>Changes</summary>
       <div className={styles.tableWrap}>
         <table className={styles.dataTable}>
@@ -3459,6 +3693,30 @@ function asScreenshotResult(toolName: string | undefined, details: unknown): Scr
   };
 }
 
+function asSkillResourceReadResult(
+  toolName: string | undefined,
+  details: unknown,
+  content: unknown
+): SkillResourceReadResult | undefined {
+  if (toolName !== 'read_skill_resource' || !isRecord(details)) {
+    return undefined;
+  }
+
+  const skill = stringField(details, 'skill');
+  const path = stringField(details, 'path');
+  if (!skill || !path) {
+    return undefined;
+  }
+
+  return {
+    skill,
+    path,
+    bytes: numberField(details, 'bytes'),
+    truncated: booleanField(details, 'truncated'),
+    text: extractToolText(content),
+  };
+}
+
 const LIVE_DASHBOARD_TOOL_NAMES = new Set([
   'list_live_dashboard_panels',
   'get_live_dashboard_layout',
@@ -3528,6 +3786,7 @@ function asLiveDashboardMutationResult(
       previousValue: change.previousValue,
       newValue: change.newValue,
     })),
+    payload: details.payload,
     data: details.data,
     availableCommands: stringArrayField(details, 'availableCommands') ?? [],
     visualVerification: visualVerification

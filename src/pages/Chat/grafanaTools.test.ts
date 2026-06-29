@@ -1316,6 +1316,104 @@ describe('grafana datasource tool policy', () => {
     });
   });
 
+  it('preserves the existing live panel query datasource when editing only the expression', async () => {
+    const dashboardMutation = {
+      execute: jest.fn(async ({ type, payload }: { type: string; payload: unknown }) => {
+        if (type === 'LIST_PANELS') {
+          return {
+            success: true,
+            changes: [],
+            data: {
+              elements: [
+                {
+                  element: {
+                    kind: 'Panel',
+                    spec: {
+                      data: {
+                        kind: 'QueryGroup',
+                        spec: {
+                          queries: [
+                            {
+                              kind: 'PanelQuery',
+                              spec: {
+                                refId: 'A',
+                                hidden: true,
+                                query: {
+                                  kind: 'DataQuery',
+                                  group: 'prometheus',
+                                  datasource: { name: 'prom-prod' },
+                                  spec: { expr: 'sum(rate(old_metric[$__rate_interval]))' },
+                                },
+                              },
+                            },
+                          ],
+                        },
+                      },
+                    },
+                  },
+                },
+              ],
+            },
+          };
+        }
+
+        return {
+          success: true,
+          changes: [{ path: '/elements/panel-1', previousValue: null, newValue: { type, payload } }],
+          data: { ok: true },
+        };
+      }),
+      getPayloadSchema: jest.fn(() => ({}) as any),
+      getAvailableCommands: jest.fn(() => ['LIST_PANELS', 'UPDATE_PANEL']),
+    };
+    const queryTool = getTool(
+      createGrafanaToolsForSkillGroups({ dashboardMutation }, ['liveDashboardEditing']),
+      'update_live_dashboard_panel_query'
+    );
+
+    await queryTool.execute(
+      'call-1',
+      { elementName: 'panel-1', queryExpression: 'sum(rate(new_metric[$__rate_interval]))' },
+      undefined
+    );
+
+    expect(dashboardMutation.execute).toHaveBeenNthCalledWith(1, {
+      type: 'LIST_PANELS',
+      payload: { elements: ['panel-1'] },
+    });
+    expect(dashboardMutation.execute).toHaveBeenNthCalledWith(2, {
+      type: 'UPDATE_PANEL',
+      payload: {
+        element: { kind: 'ElementReference', name: 'panel-1' },
+        panel: {
+          kind: 'Panel',
+          spec: {
+            data: {
+              kind: 'QueryGroup',
+              spec: {
+                queries: [
+                  {
+                    kind: 'PanelQuery',
+                    spec: {
+                      refId: 'A',
+                      hidden: true,
+                      query: {
+                        kind: 'DataQuery',
+                        group: 'prometheus',
+                        datasource: { name: 'prom-prod' },
+                        spec: { expr: 'sum(rate(new_metric[$__rate_interval]))' },
+                      },
+                    },
+                  },
+                ],
+              },
+            },
+          },
+        },
+      },
+    });
+  });
+
   it('does not expose live dashboard mutation tools when no dashboard client is active', async () => {
     const dashboardMutation = {
       execute: jest.fn(),

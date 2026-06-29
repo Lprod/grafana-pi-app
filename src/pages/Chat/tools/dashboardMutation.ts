@@ -73,6 +73,14 @@ type UpdateLiveDashboardPanelQueryParams = {
 
 type LiveDashboardPanelQueryInput = Omit<UpdateLiveDashboardPanelQueryParams, 'elementName'>;
 
+type LiveDashboardPanelQueryDefaults = {
+  refId?: string;
+  hidden?: boolean;
+  group?: string;
+  version?: string;
+  datasource?: Record<string, unknown>;
+};
+
 type AddLiveDashboardPanelParams = {
   title: string;
   queryExpression?: string;
@@ -365,18 +373,22 @@ function makeUpdateLiveDashboardPanelQueryTool(dashboardMutation: DashboardMutat
     async execute(_toolCallId, params, signal) {
       throwIfAborted(signal);
       const args = params as UpdateLiveDashboardPanelQueryParams;
+      const existingQuery = await readLivePanelQueryDefaults(dashboardMutation, args.elementName, args.refId);
       const payload = {
         element: elementReference(args.elementName),
         panel: panelPatch({
           data: queryGroup([
-            panelQuery({
-              refId: args.refId,
-              hidden: args.hidden,
-              datasourceType: args.datasourceType,
-              datasourceName: args.datasourceName,
-              queryExpression: args.queryExpression,
-              querySpec: args.querySpec,
-            }),
+            panelQuery(
+              {
+                refId: args.refId,
+                hidden: args.hidden,
+                datasourceType: args.datasourceType,
+                datasourceName: args.datasourceName,
+                queryExpression: args.queryExpression,
+                querySpec: args.querySpec,
+              },
+              existingQuery
+            ),
           ]),
         }),
       };
@@ -737,26 +749,121 @@ function queryGroup(queries: unknown[]) {
   };
 }
 
-function panelQuery(args: LiveDashboardPanelQueryInput) {
+async function readLivePanelQueryDefaults(
+  dashboardMutation: DashboardMutationAPI,
+  elementName: string,
+  refId: unknown
+): Promise<LiveDashboardPanelQueryDefaults | undefined> {
+  if (!commandAvailable(safeAvailableCommands(dashboardMutation), 'LIST_PANELS')) {
+    return undefined;
+  }
+
+  try {
+    const result = await dashboardMutation.execute({
+      type: 'LIST_PANELS',
+      payload: { elements: [elementName] },
+    });
+    if (!result.success) {
+      return undefined;
+    }
+
+    return selectLivePanelQueryDefaults(result.data, optionalStringValue(refId));
+  } catch {
+    return undefined;
+  }
+}
+
+function selectLivePanelQueryDefaults(
+  data: unknown,
+  requestedRefId?: string
+): LiveDashboardPanelQueryDefaults | undefined {
+  const dataRecord = isRecord(data) ? data : undefined;
+  const elements = Array.isArray(dataRecord?.elements) ? dataRecord.elements : [];
+  const firstElement = elements.find(isRecord);
+  if (!firstElement) {
+    return undefined;
+  }
+
+  const element = isRecord(firstElement.element) ? firstElement.element : undefined;
+  const spec = isRecord(element?.spec) ? element.spec : undefined;
+  const dataKind = isRecord(spec?.data) ? spec.data : undefined;
+  const dataSpec = isRecord(dataKind?.spec) ? dataKind.spec : undefined;
+  const queries = Array.isArray(dataSpec?.queries) ? dataSpec.queries.filter(isRecord) : [];
+  if (queries.length === 0) {
+    return undefined;
+  }
+
+  const query = requestedRefId
+    ? (queries.find((candidate) => panelQueryRefId(candidate) === requestedRefId) ?? queries[0])
+    : queries[0];
+  return livePanelQueryDefaults(query);
+}
+
+function livePanelQueryDefaults(query: Record<string, unknown>): LiveDashboardPanelQueryDefaults | undefined {
+  const spec = isRecord(query.spec) ? query.spec : undefined;
+  const dataQueryKind = isRecord(spec?.query) ? spec.query : undefined;
+  const datasource = isRecord(dataQueryKind?.datasource) ? { ...dataQueryKind.datasource } : undefined;
+  const defaults = compactRecord({
+    refId: optionalStringValue(spec?.refId),
+    hidden: typeof spec?.hidden === 'boolean' ? spec.hidden : undefined,
+    group: optionalStringValue(dataQueryKind?.group),
+    version: optionalStringValue(dataQueryKind?.version),
+    datasource: datasource && Object.keys(datasource).length > 0 ? datasource : undefined,
+  });
+
+  return Object.keys(defaults).length > 0 ? defaults : undefined;
+}
+
+function panelQueryRefId(query: Record<string, unknown>) {
+  const spec = isRecord(query.spec) ? query.spec : undefined;
+  return optionalStringValue(spec?.refId);
+}
+
+function panelQuery(args: LiveDashboardPanelQueryInput, defaults?: LiveDashboardPanelQueryDefaults) {
   return compactDeep({
     kind: 'PanelQuery',
     spec: {
-      refId: stringValue(args.refId, 'refId', 'A'),
-      hidden: args.hidden,
-      query: dataQuery(args),
+      refId: stringValue(args.refId, 'refId', defaults?.refId ?? 'A'),
+      hidden: args.hidden ?? defaults?.hidden,
+      query: dataQuery(args, defaults),
     },
   });
 }
 
-function dataQuery(args: LiveDashboardPanelQueryInput) {
-  const datasourceType = stringValue(args.datasourceType, 'datasourceType', 'prometheus');
+function dataQuery(args: LiveDashboardPanelQueryInput, defaults?: LiveDashboardPanelQueryDefaults) {
+  const explicitDatasourceType = optionalStringValue(args.datasourceType);
+  const datasourceType = explicitDatasourceType ?? defaults?.group ?? 'prometheus';
   const querySpec = isRecord(args.querySpec) ? args.querySpec : defaultPanelQuerySpec(args.queryExpression);
   return compactDeep({
     kind: 'DataQuery',
     group: datasourceType,
-    datasource: args.datasourceName ? { name: args.datasourceName } : undefined,
+    version: defaults?.version,
+    datasource: dataQueryDatasource(args, defaults, datasourceType, explicitDatasourceType),
     spec: querySpec,
   });
+}
+
+function dataQueryDatasource(
+  args: LiveDashboardPanelQueryInput,
+  defaults: LiveDashboardPanelQueryDefaults | undefined,
+  datasourceType: string,
+  explicitDatasourceType: string | undefined
+) {
+  const datasourceName = optionalStringValue(args.datasourceName);
+  if (datasourceName) {
+    return { name: datasourceName };
+  }
+
+  const existingDatasource = defaults?.datasource;
+  if (!existingDatasource) {
+    return undefined;
+  }
+
+  if (!explicitDatasourceType || datasourceType === defaults?.group) {
+    return existingDatasource;
+  }
+
+  return undefined;
 }
 
 function defaultPanelQuerySpec(queryExpression: unknown) {
@@ -966,6 +1073,10 @@ function stringValue(value: unknown, field: string, fallback?: string) {
     return fallback;
   }
   throw new Error(`${field} is required.`);
+}
+
+function optionalStringValue(value: unknown) {
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

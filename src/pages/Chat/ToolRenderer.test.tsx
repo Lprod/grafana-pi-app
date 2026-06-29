@@ -325,6 +325,171 @@ describe('ToolRenderer', () => {
     expect(screen.getByTestId('book')).toBeInTheDocument();
   });
 
+  it('renders skill resource reads as collapsed reference cards', () => {
+    const call = render(
+      <ContentBlocks
+        content={[
+          {
+            type: 'toolCall',
+            name: 'read_skill_resource',
+            arguments: { skill: 'grafana-dashboard', path: 'references/dashboard-jsonnet-workflow.md' },
+          },
+        ]}
+      />
+    );
+
+    expect(call.container.textContent).toContain(
+      'Read skill resource | grafana-dashboard | references/dashboard-jsonnet-workflow.md'
+    );
+    call.unmount();
+
+    const { container } = render(
+      <ToolResultMessageBody
+        toolName="read_skill_resource"
+        content={[
+          {
+            type: 'text',
+            text: '# Dashboard Jsonnet Workflow\n\nA long reference body that should not dominate the transcript.',
+          },
+        ]}
+        details={{
+          skill: 'grafana-dashboard',
+          path: 'references/dashboard-jsonnet-workflow.md',
+          bytes: 4096,
+          truncated: false,
+        }}
+      />
+    );
+
+    expect(container.textContent).toContain('Skill resource loaded');
+    expect(container.textContent).toContain('grafana-dashboard');
+    expect(container.textContent).toContain('references/dashboard-jsonnet-workflow.md');
+    expect(container.textContent).toContain('4096 bytes');
+    const details = container.querySelector('details');
+    expect(details).toBeInTheDocument();
+    expect(details).not.toHaveAttribute('open');
+    expect(details?.querySelector('summary')?.textContent).toContain('Reference text');
+  });
+
+  it('renders live dashboard edit tool calls with audit fields', () => {
+    const { container } = render(
+      <ContentBlocks
+        content={[
+          {
+            type: 'toolCall',
+            name: 'list_live_dashboard_panels',
+            arguments: { elements: ['panel-2'], includeStatus: true },
+          },
+          { type: 'toolCall', name: 'get_live_dashboard_layout', arguments: {} },
+          { type: 'toolCall', name: 'get_live_dashboard_info', arguments: {} },
+          { type: 'toolCall', name: 'list_live_dashboard_variables', arguments: { parentPath: '/rows/0' } },
+          {
+            type: 'toolCall',
+            name: 'rename_live_dashboard_panel',
+            arguments: { elementName: 'panel-2', title: 'Requests', description: 'Updated panel copy' },
+          },
+          {
+            type: 'toolCall',
+            name: 'update_live_dashboard_panel_query',
+            arguments: {
+              elementName: 'panel-2',
+              queryExpression: 'sum(rate(http_requests_total[$__rate_interval]))',
+              datasourceType: 'prometheus',
+              datasourceName: 'prom-prod',
+              refId: 'B',
+              hidden: true,
+            },
+          },
+          {
+            type: 'toolCall',
+            name: 'add_live_dashboard_panel',
+            arguments: {
+              title: 'Errors',
+              visualizationType: 'timeseries',
+              unit: 'reqps',
+              datasourceType: 'prometheus',
+              datasourceName: 'prom-prod',
+              x: 12,
+              y: 8,
+              width: 12,
+              height: 8,
+            },
+          },
+          {
+            type: 'toolCall',
+            name: 'move_or_resize_live_dashboard_panel',
+            arguments: { elementName: 'panel-2', parentPath: '/', x: 0, y: 8, width: 12, height: 8 },
+          },
+          {
+            type: 'toolCall',
+            name: 'update_live_dashboard_settings',
+            arguments: {
+              title: 'Ops',
+              tags: ['service', 'sre'],
+              from: 'now-6h',
+              to: 'now',
+              autoRefresh: '30s',
+              timezone: 'browser',
+              cursorSync: 'Tooltip',
+              editable: false,
+              liveNow: true,
+              preload: true,
+            },
+          },
+          {
+            type: 'toolCall',
+            name: 'add_live_dashboard_variable',
+            arguments: {
+              name: 'env',
+              variableType: 'query',
+              queryExpression: 'label_values(up, job)',
+              datasourceName: 'prom-prod',
+              current: 'prod',
+              multi: true,
+              includeAll: true,
+            },
+          },
+          {
+            type: 'toolCall',
+            name: 'update_live_dashboard_variable',
+            arguments: { name: 'env', newName: 'service', options: ['api', 'worker'], position: 2 },
+          },
+          {
+            type: 'toolCall',
+            name: 'apply_live_dashboard_mutation',
+            arguments: {
+              type: 'REMOVE_PANEL',
+              payload: { elements: [{ kind: 'ElementReference', name: 'panel-9' }] },
+            },
+          },
+        ]}
+      />
+    );
+
+    expect(container.textContent).toContain('List live dashboard panels | panel-2');
+    expect(container.textContent).toContain('Rename live dashboard panel | panel-2');
+    expect(container.textContent).toContain('Updated panel copy');
+    expect(container.textContent).toContain('Update live dashboard panel query | panel-2');
+    expect(container.textContent).toContain('prometheus/prom-prod');
+    expect(container.textContent).toContain('Ref ID');
+    expect(container.textContent).toContain('B');
+    expect(container.textContent).toContain('Add live dashboard panel | Errors');
+    expect(container.textContent).toContain('timeseries');
+    expect(container.textContent).toContain('reqps');
+    expect(container.textContent).toContain('x 12, y 8, width 12, height 8');
+    expect(container.textContent).toContain('Update live dashboard settings | Ops');
+    expect(container.textContent).toContain('now-6h -> now');
+    expect(container.textContent).toContain('30s');
+    expect(container.textContent).toContain('Tooltip');
+    expect(container.textContent).toContain('service, sre');
+    expect(container.textContent).toContain('Add live dashboard variable | env');
+    expect(container.textContent).toContain('label_values(up, job)');
+    expect(container.textContent).toContain('Update live dashboard variable | env');
+    expect(container.textContent).toContain('service');
+    expect(container.textContent).toContain('Apply live dashboard mutation | REMOVE_PANEL');
+    expect(container.textContent).toContain('panel-9');
+  });
+
   it('renders batched query_prometheus arguments as a compact query plan', () => {
     const queries = [
       {
@@ -1435,9 +1600,14 @@ describe('ToolRenderer', () => {
         details={{
           command: 'UPDATE_PANEL',
           success: true,
+          payload: {
+            element: { kind: 'ElementReference', name: 'panel-1' },
+            panel: { kind: 'Panel', spec: { title: 'New title' } },
+          },
           changes: [{ path: '/elements/panel-1/spec/title', previousValue: 'Old title', newValue: 'New title' }],
           warnings: ['Panel data will refresh after save.'],
           data: { ok: true },
+          visualVerification: { status: 'skipped', error: 'Renderer unavailable' },
           availableCommands: ['LIST_PANELS', 'UPDATE_PANEL'],
         }}
       />
@@ -1445,10 +1615,46 @@ describe('ToolRenderer', () => {
 
     expect(container.textContent).toContain('Live dashboard mutation succeeded');
     expect(container.textContent).toContain('UPDATE_PANEL');
+    expect(container.textContent).toContain('panel-1');
+    expect(container.textContent).toContain('Panel title');
     expect(container.textContent).toContain('/elements/panel-1/spec/title');
     expect(container.textContent).toContain('Old title');
     expect(container.textContent).toContain('New title');
+    expect(container.textContent).toContain('Verification issue');
+    expect(container.textContent).toContain('Renderer unavailable');
     expect(container.textContent).toContain('Panel data will refresh after save.');
     expect(container.textContent).not.toContain('"previousValue"');
+    const changes = [...container.querySelectorAll('details')].find((details) =>
+      details.querySelector('summary')?.textContent?.includes('Changes')
+    );
+    expect(changes).toBeInTheDocument();
+    expect(changes).not.toHaveAttribute('open');
+  });
+
+  it('renders read-only live dashboard results as commands', () => {
+    const { container } = render(
+      <ToolResultMessageBody
+        toolName="list_live_dashboard_panels"
+        content={[{ type: 'text', text: 'Live dashboard mutation LIST_PANELS succeeded.' }]}
+        details={{
+          command: 'LIST_PANELS',
+          success: true,
+          changes: [],
+          data: {
+            elements: [
+              { element: { kind: 'Panel', spec: { title: 'Requests' } } },
+              { element: { kind: 'Panel', spec: { title: 'Errors' } } },
+            ],
+          },
+          availableCommands: ['LIST_PANELS', 'UPDATE_PANEL'],
+        }}
+      />
+    );
+
+    expect(container.textContent).toContain('Live dashboard command succeeded');
+    expect(container.textContent).toContain('LIST_PANELS');
+    expect(container.textContent).toContain('Panels');
+    expect(container.textContent).toContain('2');
+    expect(container.textContent).not.toContain('Live dashboard mutation succeeded');
   });
 });
