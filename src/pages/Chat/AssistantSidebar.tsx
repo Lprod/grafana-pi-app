@@ -9,12 +9,13 @@ export type AssistantSidebarProps = {
   sessionId?: string;
 };
 
-export default function AssistantSidebar({ action, contextId, sessionId }: AssistantSidebarProps) {
+export default function AssistantSidebar({ action, contextId, path, sessionId }: AssistantSidebarProps) {
   return (
     <ChatApp
       key={sessionId ?? contextId ?? action ?? 'sidebar'}
       variant="sidebar"
       launchContextId={contextId}
+      sidebarRoute={path}
       sessionId={sessionId}
     />
   );

@@ -1,18 +1,21 @@
 import { GRAFANA_SKILLS } from './catalog';
-import type { GrafanaSkill, GrafanaSkillSelection, SkillToolGroup } from './types';
+import type { GrafanaSkill, GrafanaSkillContext, GrafanaSkillSelection, SkillToolGroup } from './types';
 
 const BASE_TOOL_GROUPS: readonly SkillToolGroup[] = ['metrics', 'dashboardMetricContext', 'subagents'];
 const DASHBOARD_INTENT =
   /\b(dashboard|dashboards|panel|panels|row|rows|variable|variables|jsonnet|render|save|sync|grafana view)\b/i;
 const DASHBOARD_WRITE_INTENT =
   /\b(create|build|generate|make|add|update|edit|modify|change|save|sync|apply|render|write)\b[\s\S]{0,80}\b(dashboard|panel|jsonnet)\b/i;
+const CONTEXTUAL_DASHBOARD_INTENT =
+  /\b(this|current|here|visible|page|view|screen|it|panel|dashboard|query|empty|broken|noisy|misleading|rename|fix|change|update|edit|move|add|improve|troubleshoot|explain|summari[sz]e|why|what)\b/i;
 const INVESTIGATION_INTENT =
   /\b(investigat(?:e|ion)|analy[sz](?:e|ing|is)|diagnos(?:e|is|tic)|root cause|why (?:is|are|did)|incident|outage|failure|failing|error spike|latency spike|degradation|regression|what'?s (?:wrong|causing))\b/i;
 const SKILL_REFERENCE = /\$([a-z0-9][a-z0-9-]{0,62}[a-z0-9])/gi;
 
 export function selectGrafanaSkills(
   prompt: string,
-  skills: readonly GrafanaSkill[] = GRAFANA_SKILLS
+  skills: readonly GrafanaSkill[] = GRAFANA_SKILLS,
+  context?: GrafanaSkillContext
 ): GrafanaSkillSelection {
   const skillByName = new Map(skills.map((skill) => [skill.name, skill]));
   const explicitSkillNames = extractSkillReferences(prompt).filter((name) => skillByName.has(name));
@@ -22,7 +25,10 @@ export function selectGrafanaSkills(
     activeNames.add(skillName);
   }
 
-  if (shouldActivateDashboardSkill(prompt) && skillByName.has('grafana-dashboard')) {
+  if (
+    (shouldActivateDashboardSkill(prompt) || shouldActivateDashboardSkillFromContext(prompt, context)) &&
+    skillByName.has('grafana-dashboard')
+  ) {
     activeNames.add('grafana-dashboard');
   }
 
@@ -59,6 +65,15 @@ export function extractSkillReferences(prompt: string): string[] {
 
 function shouldActivateDashboardSkill(prompt: string) {
   return DASHBOARD_INTENT.test(prompt) || DASHBOARD_WRITE_INTENT.test(prompt);
+}
+
+function shouldActivateDashboardSkillFromContext(prompt: string, context: GrafanaSkillContext | undefined) {
+  return Boolean(
+    prompt.trim() &&
+    context?.hasDashboardContext &&
+    context.pageType === 'dashboard' &&
+    CONTEXTUAL_DASHBOARD_INTENT.test(prompt)
+  );
 }
 
 function shouldActivateConfiguredSkill(prompt: string, skill: GrafanaSkill) {

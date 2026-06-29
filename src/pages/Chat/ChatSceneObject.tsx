@@ -66,7 +66,12 @@ import {
   storeDashboardAssistantLaunch,
   type DashboardAssistantLaunch,
 } from './dashboardLaunch';
-import { getAssistantDockRoute, storeAssistantSidebarDockRequest } from './sidebarDock';
+import { getAssistantDockRoute, routeFromLocation, storeAssistantSidebarDockRequest } from './sidebarDock';
+import {
+  buildAssistantSidebarPageContextSnapshot,
+  renderAssistantSidebarPageContextBlock,
+  sidebarPageContextSkillHints,
+} from './sidebarPageContext';
 import {
   clearDashboardSaveFolderOverride,
   getChatRun,
@@ -181,10 +186,12 @@ function ChatSceneRenderer({ model }: SceneComponentProps<ChatSceneObject>) {
 export function ChatApp({
   variant = 'page',
   launchContextId,
+  sidebarRoute,
   sessionId,
 }: {
   variant?: ChatAppVariant;
   launchContextId?: string;
+  sidebarRoute?: string;
   sessionId?: string;
 }) {
   const isSidebarVariant = variant === 'sidebar';
@@ -333,6 +340,7 @@ export function ChatApp({
   const importSessionInputRef = useRef<HTMLInputElement | null>(null);
   const messagesContainerRef = useRef<HTMLElement | null>(null);
   const autoScrollRef = useRef(true);
+  const sidebarRouteRef = useRef<string | undefined>(sidebarRoute);
   const lastScrollTopRef = useRef(0);
   const touchStartYRef = useRef<number>();
   const toolConfirmationResolverRef = useRef<(approved: boolean) => void>();
@@ -483,7 +491,10 @@ export function ChatApp({
 
   const buildSkillRuntime = useCallback(
     (prompt: string) => {
-      const selection = selectGrafanaSkills(prompt, skills);
+      const sidebarPageContext = isSidebarVariant
+        ? buildAssistantSidebarPageContextSnapshot(sidebarRouteRef.current, { liveDashboardEditingAvailable })
+        : undefined;
+      const selection = selectGrafanaSkills(prompt, skills, sidebarPageContextSkillHints(sidebarPageContext));
       const skillTools = createSkillTools(selection.activeSkills);
       const toolOptions = {
         ...jsonData,
@@ -513,9 +524,10 @@ export function ChatApp({
       const dashboardLaunchContext = dashboardLaunchRef.current
         ? renderDashboardAssistantContextBlock(dashboardLaunchRef.current)
         : undefined;
+      const sidebarContext = renderAssistantSidebarPageContextBlock(sidebarPageContext);
 
       return {
-        systemPrompt: [systemPrompt, dashboardLaunchContext].filter(Boolean).join('\n\n'),
+        systemPrompt: [systemPrompt, dashboardLaunchContext, sidebarContext].filter(Boolean).join('\n\n'),
         tools,
       };
     },
@@ -526,6 +538,7 @@ export function ChatApp({
       confirmToolCall,
       dashboardMutationAPI,
       dashboardSaveFolderRuntime,
+      isSidebarVariant,
       liveDashboardEditingAvailable,
       jsonData,
       llmModel,
@@ -775,6 +788,31 @@ export function ChatApp({
   useEffect(() => {
     storageRef.current = storage;
   }, [storage]);
+
+  useEffect(() => {
+    if (sidebarRoute) {
+      sidebarRouteRef.current = sidebarRoute;
+    }
+  }, [sidebarRoute]);
+
+  useEffect(() => {
+    if (!isSidebarVariant) {
+      return undefined;
+    }
+
+    const handleLocation = (location: ReturnType<typeof locationService.getLocation>) => {
+      const route = routeFromLocation(location);
+      if (route && !isAssistantPluginRoute(route)) {
+        sidebarRouteRef.current = route;
+      }
+    };
+
+    handleLocation(locationService.getLocation());
+    const subscription = locationService.getLocationObservable().subscribe(handleLocation);
+    return () => {
+      subscription.unsubscribe();
+    };
+  }, [isSidebarVariant]);
 
   const setAutoScrollEnabled = useCallback((enabled: boolean) => {
     autoScrollRef.current = enabled;
@@ -2043,6 +2081,16 @@ function hasActiveDashboardMutationCommands(dashboardMutationAPI: DashboardMutat
     return dashboardMutationAPI.getAvailableCommands().length > 0;
   } catch {
     return false;
+  }
+}
+
+function isAssistantPluginRoute(route: string) {
+  try {
+    const pathname = new URL(route, window.location.origin).pathname;
+    return pathname === PLUGIN_BASE_URL || pathname.startsWith(`${PLUGIN_BASE_URL}/`);
+  } catch {
+    const pathname = route.split(/[?#]/, 1)[0] || route;
+    return pathname === PLUGIN_BASE_URL || pathname.startsWith(`${PLUGIN_BASE_URL}/`);
   }
 }
 

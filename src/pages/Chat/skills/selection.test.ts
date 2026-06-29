@@ -47,6 +47,27 @@ describe('Grafana skill selection', () => {
     );
   });
 
+  it('activates the dashboard skill for contextual sidebar dashboard prompts', () => {
+    const selection = selectGrafanaSkills('why is this empty?', GRAFANA_SKILLS, {
+      pageType: 'dashboard',
+      hasDashboardContext: true,
+      hasPanelContext: true,
+      liveDashboardEditingAvailable: true,
+    });
+
+    expect(selection.activeSkillNames).toEqual(['grafana-dashboard', 'investigation']);
+    expect(selection.toolGroups).toEqual(expect.arrayContaining(['dashboardRead', 'liveDashboardEditing']));
+  });
+
+  it('does not activate dashboard context for empty prompts', () => {
+    const selection = selectGrafanaSkills('', GRAFANA_SKILLS, {
+      pageType: 'dashboard',
+      hasDashboardContext: true,
+    });
+
+    expect(selection.activeSkillNames).toEqual([]);
+  });
+
   it('does not activate a bundled skill for SQL datasource requests', () => {
     const selection = selectGrafanaSkills('show me SQL tables and query SELECT * FROM metrics', GRAFANA_SKILLS);
 

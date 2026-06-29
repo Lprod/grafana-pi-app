@@ -114,13 +114,13 @@ if (pluginJson.id === ASSISTANT_PLUGIN_ID) {
       description: 'Show Assistant in the Grafana extension sidebar',
       targets: [PluginExtensionPoints.ExtensionSidebar],
       configure: (context) => {
-        const path = typeof context?.path === 'string' ? context.path : locationService.getLocation().pathname;
+        const path = typeof context?.path === 'string' ? context.path : currentGrafanaRoute();
         return isAssistantAppPath(path) ? undefined : {};
       },
       onClick: (event, { context, toggleSidebar }) => {
         event?.preventDefault();
         toggleSidebar(ASSISTANT_SIDEBAR_TITLE, {
-          path: typeof context?.path === 'string' ? context.path : locationService.getLocation().pathname,
+          path: typeof context?.path === 'string' ? context.path : currentGrafanaRoute(),
         });
       },
     });
@@ -148,7 +148,7 @@ function openDashboardAssistant(action: DashboardAssistantAction) {
       openSidebar(ASSISTANT_SIDEBAR_TITLE, {
         action,
         contextId,
-        path: locationService.getLocation().pathname,
+        path: currentGrafanaRoute(),
       });
       return;
     }
@@ -159,7 +159,8 @@ function openDashboardAssistant(action: DashboardAssistantAction) {
 
 function isAssistantAppPath(path: string) {
   const appPath = `/a/${ASSISTANT_PLUGIN_ID}`;
-  return path === appPath || path.startsWith(`${appPath}/`);
+  const pathname = routePathname(path);
+  return pathname === appPath || pathname.startsWith(`${appPath}/`);
 }
 
 function setupAssistantSidebarDocking() {
@@ -208,4 +209,17 @@ function openAssistantSidebarWithRetry(request: AssistantSidebarDockRequest) {
 
 function compactRecord<T extends Record<string, unknown>>(record: T) {
   return Object.fromEntries(Object.entries(record).filter(([, value]) => value !== undefined)) as T;
+}
+
+function currentGrafanaRoute() {
+  const location = locationService.getLocation();
+  return routeFromLocation(location) ?? location.pathname ?? '/';
+}
+
+function routePathname(route: string) {
+  try {
+    return new URL(route, window.location.origin).pathname;
+  } catch {
+    return route.split(/[?#]/, 1)[0] || route;
+  }
 }

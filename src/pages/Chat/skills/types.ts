@@ -43,3 +43,10 @@ export type GrafanaSkillSelection = {
   toolGroups: SkillToolGroup[];
   explicitSkillNames: string[];
 };
+
+export type GrafanaSkillContext = {
+  pageType?: 'dashboard' | 'explore' | 'assistant' | 'other';
+  hasDashboardContext?: boolean;
+  hasPanelContext?: boolean;
+  liveDashboardEditingAvailable?: boolean;
+};

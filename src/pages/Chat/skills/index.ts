@@ -11,6 +11,7 @@ export type {
   BundledGrafanaSkill,
   BundledSkillResource,
   GrafanaSkillActivation,
+  GrafanaSkillContext,
   GrafanaSkill,
   GrafanaSkillSelection,
   SkillToolGroup,
