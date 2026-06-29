@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"sort"
 	"strings"
+	"time"
 )
 
 type proxyStreamRequest struct {
@@ -143,23 +144,37 @@ type streamedToolCall struct {
 var errOpenAIStreamDone = errors.New("openai stream done")
 
 func (a *App) handleLLMStream(w http.ResponseWriter, req *http.Request) {
+	startedAt := time.Now()
+	status := "failed"
+	reason := "error"
+	usage := zeroUsage()
+	assistantLLMRequestsInFlight.Inc()
+	defer func() {
+		assistantLLMRequestsInFlight.Dec()
+		recordLLMRequestMetrics(status, reason, time.Since(startedAt), usage)
+	}()
+
 	if req.Method != http.MethodPost {
+		reason = "method_not_allowed"
 		writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
 	if a.settings.OpenAIAPIKey == "" {
+		reason = "bad_request"
 		writeJSONError(w, http.StatusBadRequest, "OpenAI-compatible API key is not configured")
 		return
 	}
 
 	var body proxyStreamRequest
 	if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
+		reason = "bad_request"
 		writeJSONError(w, http.StatusBadRequest, fmt.Sprintf("invalid request body: %s", err))
 		return
 	}
 
 	upstreamBody, err := json.Marshal(a.openAIRequest(body))
 	if err != nil {
+		reason = "bad_request"
 		writeJSONError(w, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -195,14 +210,19 @@ func (a *App) handleLLMStream(w http.ResponseWriter, req *http.Request) {
 	}()
 
 	if upstreamRes.StatusCode < 200 || upstreamRes.StatusCode >= 300 {
+		reason = "upstream_error"
 		message, _ := io.ReadAll(io.LimitReader(upstreamRes.Body, 32_768))
 		_ = stream.write(errorEvent(string(message)))
 		return
 	}
 
-	if err := a.relayOpenAIStream(upstreamRes.Body, stream); err != nil {
-		_ = stream.write(errorEvent(err.Error()))
+	var relayErr error
+	usage, reason, relayErr = a.relayOpenAIStream(upstreamRes.Body, stream)
+	if relayErr != nil {
+		_ = stream.write(errorEvent(relayErr.Error()))
+		return
 	}
+	status = "completed"
 }
 
 func (a *App) openAIRequest(req proxyStreamRequest) openAIChatRequest {
@@ -270,7 +290,7 @@ func (a *App) effectiveSystemPrompt(systemPrompt string) string {
 	return systemPrompt + "\n\n## Instance instructions\n" + addendum
 }
 
-func (a *App) relayOpenAIStream(body io.Reader, stream proxyEventWriter) error {
+func (a *App) relayOpenAIStream(body io.Reader, stream proxyEventWriter) (proxyUsage, string, error) {
 	scanner := bufio.NewScanner(body)
 	scanner.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
 
@@ -363,6 +383,7 @@ func (a *App) relayOpenAIStream(body io.Reader, stream proxyEventWriter) error {
 					}); err != nil {
 						return err
 					}
+					recordLLMToolProposal(state.name)
 					if state.arguments.Len() > 0 {
 						if err := stream.write(map[string]interface{}{
 							"type":         "toolcall_delta",
@@ -407,7 +428,7 @@ func (a *App) relayOpenAIStream(body io.Reader, stream proxyEventWriter) error {
 				if errors.Is(err, errOpenAIStreamDone) {
 					break
 				}
-				return err
+				return usage, "error", err
 			}
 			continue
 		}
@@ -420,19 +441,19 @@ func (a *App) relayOpenAIStream(body io.Reader, stream proxyEventWriter) error {
 	}
 
 	if err := scanner.Err(); err != nil {
-		return err
+		return usage, "error", err
 	}
 	if err := flushData(); err != nil && !errors.Is(err, errOpenAIStreamDone) {
-		return err
+		return usage, "error", err
 	}
 	if textStarted {
 		if err := stream.write(map[string]interface{}{"type": "text_end", "contentIndex": textIndex}); err != nil {
-			return err
+			return usage, "error", err
 		}
 	}
 	if thinkingStarted {
 		if err := stream.write(map[string]interface{}{"type": "thinking_end", "contentIndex": thinkingIndex}); err != nil {
-			return err
+			return usage, "error", err
 		}
 	}
 	toolCallIndexes := make([]int, 0, len(toolCalls))
@@ -443,14 +464,17 @@ func (a *App) relayOpenAIStream(body io.Reader, stream proxyEventWriter) error {
 	for _, index := range toolCallIndexes {
 		state := toolCalls[index]
 		if !state.started {
-			return errors.New("upstream returned a tool call without a function name")
+			return usage, "error", errors.New("upstream returned a tool call without a function name")
 		}
 		if err := stream.write(map[string]interface{}{"type": "toolcall_end", "contentIndex": state.contentIndex}); err != nil {
-			return err
+			return usage, "error", err
 		}
 	}
 
-	return stream.write(map[string]interface{}{"type": "done", "reason": doneReason, "usage": usage})
+	if err := stream.write(map[string]interface{}{"type": "done", "reason": doneReason, "usage": usage}); err != nil {
+		return usage, "error", err
+	}
+	return usage, doneReason, nil
 }
 
 func reasoningDelta(values ...string) string {
@@ -641,6 +665,7 @@ func (a *App) registerRoutes(mux *http.ServeMux) {
 	// streamProxy appends /api/stream to proxyUrl; keep this alias so the frontend
 	// can use Pi's client-side proxy stream implementation unchanged.
 	mux.HandleFunc("/llm/api/stream", a.withAppAccess(a.handleLLMStream))
+	mux.HandleFunc("/telemetry/events", a.withAppAccess(a.handleTelemetryEvents))
 	mux.HandleFunc("/jsonnet-dashboards/render", a.withAppAccess(a.handleJsonnetDashboardRender))
 	mux.HandleFunc("/jsonnet-dashboards/save", a.withAppAccess(a.handleJsonnetDashboardSave))
 	mux.HandleFunc("/jsonnet-dashboards/jsonnet-files/write", a.withAppAccess(a.handleJsonnetFileWrite))

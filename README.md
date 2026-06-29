@@ -172,7 +172,7 @@ PLUGIN_VARIANT_ID=grafana-assistant-app npm run package:variant
 
 The generated files are `grafana-assistant-app-<version>.zip` and `grafana-assistant-app-<version>.zip.sha1`. The packaging script temporarily rewrites `src/plugin.json` during the build and restores it before exiting.
 
-The local Compose stack also seeds Prometheus with six hours of synthetic RED/USE metrics derived from the `agentic-observability` demo. It includes one hour of current-query overlap by default, so short-window `now` queries remain useful during a manual demo. To refresh the generated history after it ages out, remove the demo volumes before starting Grafana again:
+The local Compose stack also seeds Prometheus with six hours of synthetic RED/USE metrics derived from the `agentic-observability` demo. To include future overlap for short-window `now` queries during a manual demo, start the stack with `HISTORY_FUTURE_SECONDS=3600`; the default is `0` so live Grafana and plugin scrapes can be ingested immediately. To refresh the generated history after it ages out, remove the demo volumes before starting Grafana again:
 
 ```bash
 docker compose down -v

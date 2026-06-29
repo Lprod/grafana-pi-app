@@ -72,6 +72,7 @@ import {
   renderAssistantSidebarPageContextBlock,
   sidebarPageContextSkillHints,
 } from './sidebarPageContext';
+import { createAssistantTelemetryReporter } from './telemetry';
 import {
   clearDashboardSaveFolderOverride,
   getChatRun,
@@ -205,6 +206,7 @@ export function ChatApp({
   const llmModel = useMemo(() => createOpenAICompatibleModel(jsonData), [jsonData]);
   const thinkingLevel = useMemo(() => getConfiguredThinkingLevel(jsonData), [jsonData]);
   const skills = useMemo(() => getGrafanaSkills(jsonData), [jsonData]);
+  const assistantTelemetry = useMemo(() => createAssistantTelemetryReporter(), []);
   const streamFn = useCallback<StreamFn>(
     (model, context, options) =>
       streamProxy(model, context, {
@@ -529,6 +531,7 @@ export function ChatApp({
       return {
         systemPrompt: [systemPrompt, dashboardLaunchContext, sidebarContext].filter(Boolean).join('\n\n'),
         tools,
+        skillSelection: selection,
       };
     },
     [
@@ -591,6 +594,7 @@ export function ChatApp({
   const handleAgentEvent = useCallback(
     (event: AgentEvent, eventAgent: Agent) => {
       emitBenchmarkEvent(event);
+      assistantTelemetry.recordAgentEvent(event);
       if (shouldBatchRevision(event)) {
         scheduleRevision();
       } else {
@@ -613,7 +617,7 @@ export function ChatApp({
         }
       }
     },
-    [flushRevision, saveSession, scheduleRevision]
+    [assistantTelemetry, flushRevision, saveSession, scheduleRevision]
   );
 
   const stopCurrentAgentForSessionChange = useCallback(
@@ -788,6 +792,12 @@ export function ChatApp({
   useEffect(() => {
     storageRef.current = storage;
   }, [storage]);
+
+  useEffect(() => {
+    return () => {
+      void assistantTelemetry.flush();
+    };
+  }, [assistantTelemetry]);
 
   useEffect(() => {
     if (sidebarRoute) {
@@ -1045,9 +1055,19 @@ export function ChatApp({
     keepAutoScrollEnabled();
     try {
       const runtime = buildSkillRuntime(prompt);
+      assistantTelemetry.recordPromptStart({
+        prompt,
+        systemPrompt: runtime.systemPrompt,
+        messages: currentAgent.state.messages,
+        toolCount: runtime.tools.length,
+        activeSkills: runtime.skillSelection.activeSkills,
+        explicitSkillNames: runtime.skillSelection.explicitSkillNames,
+      });
       currentAgent.state.systemPrompt = runtime.systemPrompt;
       currentAgent.state.tools = runtime.tools;
       await currentAgent.prompt(prompt);
+      assistantTelemetry.recordTranscriptSnapshot(currentAgent.state.messages);
+      emitBenchmarkTranscriptSnapshot(currentAgent.state.messages);
     } catch (err) {
       if (agentRef.current === currentAgent && sessionIdRef.current === sessionId) {
         setError(err instanceof Error ? err.message : String(err));
@@ -2402,7 +2422,14 @@ function emitBenchmarkEvent(event: AgentEvent) {
     return;
   }
 
-  const serialized = serializeBenchmarkEvent(event);
+  recordSerializedBenchmarkEvent(serializeBenchmarkEvent(event));
+}
+
+function recordSerializedBenchmarkEvent(serialized: BenchmarkAgentEvent) {
+  if (typeof window === 'undefined') {
+    return;
+  }
+
   let recorded = false;
 
   try {
@@ -2429,6 +2456,82 @@ function emitBenchmarkEvent(event: AgentEvent) {
   }
 }
 
+function emitBenchmarkTranscriptSnapshot(messages: AgentMessage[]) {
+  if (typeof window === 'undefined' || !isBenchmarkCaptureEnabled()) {
+    return;
+  }
+
+  if ((window.__PI_AGENT_BENCHMARK_EVENTS__?.length ?? 0) > 0) {
+    return;
+  }
+
+  const timestamp = Date.now();
+  const toolCalls = benchmarkToolCallsFromTranscript(messages);
+  for (const message of messages) {
+    const record = message as unknown as Record<string, unknown>;
+    if (record?.role !== 'toolResult') {
+      continue;
+    }
+    const toolCallId = typeof record.toolCallId === 'string' ? record.toolCallId : undefined;
+    const toolCall = toolCallId ? toolCalls.get(toolCallId) : undefined;
+    const toolName = typeof record.toolName === 'string' ? record.toolName : toolCall?.name;
+    if (!toolCallId || !toolName) {
+      continue;
+    }
+    recordSerializedBenchmarkEvent({
+      type: 'tool_execution_end',
+      timestamp,
+      toolCallId,
+      toolName,
+      args: sanitizeBenchmarkValue(toolCall?.args),
+      result: sanitizeBenchmarkValue({
+        content: record.content,
+        details: record.details,
+        isError: record.isError,
+      }),
+      isError: record.isError === true,
+    });
+  }
+
+  const finalAssistantMessage = [...messages]
+    .reverse()
+    .find((message) => (message as unknown as Record<string, unknown>)?.role === 'assistant');
+  if (finalAssistantMessage) {
+    recordSerializedBenchmarkEvent({
+      type: 'message_end',
+      timestamp,
+      message: summarizeBenchmarkMessage(finalAssistantMessage),
+    });
+  }
+  recordSerializedBenchmarkEvent({
+    type: 'agent_end',
+    timestamp,
+    messageCount: messages.length,
+    message: finalAssistantMessage ? summarizeBenchmarkMessage(finalAssistantMessage) : undefined,
+  });
+}
+
+function benchmarkToolCallsFromTranscript(messages: AgentMessage[]) {
+  const toolCalls = new Map<string, { name: string; args: unknown }>();
+  for (const message of messages) {
+    const record = message as unknown as Record<string, unknown>;
+    if (record?.role !== 'assistant' || !Array.isArray(record.content)) {
+      continue;
+    }
+    for (const block of record.content) {
+      if (!block || typeof block !== 'object') {
+        continue;
+      }
+      const content = block as Record<string, unknown>;
+      if (content.type !== 'toolCall' || typeof content.id !== 'string' || typeof content.name !== 'string') {
+        continue;
+      }
+      toolCalls.set(content.id, { name: content.name, args: content.arguments });
+    }
+  }
+  return toolCalls;
+}
+
 function isBenchmarkCaptureEnabled() {
   if (window.__PI_AGENT_BENCHMARK_CAPTURE__ === true) {
     return true;
@@ -2445,10 +2548,14 @@ function serializeBenchmarkEvent(event: AgentEvent): BenchmarkAgentEvent {
   const timestamp = Date.now();
 
   if (event.type === 'agent_end') {
+    const finalAssistantMessage = [...event.messages]
+      .reverse()
+      .find((message) => (message as unknown as Record<string, unknown>)?.role === 'assistant');
     return {
       type: event.type,
       timestamp,
       messageCount: event.messages.length,
+      message: finalAssistantMessage ? summarizeBenchmarkMessage(finalAssistantMessage) : undefined,
     };
   }
 
@@ -2475,7 +2582,7 @@ function serializeBenchmarkEvent(event: AgentEvent): BenchmarkAgentEvent {
       timestamp,
       toolCallId: event.toolCallId,
       toolName: event.toolName,
-      args: event.args,
+      args: sanitizeBenchmarkValue(event.args),
     };
   }
 
@@ -2485,8 +2592,8 @@ function serializeBenchmarkEvent(event: AgentEvent): BenchmarkAgentEvent {
       timestamp,
       toolCallId: event.toolCallId,
       toolName: event.toolName,
-      args: event.args,
-      partialResult: event.partialResult,
+      args: sanitizeBenchmarkValue(event.args),
+      partialResult: sanitizeBenchmarkValue(event.partialResult),
     };
   }
 
@@ -2496,7 +2603,7 @@ function serializeBenchmarkEvent(event: AgentEvent): BenchmarkAgentEvent {
       timestamp,
       toolCallId: event.toolCallId,
       toolName: event.toolName,
-      result: event.result,
+      result: sanitizeBenchmarkValue(event.result),
       isError: event.isError,
     };
   }
@@ -2515,7 +2622,69 @@ function summarizeBenchmarkMessage(message: AgentMessage) {
     stopReason: record.stopReason,
     errorMessage: record.errorMessage,
     content: summarizeBenchmarkContent(record.content),
+    usage: summarizeBenchmarkUsage(record.usage),
   };
+}
+
+function summarizeBenchmarkUsage(usage: unknown) {
+  if (!usage || typeof usage !== 'object') {
+    return undefined;
+  }
+  const record = usage as Record<string, unknown>;
+  return {
+    input: numberBenchmarkField(record.input),
+    output: numberBenchmarkField(record.output),
+    cacheRead: numberBenchmarkField(record.cacheRead),
+    cacheWrite: numberBenchmarkField(record.cacheWrite),
+    totalTokens: numberBenchmarkField(record.totalTokens),
+    cost: record.cost,
+  };
+}
+
+function numberBenchmarkField(value: unknown) {
+  return typeof value === 'number' && Number.isFinite(value) ? value : 0;
+}
+
+function sanitizeBenchmarkValue(value: unknown, seen = new WeakSet<object>(), depth = 0): unknown {
+  if (value === null || value === undefined) {
+    return value;
+  }
+
+  if (typeof value === 'string') {
+    return truncateBenchmarkText(value);
+  }
+
+  if (typeof value === 'number' || typeof value === 'boolean') {
+    return Number.isFinite(value as number) || typeof value === 'boolean' ? value : String(value);
+  }
+
+  if (typeof value === 'bigint') {
+    return value.toString();
+  }
+
+  if (typeof value !== 'object') {
+    return String(value);
+  }
+
+  if (seen.has(value)) {
+    return '[Circular]';
+  }
+
+  if (depth >= 8) {
+    return '[MaxDepth]';
+  }
+
+  seen.add(value);
+
+  if (Array.isArray(value)) {
+    return value.slice(0, 100).map((item) => sanitizeBenchmarkValue(item, seen, depth + 1));
+  }
+
+  const output: Record<string, unknown> = {};
+  for (const [key, entry] of Object.entries(value).slice(0, 100)) {
+    output[key] = sanitizeBenchmarkValue(entry, seen, depth + 1);
+  }
+  return output;
 }
 
 function summarizeBenchmarkContent(content: unknown) {
@@ -2540,7 +2709,7 @@ function summarizeBenchmarkContent(content: unknown) {
         type: record.type,
         id: record.id,
         name: record.name,
-        arguments: record.arguments,
+        arguments: sanitizeBenchmarkValue(record.arguments),
       };
     }
 

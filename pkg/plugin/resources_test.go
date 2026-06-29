@@ -559,7 +559,7 @@ func TestLLMStreamRelaysReasoningDeltas(t *testing.T) {
 			"data: [DONE]\n\n",
 	)
 
-	if err := app.relayOpenAIStream(body, newProxyEventWriter(recorder, nil)); err != nil {
+	if _, _, err := app.relayOpenAIStream(body, newProxyEventWriter(recorder, nil)); err != nil {
 		t.Fatalf("relay stream: %s", err)
 	}
 
@@ -575,6 +575,72 @@ func TestLLMStreamRelaysReasoningDeltas(t *testing.T) {
 		if !strings.Contains(combined, expected) {
 			t.Fatalf("expected stream to contain %s, got %s", expected, combined)
 		}
+	}
+}
+
+func TestTelemetryEndpointAcceptsAggregateEvents(t *testing.T) {
+	inst, err := NewApp(context.Background(), backend.AppInstanceSettings{})
+	if err != nil {
+		t.Fatalf("new app: %s", err)
+	}
+	app := inst.(*App)
+
+	body := []byte(`{
+		"events": [
+			{
+				"type": "prompt_start",
+				"promptBytes": 42,
+				"contextBytes": 2048,
+				"contextMessageCount": 3,
+				"toolCount": 12,
+				"skills": [
+					{
+						"id": "plugin-config/customSkills/team-runbook",
+						"name": "team-runbook",
+						"source": "custom",
+						"activation": "explicit"
+					}
+				]
+			},
+			{
+				"type": "tool_execution_end",
+				"toolName": "run_query_agent",
+				"status": "completed",
+				"durationMs": 1234,
+				"argsBytes": 51,
+				"resultBytes": 4096,
+				"nestedToolCallCount": 2,
+				"nestedToolCalls": [
+					{"name": "list_metrics", "status": "completed"},
+					{"name": "query_prometheus", "status": "completed"}
+				]
+			},
+			{
+				"type": "qol_timing",
+				"phase": "first_assistant_content",
+				"durationMs": 850
+			}
+		]
+	}`)
+
+	var sender mockCallResourceResponseSender
+	err = app.CallResource(context.Background(), &backend.CallResourceRequest{
+		PluginContext: adminPluginContext(),
+		Method:        http.MethodPost,
+		Path:          "telemetry/events",
+		Body:          body,
+	}, &sender)
+	if err != nil {
+		t.Fatalf("CallResource telemetry error: %s", err)
+	}
+	if len(sender.responses) != 1 {
+		t.Fatalf("expected 1 response, got %d", len(sender.responses))
+	}
+	if sender.responses[0].Status != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", sender.responses[0].Status, string(sender.responses[0].Body))
+	}
+	if !strings.Contains(string(sender.responses[0].Body), `"accepted":3`) {
+		t.Fatalf("unexpected response: %s", string(sender.responses[0].Body))
 	}
 }
 
