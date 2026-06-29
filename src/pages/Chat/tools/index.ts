@@ -3,10 +3,10 @@ import { createArtifactTools } from './artifacts';
 import { createDashboardTools } from './dashboards';
 import { createDashboardMetricContextTools } from './dashboardMetricContext';
 import { createLiveDashboardMutationTools } from './dashboardMutation';
+import { createJsonnetDashboardTools } from './jsonnetDashboards';
 import { createJsonnetFileTools } from './jsonnetFiles';
 import { createJsonnetLibTools } from './jsonnetLibs';
 import { createInvestigationTools } from './investigation';
-import { createManagedDashboardTools } from './managedDashboards';
 import { createMetricTools, filterAllowedPrometheusDatasourceSettings } from './metrics';
 import { createNavigationTools } from './navigation';
 import { createSubagentTools } from './subagents';
@@ -23,8 +23,8 @@ export { createSkillTools } from './skills';
 export { buildNavigationPath } from './navigation';
 export type {
   CreateGrafanaToolsOptions,
-  DashboardSyncFolderRuntime,
-  DashboardSyncFolderSelection,
+  DashboardSaveFolderRuntime,
+  DashboardSaveFolderSelection,
   GrafanaToolConfig,
   GrafanaToolRegistry,
   GrafanaToolRuntime,
@@ -43,12 +43,12 @@ export function createGrafanaToolRegistry(options: CreateGrafanaToolsOptions = {
   const dashboardReadTools = createDashboardTools(options, false);
   const liveDashboardEditing = createLiveDashboardMutationTools(options.dashboardMutation);
   const jsonnetFiles = createJsonnetFileTools(options);
-  const managedDashboards = createManagedDashboardTools(options);
+  const jsonnetDashboards = createJsonnetDashboardTools(options);
   const investigation = createInvestigationTools(options.investigationReport);
   const jsonnet = createJsonnetLibTools();
   const navigation = createNavigationTools();
   const artifacts = createArtifactTools(options.artifacts);
-  const parentManagedDashboardTools = managedDashboards.all;
+  const parentJsonnetDashboardTools = jsonnetDashboards.all;
   const skills = options.skillTools ?? [];
   const subagents = options.runtime
     ? createSubagentTools({
@@ -58,7 +58,7 @@ export function createGrafanaToolRegistry(options: CreateGrafanaToolsOptions = {
         dashboardReadTools,
         liveDashboardTools: liveDashboardEditing,
         jsonnetFileTools: jsonnetFiles.all,
-        managedDashboardTools: managedDashboards.all,
+        jsonnetDashboardTools: jsonnetDashboards.all,
         investigationTools: investigation,
         navigationTools: navigation,
         artifactTools: artifacts,
@@ -72,7 +72,7 @@ export function createGrafanaToolRegistry(options: CreateGrafanaToolsOptions = {
     dashboards,
     liveDashboardEditing,
     jsonnetFiles,
-    managedDashboards,
+    jsonnetDashboards,
     investigation,
     jsonnet,
     artifacts,
@@ -83,7 +83,7 @@ export function createGrafanaToolRegistry(options: CreateGrafanaToolsOptions = {
       ...dashboardMetricContext,
       ...liveDashboardEditing,
       ...jsonnetFiles.all,
-      ...parentManagedDashboardTools,
+      ...parentJsonnetDashboardTools,
       ...investigation,
       ...artifacts,
       ...subagents,
@@ -131,8 +131,8 @@ export function createGrafanaToolsForSkillGroups(
     selected.push(...registry.liveDashboardEditing);
   }
 
-  if (groupSet.has('managedDashboards')) {
-    selected.push(...registry.managedDashboards.all);
+  if (groupSet.has('jsonnetDashboards')) {
+    selected.push(...registry.jsonnetDashboards.all);
   }
 
   if (groupSet.has('investigation')) {

@@ -21,13 +21,14 @@ function makeSearchJsonnetLibsTool(): AgentTool {
   return {
     name: 'search_grafonnet',
     label: 'Search Jsonnet libraries',
-    description: 'Search vendored Grafonnet/Jsonnet library and documentation files for API names and examples.',
+    description:
+      'Search vendored Jsonnet dashboard helper, Grafonnet, and Jsonnet library documentation files for API names and examples.',
     parameters: Type.Object({
       pattern: Type.String({ description: 'Plain text search pattern, at least 2 characters.' }),
       path: Type.Optional(
         Type.String({
           description:
-            'Optional vendored library path prefix, such as github.com/grafana/grafonnet/gen/grafonnet-v11.4.0/panel.',
+            'Optional vendored library path prefix, such as github.com/g42/pi-dashboard or github.com/grafana/grafonnet/gen/grafonnet-v11.4.0/panel.',
         })
       ),
     }),
@@ -44,11 +45,11 @@ function makeReadJsonnetLibTool(): AgentTool {
   return {
     name: 'read_grafonnet',
     label: 'Read Jsonnet library file',
-    description: 'Read a range of lines from a vendored Grafonnet/Jsonnet library or documentation file.',
+    description: 'Read a range of lines from a vendored Jsonnet dashboard helper, Grafonnet, or documentation file.',
     parameters: Type.Object({
       path: Type.String({
         description:
-          'Vendored library path, such as github.com/grafana/grafonnet/gen/grafonnet-v11.4.0/docs/panel/timeSeries/index.md.',
+          'Vendored library path, such as github.com/g42/pi-dashboard/main.libsonnet or github.com/grafana/grafonnet/gen/grafonnet-v11.4.0/docs/panel/timeSeries/index.md.',
       }),
       offset: Type.Optional(Type.Number({ description: '1-based start line. Defaults to 1.' })),
       limit: Type.Optional(Type.Number({ description: 'Maximum number of lines. Defaults to 200 and caps at 500.' })),
@@ -66,10 +67,10 @@ function makeListJsonnetLibsTool(): AgentTool {
   return {
     name: 'list_grafonnet',
     label: 'List Jsonnet library files',
-    description: 'List vendored .libsonnet files under a Grafonnet/Jsonnet library path.',
+    description: 'List vendored .libsonnet files under a Jsonnet dashboard helper or Grafonnet library path.',
     parameters: Type.Object({
       path: Type.Optional(
-        Type.String({ description: 'Optional vendored library path prefix. Defaults to Grafonnet v11.4.0.' })
+        Type.String({ description: 'Optional vendored library path prefix. Defaults to github.com/g42/pi-dashboard.' })
       ),
     }),
     async execute(_toolCallId, params, signal) {

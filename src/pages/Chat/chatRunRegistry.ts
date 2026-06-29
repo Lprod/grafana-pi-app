@@ -2,7 +2,7 @@ import type { Agent, BeforeToolCallResult } from '@earendil-works/pi-agent-core'
 import type { DashboardAssistantLaunch } from './dashboardLaunch';
 import type {
   Artifact,
-  DashboardSyncFolderSelection,
+  DashboardSaveFolderSelection,
   InvestigationReport,
   VirtualJsonnetFileSnapshot,
 } from './grafanaTools';
@@ -31,7 +31,7 @@ export type ChatRunSnapshot = {
 };
 
 const liveRuns = new Map<string, ChatRunSnapshot>();
-const dashboardSyncFolderOverrides = new Map<string, DashboardSyncFolderSelection>();
+const dashboardSaveFolderOverrides = new Map<string, DashboardSaveFolderSelection>();
 
 export function storeChatRun(snapshot: Omit<ChatRunSnapshot, 'updatedAt'>): ChatRunSnapshot {
   const stored = {
@@ -51,7 +51,7 @@ export function removeChatRun(id: string | undefined) {
     return;
   }
   liveRuns.delete(id);
-  clearDashboardSyncFolderOverridesForSession(id);
+  clearDashboardSaveFolderOverridesForSession(id);
 }
 
 export function isStoredChatRunAgent(id: string | undefined, agent: Agent | undefined) {
@@ -66,34 +66,34 @@ export function setChatRunConfirmationHandler(id: string | undefined, handler: C
   }
 }
 
-export function setDashboardSyncFolderOverride(
+export function setDashboardSaveFolderOverride(
   sessionId: string,
   toolCallId: string,
-  selection: DashboardSyncFolderSelection
+  selection: DashboardSaveFolderSelection
 ) {
-  dashboardSyncFolderOverrides.set(dashboardSyncFolderKey(sessionId, toolCallId), selection);
+  dashboardSaveFolderOverrides.set(dashboardSaveFolderKey(sessionId, toolCallId), selection);
 }
 
-export function getDashboardSyncFolderOverride(sessionId: string | undefined, toolCallId: string) {
-  return sessionId ? dashboardSyncFolderOverrides.get(dashboardSyncFolderKey(sessionId, toolCallId)) : undefined;
+export function getDashboardSaveFolderOverride(sessionId: string | undefined, toolCallId: string) {
+  return sessionId ? dashboardSaveFolderOverrides.get(dashboardSaveFolderKey(sessionId, toolCallId)) : undefined;
 }
 
-export function clearDashboardSyncFolderOverride(sessionId: string | undefined, toolCallId: string) {
+export function clearDashboardSaveFolderOverride(sessionId: string | undefined, toolCallId: string) {
   if (!sessionId) {
     return;
   }
-  dashboardSyncFolderOverrides.delete(dashboardSyncFolderKey(sessionId, toolCallId));
+  dashboardSaveFolderOverrides.delete(dashboardSaveFolderKey(sessionId, toolCallId));
 }
 
-function clearDashboardSyncFolderOverridesForSession(sessionId: string) {
+function clearDashboardSaveFolderOverridesForSession(sessionId: string) {
   const prefix = `${sessionId}:`;
-  for (const key of dashboardSyncFolderOverrides.keys()) {
+  for (const key of dashboardSaveFolderOverrides.keys()) {
     if (key.startsWith(prefix)) {
-      dashboardSyncFolderOverrides.delete(key);
+      dashboardSaveFolderOverrides.delete(key);
     }
   }
 }
 
-function dashboardSyncFolderKey(sessionId: string, toolCallId: string) {
+function dashboardSaveFolderKey(sessionId: string, toolCallId: string) {
   return `${sessionId}:${toolCallId}`;
 }

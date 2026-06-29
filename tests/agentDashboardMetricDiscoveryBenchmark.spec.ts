@@ -12,7 +12,7 @@ const FORBIDDEN_WRITE_TOOLS = new Set([
   'edit_jsonnet',
   'fix_jsonnet',
   'render_dashboard',
-  'sync_dashboard',
+  'save_dashboard',
   'upload_dashboard',
   'delete_dashboard',
 ]);

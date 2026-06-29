@@ -3,36 +3,36 @@ import { ROUTES } from '../src/constants';
 import { testIds } from '../src/components/testIds';
 
 const LLM_ROUTE = '**/api/plugins/g42-pi-app/resources/llm/api/stream';
-const SYNC_ROUTE = '**/api/plugins/g42-pi-app/resources/managed-dashboards/sync';
+const SAVE_ROUTE = '**/api/plugins/g42-pi-app/resources/jsonnet-dashboards/save';
 
 test.describe('assistant safety workflows', () => {
-  test('requires approval before syncing a persistent dashboard write', async ({ gotoPage, page }) => {
+  test('requires approval before saving a persistent dashboard write', async ({ gotoPage, page }) => {
     const deniedUid = `denied-e2e-${Date.now()}`;
     const approvedUid = `approved-e2e-${Date.now()}`;
     const responses = [
       toolCallResponse(
-        'sync_dashboard',
+        'save_dashboard',
         {
           uid: deniedUid,
           overwrite: true,
           dashboard_jsonnet: `{ title: 'Denied E2E', uid: '${deniedUid}', panels: [] }`,
         },
-        'call_denied_sync'
+        'call_denied_save'
       ),
       textResponse('Denied path handled.'),
       toolCallResponse(
-        'sync_dashboard',
+        'save_dashboard',
         {
           uid: approvedUid,
           overwrite: true,
           dashboard_jsonnet: `{ title: 'Approved E2E', uid: '${approvedUid}', panels: [] }`,
         },
-        'call_approved_sync'
+        'call_approved_save'
       ),
       textResponse('Approved path handled.'),
     ];
     const llmRequests: any[] = [];
-    const syncRequests: any[] = [];
+    const saveRequests: any[] = [];
 
     await page.route(LLM_ROUTE, async (route) => {
       llmRequests.push(await route.request().postDataJSON());
@@ -42,8 +42,8 @@ test.describe('assistant safety workflows', () => {
         body: responses.shift() ?? textResponse('No scripted response available.'),
       });
     });
-    await page.route(SYNC_ROUTE, async (route) => {
-      syncRequests.push(await route.request().postDataJSON());
+    await page.route(SAVE_ROUTE, async (route) => {
+      saveRequests.push(await route.request().postDataJSON());
       await route.fulfill({
         status: 200,
         contentType: 'application/json',
@@ -69,7 +69,7 @@ test.describe('assistant safety workflows', () => {
       await expect(confirmation.getByText(deniedUid, { exact: true })).toBeVisible();
       await page.getByTestId(testIds.chat.toolConfirmationDeny).click();
       await expect(page.getByText('Denied path handled.')).toBeVisible();
-      expect(syncRequests).toHaveLength(0);
+      expect(saveRequests).toHaveLength(0);
 
       await composer.fill('Create a dashboard for confirmation approval');
       await page.getByTestId(testIds.chat.send).click();
@@ -79,15 +79,15 @@ test.describe('assistant safety workflows', () => {
       await page.getByTestId(testIds.chat.toolConfirmationApprove).click();
       await expect(page.getByText('Approved path handled.')).toBeVisible();
 
-      expect(syncRequests).toHaveLength(1);
-      expect(syncRequests[0]).toMatchObject({
+      expect(saveRequests).toHaveLength(1);
+      expect(saveRequests[0]).toMatchObject({
         uid: approvedUid,
         overwrite: true,
       });
-      expect(llmRequests[0].context.tools.map((tool: any) => tool.name)).toContain('sync_dashboard');
+      expect(llmRequests[0].context.tools.map((tool: any) => tool.name)).toContain('save_dashboard');
     } finally {
       await page.unroute(LLM_ROUTE).catch(() => undefined);
-      await page.unroute(SYNC_ROUTE).catch(() => undefined);
+      await page.unroute(SAVE_ROUTE).catch(() => undefined);
     }
   });
 

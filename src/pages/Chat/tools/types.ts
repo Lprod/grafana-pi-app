@@ -66,13 +66,13 @@ export type VirtualJsonnetFileRuntime = {
   markHydrated?: (path: string, version: number) => void;
 };
 
-export type DashboardSyncFolderSelection = {
+export type DashboardSaveFolderSelection = {
   uid?: string;
   title?: string;
 };
 
-export type DashboardSyncFolderRuntime = {
-  getFolderOverride: (toolCallId: string) => DashboardSyncFolderSelection | undefined;
+export type DashboardSaveFolderRuntime = {
+  getFolderOverride: (toolCallId: string) => DashboardSaveFolderSelection | undefined;
   clearFolderOverride: (toolCallId: string) => void;
 };
 
@@ -80,7 +80,7 @@ export type CreateGrafanaToolsOptions = GrafanaToolConfig & {
   runtime?: GrafanaToolRuntime;
   dashboardMutation?: DashboardMutationAPI;
   virtualJsonnetFiles?: VirtualJsonnetFileRuntime;
-  dashboardSyncFolders?: DashboardSyncFolderRuntime;
+  dashboardSaveFolders?: DashboardSaveFolderRuntime;
   investigationReport?: InvestigationReportRuntime;
   artifacts?: ArtifactRuntime;
   skillTools?: AgentTool[];
@@ -145,7 +145,7 @@ export type UploadDashboardParams = {
   folderUid?: string;
 };
 
-export type ManagedDashboardParams = {
+export type JsonnetDashboardParams = {
   dashboard_jsonnet?: string;
   path?: string;
   sessionId?: string;
@@ -153,10 +153,6 @@ export type ManagedDashboardParams = {
   folderUid?: string;
   tags?: string[];
   overwrite?: boolean;
-};
-
-export type ManagedDashboardSourceParams = {
-  uid: string;
 };
 
 export type DashboardUidParams = {
@@ -227,12 +223,10 @@ export type JsonnetFileReadParams = {
   limit?: number;
 };
 
-export type ManagedDashboardToolSet = {
+export type JsonnetDashboardToolSet = {
   all: AgentTool[];
-  listManaged: AgentTool;
-  getSource: AgentTool;
   render: AgentTool;
-  sync: AgentTool;
+  save: AgentTool;
 };
 
 export type JsonnetFileToolSet = {
@@ -255,7 +249,7 @@ export type GrafanaToolRegistry = {
   dashboardMetricContext: AgentTool[];
   dashboards: AgentTool[];
   liveDashboardEditing: AgentTool[];
-  managedDashboards: ManagedDashboardToolSet;
+  jsonnetDashboards: JsonnetDashboardToolSet;
   jsonnetFiles: JsonnetFileToolSet;
   investigation: AgentTool[];
   jsonnet: JsonnetLibToolSet;

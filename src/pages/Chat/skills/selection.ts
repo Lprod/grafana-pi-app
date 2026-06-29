@@ -3,9 +3,9 @@ import type { GrafanaSkill, GrafanaSkillSelection, SkillToolGroup } from './type
 
 const BASE_TOOL_GROUPS: readonly SkillToolGroup[] = ['metrics', 'dashboardMetricContext', 'subagents'];
 const DASHBOARD_INTENT =
-  /\b(dashboard|dashboards|panel|panels|row|rows|variable|variables|jsonnet|render|sync|managed dashboard|grafana view)\b/i;
+  /\b(dashboard|dashboards|panel|panels|row|rows|variable|variables|jsonnet|render|save|sync|grafana view)\b/i;
 const DASHBOARD_WRITE_INTENT =
-  /\b(create|build|generate|make|add|update|edit|modify|change|sync|apply|render|write)\b[\s\S]{0,80}\b(dashboard|panel|jsonnet)\b/i;
+  /\b(create|build|generate|make|add|update|edit|modify|change|save|sync|apply|render|write)\b[\s\S]{0,80}\b(dashboard|panel|jsonnet)\b/i;
 const INVESTIGATION_INTENT =
   /\b(investigat(?:e|ion)|analy[sz](?:e|ing|is)|diagnos(?:e|is|tic)|root cause|why (?:is|are|did)|incident|outage|failure|failing|error spike|latency spike|degradation|regression|what'?s (?:wrong|causing))\b/i;
 const SKILL_REFERENCE = /\$([a-z0-9][a-z0-9-]{0,62}[a-z0-9])/gi;

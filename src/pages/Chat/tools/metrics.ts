@@ -15,7 +15,7 @@ import {
 import { config, getDataSourceSrv } from '@grafana/runtime';
 import { lastValueFrom, type Observable } from 'rxjs';
 import { Type } from 'typebox';
-import { backendFetch } from './client';
+import { backendFetch, formatBackendFetchError } from './client';
 import { textResult, throwIfAborted, truncateText } from './result';
 import type {
   GrafanaToolConfig,
@@ -555,16 +555,24 @@ async function getDatasourceResource<T>(
   path: string,
   params?: Record<string, unknown>
 ): Promise<T> {
-  if (typeof ds.getResource === 'function') {
-    return ds.getResource<T>(path, params);
-  }
+  try {
+    if (typeof ds.getResource === 'function') {
+      return await ds.getResource<T>(path, params);
+    }
 
-  const settings = getDataSourceSrv().getInstanceSettings(ds.getRef());
-  if (!settings?.uid) {
-    throw new Error('Datasource does not expose resource calls');
-  }
+    const settings = getDataSourceSrv().getInstanceSettings(ds.getRef());
+    if (!settings?.uid) {
+      throw new Error('Datasource does not expose resource calls');
+    }
 
-  return backendFetch<T>(`/api/datasources/uid/${encodeURIComponent(settings.uid)}/resources/${path}`, { params });
+    return await backendFetch<T>(`/api/datasources/uid/${encodeURIComponent(settings.uid)}/resources/${path}`, {
+      params,
+    });
+  } catch (error) {
+    throw new Error(
+      `Prometheus resource ${path} failed for datasource ${ds.uid ?? 'unknown'}: ${formatBackendFetchError(error)}`
+    );
+  }
 }
 
 async function runPrometheusQuery(

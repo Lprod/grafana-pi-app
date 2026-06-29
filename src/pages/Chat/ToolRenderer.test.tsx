@@ -775,13 +775,13 @@ describe('ToolRenderer', () => {
     expect(container.textContent).not.toContain('Stored artifact [artifact: artifact_1]');
   });
 
-  it('renders failed sync_dashboard results as error text instead of a successful action card', () => {
+  it('renders failed save_dashboard results as error text instead of a successful action card', () => {
     const errorText =
-      'Grafana request failed (502 Bad Gateway) while calling POST api/plugins/g42-pi-app/resources/managed-dashboards/sync: PluginAppClientSecret not set in config';
+      'Grafana request failed (502 Bad Gateway) while calling POST api/plugins/g42-pi-app/resources/jsonnet-dashboards/save: PluginAppClientSecret not set in config';
 
     const { container } = render(
       <ToolResultMessageBody
-        toolName="sync_dashboard"
+        toolName="save_dashboard"
         content={[{ type: 'text', text: errorText }]}
         details={{}}
         isError
@@ -790,28 +790,28 @@ describe('ToolRenderer', () => {
 
     expect(container.textContent).toContain(errorText);
     expect(container.textContent).toContain('failed');
-    expect(container.textContent).not.toContain('Managed dashboard synced');
+    expect(container.textContent).not.toContain('Dashboard saved');
   });
 
-  it('expands successful nested sync_dashboard results by default', () => {
+  it('expands successful nested save_dashboard results by default', () => {
     const details = {
       type: 'subagent',
       agent: 'dashboard',
       status: 'completed',
       task: 'Create a dashboard.',
-      toolNames: ['sync_dashboard'],
+      toolNames: ['save_dashboard'],
       toolCalls: [
         {
           id: 'tool-1',
-          name: 'sync_dashboard',
+          name: 'save_dashboard',
           args: {
             uid: 'service-health',
           },
           status: 'completed',
           result: {
-            content: [{ type: 'text', text: 'Dashboard synced.' }],
+            content: [{ type: 'text', text: 'Dashboard saved.' }],
             details: {
-              status: 'synced',
+              status: 'success',
               uid: 'service-health',
               url: '/d/service-health/service-health',
               sourceChecksum: '0123456789abcdef',
@@ -829,21 +829,21 @@ describe('ToolRenderer', () => {
         totalTokens: 14,
         cost: 0,
       },
-      finalOutput: 'Dashboard synced.',
+      finalOutput: 'Dashboard saved.',
     };
 
     render(
       <ToolResultMessageBody
         toolName="run_dashboard_agent"
-        content={[{ type: 'text', text: 'Dashboard synced.' }]}
+        content={[{ type: 'text', text: 'Dashboard saved.' }]}
         details={details}
       />
     );
 
-    const row = screen.getByText('sync_dashboard').closest('details') as HTMLDetailsElement | null;
+    const row = screen.getByText('save_dashboard').closest('details') as HTMLDetailsElement | null;
 
     expect(row?.open).toBe(true);
-    expect(screen.getByText('Managed dashboard synced')).toBeInTheDocument();
+    expect(screen.getByText('Dashboard saved')).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Open dashboard' })).toHaveAttribute(
       'href',
       '/d/service-health/service-health'
@@ -1292,47 +1292,6 @@ describe('ToolRenderer', () => {
     expect(container.textContent).toContain('http-overview');
     expect(container.textContent).toContain('Panels');
     expect(container.textContent).toContain('timeseries: 1');
-    expect(container.textContent).not.toContain('Stored artifact [artifact: artifact_1]');
-  });
-
-  it('renders artifactized managed dashboard lists from preview data', () => {
-    const { container } = render(
-      <ToolResultMessageBody
-        toolName="list_managed_dashboards"
-        content={[{ type: 'text', text: 'Stored artifact [artifact: artifact_1] list_managed_dashboards' }]}
-        details={{
-          count: 1,
-          artifactRef: {
-            id: 'artifact_1',
-            kind: 'dashboard',
-            title: 'list_managed_dashboards',
-            toolName: 'list_managed_dashboards',
-            createdAt: '2026-06-05T00:00:00.000Z',
-            bytes: 8192,
-            summary: 'list_managed_dashboards returned 1 items.',
-          },
-          artifactPreview: {
-            type: 'json',
-            data: [
-              {
-                title: 'Service Health',
-                uid: 'service-health',
-                folderUid: 'ops',
-                url: '/d/service-health/service-health',
-                hasJsonnetSource: true,
-                dashboardJsonnetSize: 1234,
-              },
-            ],
-            truncated: true,
-          },
-        }}
-      />
-    );
-
-    expect(container.textContent).toContain('1 managed dashboards');
-    expect(container.textContent).toContain('Service Health');
-    expect(container.textContent).toContain('service-health');
-    expect(container.textContent).toContain('1.2 KiB Jsonnet');
     expect(container.textContent).not.toContain('Stored artifact [artifact: artifact_1]');
   });
 

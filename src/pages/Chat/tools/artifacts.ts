@@ -84,7 +84,6 @@ const JQ_OUTPUT_LIMIT = 80000;
 const ARTIFACT_TOOL_NAMES = new Set([
   'query_prometheus',
   'query_prometheus_raw',
-  'list_managed_dashboards',
   'get_dashboard',
   'grafana_get_dashboard',
   'inspect_dashboard_context',
@@ -97,10 +96,8 @@ const ARTIFACT_TOOL_NAMES = new Set([
   'list_live_dashboard_variables',
   'add_live_dashboard_panel',
   'move_or_resize_live_dashboard_panel',
-  'get_dashboard_source',
-  'grafana_get_managed_dashboard_source',
   'render_dashboard',
-  'grafana_render_managed_dashboard',
+  'save_dashboard',
   'screenshot_dashboard',
   'grafana_screenshot',
 ]);
@@ -116,10 +113,8 @@ const ALWAYS_ARTIFACT_TOOL_NAMES = new Set([
   'list_live_dashboard_variables',
   'add_live_dashboard_panel',
   'move_or_resize_live_dashboard_panel',
-  'get_dashboard_source',
-  'grafana_get_managed_dashboard_source',
   'render_dashboard',
-  'grafana_render_managed_dashboard',
+  'save_dashboard',
   'screenshot_dashboard',
   'grafana_screenshot',
 ]);
@@ -390,11 +385,8 @@ function artifactKind(toolName: string, data: unknown, details: unknown): Artifa
     toolName === 'list_live_dashboard_panels' ||
     toolName === 'get_live_dashboard_layout' ||
     toolName === 'render_dashboard' ||
-    toolName === 'grafana_render_managed_dashboard'
+    toolName === 'save_dashboard'
   ) {
-    return 'dashboard';
-  }
-  if (toolName === 'list_managed_dashboards') {
     return 'dashboard';
   }
   if (isRecord(details) && details.format === 'table') {

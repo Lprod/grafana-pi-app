@@ -80,7 +80,7 @@ test.describe('dashboard live editing benchmark', () => {
         'Use move_or_resize_live_dashboard_panel to move that panel to x=0 y=8 width=12 height=8.',
         `Use add_live_dashboard_panel to add a timeseries panel titled "${addedPanelTitle}" with query sum(rate(http_requests_total{status=~"5.."}[$__rate_interval])) at x=12 y=8 width=12 height=8.`,
         'Verify with list_live_dashboard_panels and get_live_dashboard_layout.',
-        'Do not call apply_live_dashboard_mutation, write_jsonnet, render_dashboard, sync_dashboard, upload_dashboard, or delete_dashboard.',
+        'Do not call apply_live_dashboard_mutation, write_jsonnet, render_dashboard, save_dashboard, upload_dashboard, or delete_dashboard.',
         'After verification succeeds, answer with one short sentence.',
       ].join(' ');
 
@@ -106,7 +106,7 @@ test.describe('dashboard live editing benchmark', () => {
             'apply_live_dashboard_mutation',
             'write_jsonnet',
             'render_dashboard',
-            'sync_dashboard',
+            'save_dashboard',
             'upload_dashboard',
             'delete_dashboard',
           ],
@@ -143,7 +143,7 @@ test.describe('dashboard live editing benchmark', () => {
         'First intentionally call rename_live_dashboard_panel with elementName "panel-does-not-exist" and title "Should fail".',
         'After that fails, call list_live_dashboard_panels to find the correct element.',
         `Then call rename_live_dashboard_panel again to rename the existing panel to "${editedPanelTitle}".`,
-        'Do not call apply_live_dashboard_mutation, write_jsonnet, render_dashboard, sync_dashboard, upload_dashboard, or delete_dashboard.',
+        'Do not call apply_live_dashboard_mutation, write_jsonnet, render_dashboard, save_dashboard, upload_dashboard, or delete_dashboard.',
         'After the successful retry, answer with one short sentence.',
       ].join(' ');
 
@@ -163,7 +163,7 @@ test.describe('dashboard live editing benchmark', () => {
             'apply_live_dashboard_mutation',
             'write_jsonnet',
             'render_dashboard',
-            'sync_dashboard',
+            'save_dashboard',
             'upload_dashboard',
             'delete_dashboard',
           ],
@@ -214,7 +214,7 @@ test.describe('dashboard live editing benchmark', () => {
           'apply_live_dashboard_mutation',
           'write_jsonnet',
           'render_dashboard',
-          'sync_dashboard',
+          'save_dashboard',
           'upload_dashboard',
           'delete_dashboard',
         ],

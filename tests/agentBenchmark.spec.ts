@@ -82,22 +82,28 @@ test.describe('agent benchmark', () => {
       }
     });
 
-    await page.addInitScript(() => {
+    const installRecorder = () => {
       const benchmarkWindow = window as typeof window & {
+        __PI_AGENT_BENCHMARK_CAPTURE__?: boolean;
         __PI_AGENT_BENCHMARK_EVENTS__?: unknown[];
         __PI_AGENT_BENCHMARK_RECORD_EVENT__?: (event: unknown) => void;
         __PI_AGENT_BENCHMARK_STREAM_EVENT__?: (event: unknown) => Promise<void>;
       };
 
+      benchmarkWindow.__PI_AGENT_BENCHMARK_CAPTURE__ = true;
       benchmarkWindow.__PI_AGENT_BENCHMARK_EVENTS__ = [];
       benchmarkWindow.__PI_AGENT_BENCHMARK_RECORD_EVENT__ = (event: unknown) => {
         benchmarkWindow.__PI_AGENT_BENCHMARK_EVENTS__?.push(event);
         void benchmarkWindow.__PI_AGENT_BENCHMARK_STREAM_EVENT__?.(event);
       };
-    });
+    };
 
-    await gotoPage(`/${ROUTES.Chat}`);
+    await page.addInitScript(installRecorder);
+    await Promise.all(page.frames().map((frame) => frame.evaluate(installRecorder).catch(() => undefined)));
+
+    await gotoPage(`/${ROUTES.Chat}?piAgentBenchmark=1`);
     await expect(page.getByText('Ask about metrics, PromQL, or dashboards')).toBeVisible();
+    await Promise.all(page.frames().map((frame) => frame.evaluate(installRecorder).catch(() => undefined)));
 
     const composer = page.getByTestId(testIds.chat.composer);
     const send = page.getByTestId(testIds.chat.send);
@@ -111,14 +117,7 @@ test.describe('agent benchmark', () => {
     let benchmarkFinished = false;
     const approvalTask = autoApproveToolConfirmations(page, () => benchmarkFinished);
     try {
-      await page.waitForFunction(
-        () => {
-          const benchmarkWindow = window as typeof window & { __PI_AGENT_BENCHMARK_EVENTS__?: BenchmarkEvent[] };
-          return benchmarkWindow.__PI_AGENT_BENCHMARK_EVENTS__?.some((event) => event.type === 'agent_end') ?? false;
-        },
-        undefined,
-        { timeout: timeoutMs }
-      );
+      await waitForBenchmarkAgentEnd(page, timeoutMs);
     } catch {
       timedOut = true;
       await page
@@ -162,10 +161,30 @@ test.describe('agent benchmark', () => {
 });
 
 async function readBenchmarkEvents(page: Page): Promise<BenchmarkEvent[]> {
-  return page.evaluate(() => {
-    const benchmarkWindow = window as typeof window & { __PI_AGENT_BENCHMARK_EVENTS__?: BenchmarkEvent[] };
-    return benchmarkWindow.__PI_AGENT_BENCHMARK_EVENTS__ ?? [];
-  });
+  const frameEvents = await Promise.all(
+    page.frames().map((frame) =>
+      frame
+        .evaluate(() => {
+          const benchmarkWindow = window as typeof window & { __PI_AGENT_BENCHMARK_EVENTS__?: BenchmarkEvent[] };
+          return benchmarkWindow.__PI_AGENT_BENCHMARK_EVENTS__ ?? [];
+        })
+        .catch(() => [] as BenchmarkEvent[])
+    )
+  );
+
+  return frameEvents.flat();
+}
+
+async function waitForBenchmarkAgentEnd(page: Page, timeoutMs: number) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const events = await readBenchmarkEvents(page);
+    if (events.some((event) => event.type === 'agent_end')) {
+      return;
+    }
+    await page.waitForTimeout(500);
+  }
+  throw new Error(`Agent benchmark timed out after ${timeoutMs}ms.`);
 }
 
 async function autoApproveToolConfirmations(page: Page, isDone: () => boolean) {
@@ -440,11 +459,11 @@ function findDashboardQualityError(events: BenchmarkEvent[]) {
   }
 
   const nestedCalls = dashboardCall.nestedToolCalls ?? [];
-  const synced = [...nestedCalls]
+  const saved = [...nestedCalls]
     .reverse()
-    .find((call) => call.name === 'sync_dashboard' && call.status === 'completed' && !call.isError);
-  if (!synced) {
-    return 'dashboard agent did not complete nested sync_dashboard';
+    .find((call) => call.name === 'save_dashboard' && call.status === 'completed' && !call.isError);
+  if (!saved) {
+    return 'dashboard agent did not complete nested save_dashboard';
   }
 
   const rendered = [...nestedCalls]

@@ -218,8 +218,8 @@ func (s *virtualJsonnetFileStore) write(request jsonnetFileWriteRequest) (jsonne
 	if strings.TrimSpace(request.Content) == "" {
 		return jsonnetFileResponse{}, errors.New("content is required")
 	}
-	if len([]byte(request.Content)) > maxManagedDashboardJsonnetSourceBytes {
-		return jsonnetFileResponse{}, fmt.Errorf("content is too large: %d bytes exceeds %d bytes", len([]byte(request.Content)), maxManagedDashboardJsonnetSourceBytes)
+	if len([]byte(request.Content)) > maxJsonnetDashboardSourceBytes {
+		return jsonnetFileResponse{}, fmt.Errorf("content is too large: %d bytes exceeds %d bytes", len([]byte(request.Content)), maxJsonnetDashboardSourceBytes)
 	}
 
 	s.mu.Lock()
@@ -314,8 +314,8 @@ func (s *virtualJsonnetFileStore) edit(request jsonnetFileEditRequest) (jsonnetF
 	if newContent == file.Content {
 		return jsonnetFileResponse{}, errors.New("edits produced no changes")
 	}
-	if len([]byte(newContent)) > maxManagedDashboardJsonnetSourceBytes {
-		return jsonnetFileResponse{}, fmt.Errorf("edited content is too large: %d bytes exceeds %d bytes", len([]byte(newContent)), maxManagedDashboardJsonnetSourceBytes)
+	if len([]byte(newContent)) > maxJsonnetDashboardSourceBytes {
+		return jsonnetFileResponse{}, fmt.Errorf("edited content is too large: %d bytes exceeds %d bytes", len([]byte(newContent)), maxJsonnetDashboardSourceBytes)
 	}
 	if _, err := renderJsonnetSource(newContent); err != nil {
 		if sourceWindow := sourceWindowForJsonnetError(newContent, err); sourceWindow != "" {
@@ -368,8 +368,8 @@ func (s *virtualJsonnetFileStore) repair(request jsonnetFileRepairRequest) (json
 	if newContent == file.Content {
 		return jsonnetFileResponse{}, errors.New("no supported Jsonnet repair was found")
 	}
-	if len([]byte(newContent)) > maxManagedDashboardJsonnetSourceBytes {
-		return jsonnetFileResponse{}, fmt.Errorf("repaired content is too large: %d bytes exceeds %d bytes", len([]byte(newContent)), maxManagedDashboardJsonnetSourceBytes)
+	if len([]byte(newContent)) > maxJsonnetDashboardSourceBytes {
+		return jsonnetFileResponse{}, fmt.Errorf("repaired content is too large: %d bytes exceeds %d bytes", len([]byte(newContent)), maxJsonnetDashboardSourceBytes)
 	}
 	if _, err := renderJsonnetSource(newContent); err != nil {
 		if sourceWindow := sourceWindowForJsonnetError(newContent, err); sourceWindow != "" {

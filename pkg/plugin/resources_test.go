@@ -83,6 +83,69 @@ func TestResourceAccessDefaultsToAll(t *testing.T) {
 	}
 }
 
+func TestJsonnetLibEndpointsExposeBundledDashboardHelpers(t *testing.T) {
+	inst, err := NewApp(context.Background(), backend.AppInstanceSettings{})
+	if err != nil {
+		t.Fatalf("new app: %s", err)
+	}
+	app := inst.(*App)
+
+	var listSender mockCallResourceResponseSender
+	listBody := []byte(`{}`)
+	err = app.CallResource(context.Background(), &backend.CallResourceRequest{
+		PluginContext: adminPluginContext(),
+		Method:        http.MethodPost,
+		Path:          "jsonnet-libs/list",
+		Body:          listBody,
+	}, &listSender)
+	if err != nil {
+		t.Fatalf("CallResource list error: %s", err)
+	}
+	if listSender.responses[0].Status != http.StatusOK {
+		t.Fatalf("expected list 200, got %d: %s", listSender.responses[0].Status, string(listSender.responses[0].Body))
+	}
+	var listResponse struct {
+		BasePath string   `json:"basePath"`
+		Result   []string `json:"result"`
+	}
+	if err := json.Unmarshal(listSender.responses[0].Body, &listResponse); err != nil {
+		t.Fatalf("decode list response: %s", err)
+	}
+	if listResponse.BasePath != "github.com/g42/pi-dashboard" || !containsString(listResponse.Result, "main.libsonnet") {
+		t.Fatalf("helper library not listed: %#v", listResponse)
+	}
+
+	readBody, _ := json.Marshal(jsonnetLibReadRequest{Path: "github.com/g42/pi-dashboard/main.libsonnet", Offset: 1, Limit: 20})
+	var readSender mockCallResourceResponseSender
+	err = app.CallResource(context.Background(), &backend.CallResourceRequest{
+		PluginContext: adminPluginContext(),
+		Method:        http.MethodPost,
+		Path:          "jsonnet-libs/read",
+		Body:          readBody,
+	}, &readSender)
+	if err != nil {
+		t.Fatalf("CallResource read error: %s", err)
+	}
+	if readSender.responses[0].Status != http.StatusOK || !strings.Contains(string(readSender.responses[0].Body), "refIds") {
+		t.Fatalf("helper library not readable, got %d: %s", readSender.responses[0].Status, string(readSender.responses[0].Body))
+	}
+
+	searchBody, _ := json.Marshal(jsonnetLibSearchRequest{Pattern: "statStrip"})
+	var searchSender mockCallResourceResponseSender
+	err = app.CallResource(context.Background(), &backend.CallResourceRequest{
+		PluginContext: adminPluginContext(),
+		Method:        http.MethodPost,
+		Path:          "jsonnet-libs/search",
+		Body:          searchBody,
+	}, &searchSender)
+	if err != nil {
+		t.Fatalf("CallResource search error: %s", err)
+	}
+	if searchSender.responses[0].Status != http.StatusOK || !strings.Contains(string(searchSender.responses[0].Body), "main.libsonnet") {
+		t.Fatalf("helper library not searchable, got %d: %s", searchSender.responses[0].Status, string(searchSender.responses[0].Body))
+	}
+}
+
 func TestResourceAccessAdminsModeDeniesViewer(t *testing.T) {
 	jsonData, _ := json.Marshal(appSettings{AccessMode: accessModeAdmins})
 	inst, err := NewApp(context.Background(), backend.AppInstanceSettings{JSONData: jsonData})
@@ -595,7 +658,7 @@ func TestOpenAIRequestPrefixesFailedToolResults(t *testing.T) {
 				{
 					Role:       "toolResult",
 					ToolCallID: "call_1",
-					ToolName:   "sync_dashboard",
+					ToolName:   "save_dashboard",
 					Content: json.RawMessage(
 						`[{"type":"text","text":"Grafana request failed (502 Bad Gateway): PluginAppClientSecret not set in config"}]`,
 					),
@@ -608,13 +671,13 @@ func TestOpenAIRequestPrefixesFailedToolResults(t *testing.T) {
 	if len(payload.Messages) != 1 {
 		t.Fatalf("expected 1 message, got %d", len(payload.Messages))
 	}
-	expected := "TOOL ERROR [sync_dashboard]: Grafana request failed (502 Bad Gateway): PluginAppClientSecret not set in config"
+	expected := "TOOL ERROR [save_dashboard]: Grafana request failed (502 Bad Gateway): PluginAppClientSecret not set in config"
 	if payload.Messages[0].Content != expected {
 		t.Fatalf("unexpected failed tool content:\nwant: %q\n got: %q", expected, payload.Messages[0].Content)
 	}
 }
 
-func TestManagedDashboardRenderUsesVendoredJsonnetAndManagerMetadata(t *testing.T) {
+func TestJsonnetDashboardRenderUsesVendoredJsonnetAndEditableModel(t *testing.T) {
 	jsonData, _ := json.Marshal(appSettings{AllowedPrometheusDatasourceUIDs: []string{"prom-main"}})
 	inst, err := NewApp(context.Background(), backend.AppInstanceSettings{JSONData: jsonData})
 	if err != nil {
@@ -638,7 +701,7 @@ g.dashboard.new('API Service RED')
   + g.panel.timeSeries.queryOptions.withTargets([target])
   + g.panel.timeSeries.standardOptions.withUnit('reqps'),
 ])`
-	body, _ := json.Marshal(managedDashboardRequest{
+	body, _ := json.Marshal(jsonnetDashboardRequest{
 		DashboardJsonnet: source,
 		UID:              "direct-jsonnet-api",
 		FolderUID:        "observability",
@@ -648,7 +711,7 @@ g.dashboard.new('API Service RED')
 	err = app.CallResource(context.Background(), &backend.CallResourceRequest{
 		PluginContext: adminPluginContext(),
 		Method:        http.MethodPost,
-		Path:          "managed-dashboards/render",
+		Path:          "jsonnet-dashboards/render",
 		Body:          body,
 	}, &sender)
 	if err != nil {
@@ -661,37 +724,21 @@ g.dashboard.new('API Service RED')
 		t.Fatalf("expected 200, got %d: %s", sender.responses[0].Status, string(sender.responses[0].Body))
 	}
 
-	var response managedDashboardRenderResponse
+	var response jsonnetDashboardRenderResponse
 	if err := json.Unmarshal(sender.responses[0].Body, &response); err != nil {
 		t.Fatalf("decode response: %s", err)
 	}
 	if response.Dashboard["title"] != "API Service RED" {
 		t.Fatalf("unexpected title: %v", response.Dashboard["title"])
 	}
-	if response.Resource.Metadata.Name != "direct-jsonnet-api" {
-		t.Fatalf("unexpected resource name: %s", response.Resource.Metadata.Name)
+	if response.Dashboard["uid"] != "direct-jsonnet-api" {
+		t.Fatalf("unexpected dashboard uid: %s", response.Dashboard["uid"])
 	}
-	if response.Dashboard["editable"] != false {
-		t.Fatalf("managed dashboards should render as not editable: %#v", response.Dashboard["editable"])
+	if response.Dashboard["editable"] != true {
+		t.Fatalf("Jsonnet-created dashboards should render as editable: %#v", response.Dashboard["editable"])
 	}
-	if !containsTag(response.Dashboard["tags"], "service") || !containsTag(response.Dashboard["tags"], "managed-by-observability-analyst") {
-		t.Fatalf("expected source and managed tags, got %#v", response.Dashboard["tags"])
-	}
-	annotations := response.Resource.Metadata.Annotations
-	if annotations[annotationManagedBy] != "plugin" || annotations[annotationManagerID] != pluginID {
-		t.Fatalf("missing plugin manager annotations: %#v", annotations)
-	}
-	if _, exists := annotations["grafana.app/managerAllowsEdits"]; exists {
-		t.Fatalf("managerAllowsEdits should not be set: %#v", annotations)
-	}
-	if annotations[annotationFolder] != "observability" {
-		t.Fatalf("missing folder annotation: %#v", annotations)
-	}
-	if annotations[annotationJsonnetSource] != source {
-		t.Fatalf("stored Jsonnet source was not preserved")
-	}
-	if annotations[annotationSourcePath] != "inline-jsonnet" {
-		t.Fatalf("unexpected source path annotation: %#v", annotations)
+	if !containsTag(response.Dashboard["tags"], "service") || !containsTag(response.Dashboard["tags"], "genai") {
+		t.Fatalf("expected source and genai tags, got %#v", response.Dashboard["tags"])
 	}
 	if !strings.HasPrefix(response.SourceChecksum, "sha256:") {
 		t.Fatalf("missing source checksum: %s", response.SourceChecksum)
@@ -713,7 +760,7 @@ g.dashboard.new('API Service RED')
 	}
 }
 
-func TestManagedDashboardRenderStoresModelAuthoredJsonnet(t *testing.T) {
+func TestJsonnetDashboardRenderStoresModelAuthoredDashboard(t *testing.T) {
 	jsonData, _ := json.Marshal(appSettings{AllowedPrometheusDatasourceUIDs: []string{"prom-main"}})
 	inst, err := NewApp(context.Background(), backend.AppInstanceSettings{JSONData: jsonData})
 	if err != nil {
@@ -750,7 +797,7 @@ func TestManagedDashboardRenderStoresModelAuthoredJsonnet(t *testing.T) {
     },
   ],
 }`
-	body, _ := json.Marshal(managedDashboardRequest{
+	body, _ := json.Marshal(jsonnetDashboardRequest{
 		DashboardJsonnet: source,
 		Tags:             []string{"reviewable"},
 	})
@@ -759,7 +806,7 @@ func TestManagedDashboardRenderStoresModelAuthoredJsonnet(t *testing.T) {
 	err = app.CallResource(context.Background(), &backend.CallResourceRequest{
 		PluginContext: adminPluginContext(),
 		Method:        http.MethodPost,
-		Path:          "managed-dashboards/render",
+		Path:          "jsonnet-dashboards/render",
 		Body:          body,
 	}, &sender)
 	if err != nil {
@@ -772,15 +819,15 @@ func TestManagedDashboardRenderStoresModelAuthoredJsonnet(t *testing.T) {
 		t.Fatalf("expected 200, got %d: %s", sender.responses[0].Status, string(sender.responses[0].Body))
 	}
 
-	var response managedDashboardRenderResponse
+	var response jsonnetDashboardRenderResponse
 	if err := json.Unmarshal(sender.responses[0].Body, &response); err != nil {
 		t.Fatalf("decode response: %s", err)
 	}
 	if response.Dashboard["title"] != "Custom Prometheus Review" {
 		t.Fatalf("unexpected title: %v", response.Dashboard["title"])
 	}
-	if response.Dashboard["editable"] != false {
-		t.Fatalf("managed dashboards should render as not editable: %#v", response.Dashboard["editable"])
+	if response.Dashboard["editable"] != true {
+		t.Fatalf("Jsonnet-created dashboards should render as editable: %#v", response.Dashboard["editable"])
 	}
 	if !containsTag(response.Dashboard["tags"], "incident") || !containsTag(response.Dashboard["tags"], "reviewable") || !containsTag(response.Dashboard["tags"], "genai") {
 		t.Fatalf("missing expected tags: %#v", response.Dashboard["tags"])
@@ -802,10 +849,189 @@ func TestManagedDashboardRenderStoresModelAuthoredJsonnet(t *testing.T) {
 	if !strings.Contains(errorExpr, "clamp_min") || !strings.Contains(errorExpr, "sum by (vm, route)") {
 		t.Fatalf("unexpected error ratio expression: %s", errorExpr)
 	}
+}
 
-	annotations := response.Resource.Metadata.Annotations
-	if annotations[annotationJsonnetSource] != source || annotations[annotationSourceChecksum] != response.SourceChecksum {
-		t.Fatalf("missing Jsonnet source annotations: %#v", annotations)
+func TestJsonnetDashboardRenderUsesBundledDashboardHelpers(t *testing.T) {
+	jsonData, _ := json.Marshal(appSettings{AllowedPrometheusDatasourceUIDs: []string{"prom-main"}})
+	inst, err := NewApp(context.Background(), backend.AppInstanceSettings{JSONData: jsonData})
+	if err != nil {
+		t.Fatalf("new app: %s", err)
+	}
+	app := inst.(*App)
+	source := `local d = import 'github.com/g42/pi-dashboard/main.libsonnet';
+
+d.dashboard.new(
+  title='Helper Service Overview',
+  uid='helper-service-overview',
+  tags=['service'],
+  rows=[
+    d.row('Overview', [
+      d.layout.twoUp([
+        d.panel.timeseries(
+          title='Request rate',
+          datasourceUid='prom-main',
+          targets=[d.prom.query('sum(rate(http_requests_total[$__rate_interval]))', 'prom-main', legend='requests')],
+          unit='reqps',
+        ),
+        d.panel.stat(
+          title='Error ratio',
+          datasourceUid='prom-main',
+          targets=[d.prom.query('sum(rate(http_requests_total{status=~"5.."}[$__rate_interval]))', 'prom-main')],
+          unit='percentunit',
+        ),
+      ]),
+      d.layout.statStrip([
+        d.panel.stat(
+          title='Instances',
+          datasourceUid='prom-main',
+          targets=[d.prom.query('count(up)', 'prom-main', instant=true)],
+        ),
+        d.panel.stat(
+          title='Down',
+          datasourceUid='prom-main',
+          targets=[d.prom.query('count(up == 0)', 'prom-main', instant=true)],
+        ),
+      ]),
+    ]),
+    d.row('Inventory', [
+      d.layout.full(
+        d.panel.table(
+          title='Targets',
+          datasourceUid='prom-main',
+          targets=[d.prom.query('up', 'prom-main', instant=true, format='table')],
+          columns=['job', 'instance', 'Value'],
+          rename={ Value: 'Up' },
+        ),
+        h=10,
+      ),
+    ]),
+  ],
+)`
+	body, _ := json.Marshal(jsonnetDashboardRequest{DashboardJsonnet: source})
+
+	var sender mockCallResourceResponseSender
+	err = app.CallResource(context.Background(), &backend.CallResourceRequest{
+		PluginContext: adminPluginContext(),
+		Method:        http.MethodPost,
+		Path:          "jsonnet-dashboards/render",
+		Body:          body,
+	}, &sender)
+	if err != nil {
+		t.Fatalf("CallResource error: %s", err)
+	}
+	if sender.responses[0].Status != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", sender.responses[0].Status, string(sender.responses[0].Body))
+	}
+
+	var response jsonnetDashboardRenderResponse
+	if err := json.Unmarshal(sender.responses[0].Body, &response); err != nil {
+		t.Fatalf("decode response: %s", err)
+	}
+	panels := response.Dashboard["panels"].([]any)
+	if len(panels) != 7 {
+		t.Fatalf("expected two row panels and five content panels, got %#v", panels)
+	}
+	firstRow := panels[0].(map[string]any)
+	if firstRow["type"] != "row" || firstRow["title"] != "Overview" {
+		t.Fatalf("unexpected first row panel: %#v", firstRow)
+	}
+	firstMetric := panels[1].(map[string]any)
+	secondMetric := panels[2].(map[string]any)
+	firstGrid := firstMetric["gridPos"].(map[string]any)
+	secondGrid := secondMetric["gridPos"].(map[string]any)
+	if firstGrid["x"] != float64(0) || firstGrid["w"] != float64(12) || firstGrid["y"] != float64(1) {
+		t.Fatalf("unexpected first metric grid: %#v", firstGrid)
+	}
+	if secondGrid["x"] != float64(12) || secondGrid["w"] != float64(12) || secondGrid["y"] != float64(1) {
+		t.Fatalf("unexpected second metric grid: %#v", secondGrid)
+	}
+	firstTarget := firstMetric["targets"].([]any)[0].(map[string]any)
+	if firstTarget["refId"] != "A" || firstTarget["legendFormat"] != "requests" {
+		t.Fatalf("helper did not assign target fields: %#v", firstTarget)
+	}
+	tablePanel := panels[6].(map[string]any)
+	if tablePanel["type"] != "table" {
+		t.Fatalf("expected final table panel, got %#v", tablePanel)
+	}
+	transformations := tablePanel["transformations"].([]any)
+	if len(transformations) != 3 || transformations[0].(map[string]any)["id"] != "labelsToFields" || transformations[1].(map[string]any)["id"] != "filterFieldsByName" || transformations[2].(map[string]any)["id"] != "organize" {
+		t.Fatalf("unexpected table transformations: %#v", transformations)
+	}
+	if response.Validation != nil && len(response.Validation.Warnings) > 0 {
+		t.Fatalf("helper dashboard should render without validation warnings, got %#v", response.Validation)
+	}
+}
+
+func TestJsonnetDashboardRenderReturnsLayoutAndTableValidationWarnings(t *testing.T) {
+	jsonData, _ := json.Marshal(appSettings{AllowedPrometheusDatasourceUIDs: []string{"prom-main"}})
+	inst, err := NewApp(context.Background(), backend.AppInstanceSettings{JSONData: jsonData})
+	if err != nil {
+		t.Fatalf("new app: %s", err)
+	}
+	app := inst.(*App)
+	source := `{
+  title: 'Needs Layout Repair',
+  uid: 'needs-layout-repair',
+  panels: [
+    {
+      id: 1,
+      title: 'Left',
+      type: 'timeseries',
+      gridPos: { x: 0, y: 0, w: 18, h: 8 },
+      datasource: { type: 'prometheus', uid: 'prom-main' },
+      targets: [{ refId: 'A', datasource: { type: 'prometheus', uid: 'prom-main' }, expr: 'up' }],
+    },
+    {
+      id: 2,
+      title: 'Overlaps and overflows',
+      type: 'timeseries',
+      gridPos: { x: 12, y: 0, w: 18, h: 8 },
+      datasource: { type: 'prometheus', uid: 'prom-main' },
+      targets: [{ refId: 'A', datasource: { type: 'prometheus', uid: 'prom-main' }, expr: 'up' }],
+    },
+    {
+      id: 3,
+      title: 'Uncontrolled table',
+      type: 'table',
+      datasource: { type: 'prometheus', uid: 'prom-main' },
+      targets: [{ refId: 'A', datasource: { type: 'prometheus', uid: 'prom-main' }, expr: 'up', instant: true, format: 'table' }],
+    },
+  ],
+}`
+	body, _ := json.Marshal(jsonnetDashboardRequest{DashboardJsonnet: source})
+
+	var sender mockCallResourceResponseSender
+	err = app.CallResource(context.Background(), &backend.CallResourceRequest{
+		PluginContext: adminPluginContext(),
+		Method:        http.MethodPost,
+		Path:          "jsonnet-dashboards/render",
+		Body:          body,
+	}, &sender)
+	if err != nil {
+		t.Fatalf("CallResource error: %s", err)
+	}
+	if sender.responses[0].Status != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", sender.responses[0].Status, string(sender.responses[0].Body))
+	}
+
+	var response jsonnetDashboardRenderResponse
+	if err := json.Unmarshal(sender.responses[0].Body, &response); err != nil {
+		t.Fatalf("decode response: %s", err)
+	}
+	if response.Validation == nil || len(response.Validation.Warnings) == 0 || len(response.Validation.LayoutFixes) == 0 {
+		t.Fatalf("expected validation warnings and layout fixes, got %#v", response.Validation)
+	}
+	if !validationHasWarning(response.Validation, "layout_overflow") || !validationHasWarning(response.Validation, "layout_collision") || !validationHasWarning(response.Validation, "table_columns_uncontrolled") {
+		t.Fatalf("missing expected validation warning codes: %#v", response.Validation.Warnings)
+	}
+	panels := response.Dashboard["panels"].([]any)
+	secondGrid := panels[1].(map[string]any)["gridPos"].(map[string]any)
+	thirdGrid := panels[2].(map[string]any)["gridPos"].(map[string]any)
+	if secondGrid["x"] != float64(0) || secondGrid["y"] == float64(0) {
+		t.Fatalf("overlapping panel should have been moved below the first row, got %#v", secondGrid)
+	}
+	if thirdGrid["x"] == nil || thirdGrid["y"] == nil || thirdGrid["w"] == nil || thirdGrid["h"] == nil {
+		t.Fatalf("panel without gridPos should receive a grid position, got %#v", thirdGrid)
 	}
 }
 
@@ -826,7 +1052,7 @@ func TestVirtualJsonnetFileWriteEditRead(t *testing.T) {
 	err = app.CallResource(context.Background(), &backend.CallResourceRequest{
 		PluginContext: adminPluginContext(),
 		Method:        http.MethodPost,
-		Path:          "managed-dashboards/jsonnet-files/write",
+		Path:          "jsonnet-dashboards/jsonnet-files/write",
 		Body:          writeBody,
 	}, &writeSender)
 	if err != nil {
@@ -858,7 +1084,7 @@ func TestVirtualJsonnetFileWriteEditRead(t *testing.T) {
 	err = app.CallResource(context.Background(), &backend.CallResourceRequest{
 		PluginContext: adminPluginContext(),
 		Method:        http.MethodPost,
-		Path:          "managed-dashboards/jsonnet-files/edit",
+		Path:          "jsonnet-dashboards/jsonnet-files/edit",
 		Body:          editBody,
 	}, &editSender)
 	if err != nil {
@@ -880,7 +1106,7 @@ func TestVirtualJsonnetFileWriteEditRead(t *testing.T) {
 	err = app.CallResource(context.Background(), &backend.CallResourceRequest{
 		PluginContext: adminPluginContext(),
 		Method:        http.MethodPost,
-		Path:          "managed-dashboards/jsonnet-files/read",
+		Path:          "jsonnet-dashboards/jsonnet-files/read",
 		Body:          readBody,
 	}, &readSender)
 	if err != nil {
@@ -895,6 +1121,64 @@ func TestVirtualJsonnetFileWriteEditRead(t *testing.T) {
 	}
 	if readResponse.DashboardJsonnet != "" {
 		t.Fatalf("read response should not include full source")
+	}
+}
+
+func TestJsonnetDashboardRenderSupportsBundledHelperCompatibilityAliases(t *testing.T) {
+	jsonData, _ := json.Marshal(appSettings{AllowedPrometheusDatasourceUIDs: []string{"prometheus"}})
+	inst, err := NewApp(context.Background(), backend.AppInstanceSettings{JSONData: jsonData})
+	if err != nil {
+		t.Fatalf("new app: %s", err)
+	}
+	app := inst.(*App)
+	source := `local d = import 'github.com/g42/pi-dashboard/main.libsonnet';
+
+d.dashboard.new('Alias Dashboard')
++ d.dashboard.with_template([
+  d.templating.list.new(
+    name='job',
+    datasourceUid='prometheus',
+    query='label_values(up, job)',
+    label='Job',
+    includeAll=true,
+    multi=true,
+    current='All',
+  ),
+])`
+	body, _ := json.Marshal(jsonnetDashboardRequest{DashboardJsonnet: source})
+
+	var sender mockCallResourceResponseSender
+	err = app.CallResource(context.Background(), &backend.CallResourceRequest{
+		PluginContext: adminPluginContext(),
+		Method:        http.MethodPost,
+		Path:          "jsonnet-dashboards/render",
+		Body:          body,
+	}, &sender)
+	if err != nil {
+		t.Fatalf("CallResource error: %s", err)
+	}
+	if sender.responses[0].Status != http.StatusOK {
+		t.Fatalf("expected render success, got %d: %s", sender.responses[0].Status, string(sender.responses[0].Body))
+	}
+
+	var response jsonnetDashboardRenderResponse
+	if err := json.Unmarshal(sender.responses[0].Body, &response); err != nil {
+		t.Fatalf("decode response: %s", err)
+	}
+	if response.Dashboard["uid"] != "alias-dashboard" {
+		t.Fatalf("expected generated slug uid, got %#v", response.Dashboard["uid"])
+	}
+	templating, ok := response.Dashboard["templating"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected templating object, got %#v", response.Dashboard["templating"])
+	}
+	list, ok := templating["list"].([]any)
+	if !ok || len(list) != 1 {
+		t.Fatalf("expected one templating variable, got %#v", templating["list"])
+	}
+	variable := list[0].(map[string]any)
+	if variable["name"] != "job" || variable["query"] != "label_values(up, job)" {
+		t.Fatalf("unexpected templating variable: %#v", variable)
 	}
 }
 
@@ -913,7 +1197,7 @@ func TestVirtualJsonnetFileEditRejectsInvalidJsonnet(t *testing.T) {
 	err = app.CallResource(context.Background(), &backend.CallResourceRequest{
 		PluginContext: adminPluginContext(),
 		Method:        http.MethodPost,
-		Path:          "managed-dashboards/jsonnet-files/write",
+		Path:          "jsonnet-dashboards/jsonnet-files/write",
 		Body:          writeBody,
 	}, &writeSender)
 	if err != nil {
@@ -931,7 +1215,7 @@ func TestVirtualJsonnetFileEditRejectsInvalidJsonnet(t *testing.T) {
 	err = app.CallResource(context.Background(), &backend.CallResourceRequest{
 		PluginContext: adminPluginContext(),
 		Method:        http.MethodPost,
-		Path:          "managed-dashboards/jsonnet-files/edit",
+		Path:          "jsonnet-dashboards/jsonnet-files/edit",
 		Body:          editBody,
 	}, &editSender)
 	if err != nil {
@@ -946,7 +1230,7 @@ func TestVirtualJsonnetFileEditRejectsInvalidJsonnet(t *testing.T) {
 	err = app.CallResource(context.Background(), &backend.CallResourceRequest{
 		PluginContext: adminPluginContext(),
 		Method:        http.MethodPost,
-		Path:          "managed-dashboards/jsonnet-files/read",
+		Path:          "jsonnet-dashboards/jsonnet-files/read",
 		Body:          readBody,
 	}, &readSender)
 	if err != nil {
@@ -1016,7 +1300,7 @@ g.dashboard.new(
 	err = app.CallResource(context.Background(), &backend.CallResourceRequest{
 		PluginContext: adminPluginContext(),
 		Method:        http.MethodPost,
-		Path:          "managed-dashboards/jsonnet-files/write",
+		Path:          "jsonnet-dashboards/jsonnet-files/write",
 		Body:          writeBody,
 	}, &writeSender)
 	if err != nil {
@@ -1031,7 +1315,7 @@ g.dashboard.new(
 	err = app.CallResource(context.Background(), &backend.CallResourceRequest{
 		PluginContext: adminPluginContext(),
 		Method:        http.MethodPost,
-		Path:          "managed-dashboards/jsonnet-files/repair",
+		Path:          "jsonnet-dashboards/jsonnet-files/repair",
 		Body:          repairBody,
 	}, &repairSender)
 	if err != nil {
@@ -1051,7 +1335,7 @@ g.dashboard.new(
 		t.Fatalf("repair did not rewrite panel constructors: %s", repairResponse.DashboardJsonnet)
 	}
 
-	renderBody, _ := json.Marshal(managedDashboardRequest{
+	renderBody, _ := json.Marshal(jsonnetDashboardRequest{
 		SessionID: "session-repair",
 		Path:      "dashboard.jsonnet",
 	})
@@ -1059,7 +1343,7 @@ g.dashboard.new(
 	err = app.CallResource(context.Background(), &backend.CallResourceRequest{
 		PluginContext: adminPluginContext(),
 		Method:        http.MethodPost,
-		Path:          "managed-dashboards/render",
+		Path:          "jsonnet-dashboards/render",
 		Body:          renderBody,
 	}, &renderSender)
 	if err != nil {
@@ -1068,11 +1352,11 @@ g.dashboard.new(
 	if renderSender.responses[0].Status != http.StatusOK {
 		t.Fatalf("expected render 200, got %d: %s", renderSender.responses[0].Status, string(renderSender.responses[0].Body))
 	}
-	var renderResponse managedDashboardRenderResponse
+	var renderResponse jsonnetDashboardRenderResponse
 	if err := json.Unmarshal(renderSender.responses[0].Body, &renderResponse); err != nil {
 		t.Fatalf("decode render response: %s", err)
 	}
-	if renderResponse.Resource.Metadata.Name != "http-request-rate-errors" || len(renderResponse.Dashboard["panels"].([]any)) != 2 {
+	if renderResponse.Dashboard["uid"] != "http-request-rate-errors" || len(renderResponse.Dashboard["panels"].([]any)) != 2 {
 		t.Fatalf("unexpected rendered dashboard: %#v", renderResponse.Dashboard)
 	}
 }
@@ -1113,7 +1397,7 @@ g.dashboard.new(
 	err = app.CallResource(context.Background(), &backend.CallResourceRequest{
 		PluginContext: adminPluginContext(),
 		Method:        http.MethodPost,
-		Path:          "managed-dashboards/jsonnet-files/write",
+		Path:          "jsonnet-dashboards/jsonnet-files/write",
 		Body:          writeBody,
 	}, &writeSender)
 	if err != nil {
@@ -1128,7 +1412,7 @@ g.dashboard.new(
 	err = app.CallResource(context.Background(), &backend.CallResourceRequest{
 		PluginContext: adminPluginContext(),
 		Method:        http.MethodPost,
-		Path:          "managed-dashboards/jsonnet-files/repair",
+		Path:          "jsonnet-dashboards/jsonnet-files/repair",
 		Body:          repairBody,
 	}, &repairSender)
 	if err != nil {
@@ -1145,7 +1429,7 @@ g.dashboard.new(
 		t.Fatalf("unexpected repair response: %#v", repairResponse)
 	}
 
-	renderBody, _ := json.Marshal(managedDashboardRequest{
+	renderBody, _ := json.Marshal(jsonnetDashboardRequest{
 		SessionID: "session-repair-mixin",
 		Path:      "dashboard.jsonnet",
 	})
@@ -1153,7 +1437,7 @@ g.dashboard.new(
 	err = app.CallResource(context.Background(), &backend.CallResourceRequest{
 		PluginContext: adminPluginContext(),
 		Method:        http.MethodPost,
-		Path:          "managed-dashboards/render",
+		Path:          "jsonnet-dashboards/render",
 		Body:          renderBody,
 	}, &renderSender)
 	if err != nil {
@@ -1162,17 +1446,17 @@ g.dashboard.new(
 	if renderSender.responses[0].Status != http.StatusOK {
 		t.Fatalf("expected render 200, got %d: %s", renderSender.responses[0].Status, string(renderSender.responses[0].Body))
 	}
-	var renderResponse managedDashboardRenderResponse
+	var renderResponse jsonnetDashboardRenderResponse
 	if err := json.Unmarshal(renderSender.responses[0].Body, &renderResponse); err != nil {
 		t.Fatalf("decode render response: %s", err)
 	}
 	panels := renderResponse.Dashboard["panels"].([]any)
-	if renderResponse.Resource.Metadata.Name != "http-request-rate-errors" || len(panels) != 1 || panels[0].(map[string]any)["type"] != "timeseries" {
+	if renderResponse.Dashboard["uid"] != "http-request-rate-errors" || len(panels) != 1 || panels[0].(map[string]any)["type"] != "timeseries" {
 		t.Fatalf("unexpected rendered dashboard: %#v", renderResponse.Dashboard)
 	}
 }
 
-func TestManagedDashboardRenderAutoRepairsVirtualJsonnetFile(t *testing.T) {
+func TestJsonnetDashboardRenderAutoRepairsVirtualJsonnetFile(t *testing.T) {
 	jsonData, _ := json.Marshal(appSettings{AllowedPrometheusDatasourceUIDs: []string{"prometheus"}})
 	inst, err := NewApp(context.Background(), backend.AppInstanceSettings{JSONData: jsonData})
 	if err != nil {
@@ -1206,14 +1490,14 @@ g.dashboard.new(
 	err = app.CallResource(context.Background(), &backend.CallResourceRequest{
 		PluginContext: adminPluginContext(),
 		Method:        http.MethodPost,
-		Path:          "managed-dashboards/jsonnet-files/write",
+		Path:          "jsonnet-dashboards/jsonnet-files/write",
 		Body:          writeBody,
 	}, &writeSender)
 	if err != nil {
 		t.Fatalf("CallResource error: %s", err)
 	}
 
-	renderBody, _ := json.Marshal(managedDashboardRequest{
+	renderBody, _ := json.Marshal(jsonnetDashboardRequest{
 		SessionID: "session-auto-repair",
 		Path:      "dashboard.jsonnet",
 	})
@@ -1221,7 +1505,7 @@ g.dashboard.new(
 	err = app.CallResource(context.Background(), &backend.CallResourceRequest{
 		PluginContext: adminPluginContext(),
 		Method:        http.MethodPost,
-		Path:          "managed-dashboards/render",
+		Path:          "jsonnet-dashboards/render",
 		Body:          renderBody,
 	}, &renderSender)
 	if err != nil {
@@ -1230,7 +1514,7 @@ g.dashboard.new(
 	if renderSender.responses[0].Status != http.StatusOK {
 		t.Fatalf("expected render 200, got %d: %s", renderSender.responses[0].Status, string(renderSender.responses[0].Body))
 	}
-	var renderResponse managedDashboardRenderResponse
+	var renderResponse jsonnetDashboardRenderResponse
 	if err := json.Unmarshal(renderSender.responses[0].Body, &renderResponse); err != nil {
 		t.Fatalf("decode render response: %s", err)
 	}
@@ -1238,16 +1522,15 @@ g.dashboard.new(
 	if !renderResponse.AutoRepaired || len(renderResponse.Repairs) == 0 || renderResponse.JsonnetFile == nil || renderResponse.JsonnetFile.Version != 2 {
 		t.Fatalf("expected auto-repaired virtual file metadata, got %#v", renderResponse)
 	}
-	storedSource := renderResponse.Resource.Metadata.Annotations[annotationJsonnetSource]
-	if strings.Contains(storedSource, "g.panel.new") || !strings.Contains(storedSource, "Request rate") {
-		t.Fatalf("render did not store repaired source: %s", storedSource)
+	if strings.Contains(renderResponse.DashboardJsonnet, "g.panel.new") || !strings.Contains(renderResponse.DashboardJsonnet, "Request rate") {
+		t.Fatalf("render did not return repaired source: %s", renderResponse.DashboardJsonnet)
 	}
-	if renderResponse.Resource.Metadata.Name != "http-request-rate-errors" || len(panels) != 1 || panels[0].(map[string]any)["type"] != "timeseries" {
+	if renderResponse.Dashboard["uid"] != "http-request-rate-errors" || len(panels) != 1 || panels[0].(map[string]any)["type"] != "timeseries" {
 		t.Fatalf("unexpected rendered dashboard: %#v", renderResponse.Dashboard)
 	}
 }
 
-func TestManagedDashboardRenderFromVirtualJsonnetFile(t *testing.T) {
+func TestJsonnetDashboardRenderFromVirtualJsonnetFile(t *testing.T) {
 	inst, err := NewApp(context.Background(), backend.AppInstanceSettings{})
 	if err != nil {
 		t.Fatalf("new app: %s", err)
@@ -1262,14 +1545,14 @@ func TestManagedDashboardRenderFromVirtualJsonnetFile(t *testing.T) {
 	err = app.CallResource(context.Background(), &backend.CallResourceRequest{
 		PluginContext: adminPluginContext(),
 		Method:        http.MethodPost,
-		Path:          "managed-dashboards/jsonnet-files/write",
+		Path:          "jsonnet-dashboards/jsonnet-files/write",
 		Body:          writeBody,
 	}, &writeSender)
 	if err != nil {
 		t.Fatalf("CallResource error: %s", err)
 	}
 
-	renderBody, _ := json.Marshal(managedDashboardRequest{
+	renderBody, _ := json.Marshal(jsonnetDashboardRequest{
 		SessionID: "session-render",
 		Path:      "dashboard.jsonnet",
 	})
@@ -1277,7 +1560,7 @@ func TestManagedDashboardRenderFromVirtualJsonnetFile(t *testing.T) {
 	err = app.CallResource(context.Background(), &backend.CallResourceRequest{
 		PluginContext: adminPluginContext(),
 		Method:        http.MethodPost,
-		Path:          "managed-dashboards/render",
+		Path:          "jsonnet-dashboards/render",
 		Body:          renderBody,
 	}, &renderSender)
 	if err != nil {
@@ -1287,20 +1570,19 @@ func TestManagedDashboardRenderFromVirtualJsonnetFile(t *testing.T) {
 		t.Fatalf("expected 200, got %d: %s", renderSender.responses[0].Status, string(renderSender.responses[0].Body))
 	}
 
-	var response managedDashboardRenderResponse
+	var response jsonnetDashboardRenderResponse
 	if err := json.Unmarshal(renderSender.responses[0].Body, &response); err != nil {
 		t.Fatalf("decode response: %s", err)
 	}
-	annotations := response.Resource.Metadata.Annotations
-	if annotations[annotationJsonnetSource] != source {
-		t.Fatalf("virtual source was not stored in annotations: %#v", annotations)
+	if response.JsonnetFile == nil || response.JsonnetFile.Path != "dashboard.jsonnet" {
+		t.Fatalf("expected virtual Jsonnet file metadata, got %#v", response.JsonnetFile)
 	}
-	if annotations[annotationSourcePath] != "dashboard.jsonnet" {
-		t.Fatalf("unexpected source path: %#v", annotations)
+	if response.SourceChecksum != checksumBytes([]byte(source)) {
+		t.Fatalf("unexpected source checksum: %s", response.SourceChecksum)
 	}
 }
 
-func TestManagedDashboardRenderRejectsDisallowedDatasource(t *testing.T) {
+func TestJsonnetDashboardRenderRejectsDisallowedDatasource(t *testing.T) {
 	jsonData, _ := json.Marshal(appSettings{AllowedPrometheusDatasourceUIDs: []string{"prom-main"}})
 	inst, err := NewApp(context.Background(), backend.AppInstanceSettings{JSONData: jsonData})
 	if err != nil {
@@ -1318,13 +1600,13 @@ func TestManagedDashboardRenderRejectsDisallowedDatasource(t *testing.T) {
     },
   ],
 }`
-	body, _ := json.Marshal(managedDashboardRequest{DashboardJsonnet: source})
+	body, _ := json.Marshal(jsonnetDashboardRequest{DashboardJsonnet: source})
 
 	var sender mockCallResourceResponseSender
 	err = app.CallResource(context.Background(), &backend.CallResourceRequest{
 		PluginContext: adminPluginContext(),
 		Method:        http.MethodPost,
-		Path:          "managed-dashboards/render",
+		Path:          "jsonnet-dashboards/render",
 		Body:          body,
 	}, &sender)
 	if err != nil {
@@ -1341,72 +1623,7 @@ func TestManagedDashboardRenderRejectsDisallowedDatasource(t *testing.T) {
 	}
 }
 
-func TestManagedDashboardSourceReturnsStoredJsonnet(t *testing.T) {
-	source := "{ title: 'Stored Source', uid: 'stored-source', panels: [] }"
-	grafana := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-		if req.Method != http.MethodGet || req.URL.Path != "/apis/dashboard.grafana.app/v1/namespaces/default/dashboards/stored-source" {
-			t.Fatalf("unexpected Grafana request: %s %s", req.Method, req.URL.Path)
-		}
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(dashboardResource{
-			Kind:       "Dashboard",
-			APIVersion: "dashboard.grafana.app/v1",
-			Metadata: dashboardResourceMetadata{
-				Name: "stored-source",
-				Annotations: map[string]string{
-					annotationManagedBy:      "plugin",
-					annotationManagerID:      pluginID,
-					annotationFolder:         "observability",
-					annotationSourcePath:     "inline-jsonnet",
-					annotationSourceChecksum: "sha256:test",
-					annotationJsonnetSource:  source,
-				},
-			},
-			Spec: map[string]any{"title": "Stored Source"},
-		})
-	}))
-	defer grafana.Close()
-
-	inst, err := NewApp(context.Background(), backend.AppInstanceSettings{})
-	if err != nil {
-		t.Fatalf("new app: %s", err)
-	}
-	app := inst.(*App)
-	ctx := config.WithGrafanaConfig(context.Background(), config.NewGrafanaCfg(map[string]string{
-		config.AppURL:          grafana.URL,
-		config.AppClientSecret: "service-account-token",
-	}))
-
-	var sender mockCallResourceResponseSender
-	err = app.CallResource(ctx, &backend.CallResourceRequest{
-		PluginContext: adminPluginContext(),
-		Method:        http.MethodPost,
-		Path:          "managed-dashboards/source",
-		Body:          []byte(`{"uid":"stored-source"}`),
-	}, &sender)
-	if err != nil {
-		t.Fatalf("CallResource error: %s", err)
-	}
-	if len(sender.responses) != 1 {
-		t.Fatalf("expected 1 response, got %d", len(sender.responses))
-	}
-	if sender.responses[0].Status != http.StatusOK {
-		t.Fatalf("expected 200, got %d: %s", sender.responses[0].Status, string(sender.responses[0].Body))
-	}
-
-	var response managedDashboardSourceResponse
-	if err := json.Unmarshal(sender.responses[0].Body, &response); err != nil {
-		t.Fatalf("decode response: %s", err)
-	}
-	if response.DashboardJsonnet != source || response.DashboardJsonnetSize != len([]byte(source)) {
-		t.Fatalf("unexpected source response: %#v", response)
-	}
-	if _, exists := response.Annotations[annotationJsonnetSource]; exists {
-		t.Fatalf("public annotations should not include the full source: %#v", response.Annotations)
-	}
-}
-
-func TestManagedDashboardDatasourceAllowListRejectsVariables(t *testing.T) {
+func TestJsonnetDashboardDatasourceAllowListRejectsVariables(t *testing.T) {
 	jsonData, _ := json.Marshal(appSettings{AllowedPrometheusDatasourceUIDs: []string{"prom-main"}})
 	inst, err := NewApp(context.Background(), backend.AppInstanceSettings{JSONData: jsonData})
 	if err != nil {
@@ -1426,28 +1643,28 @@ func TestManagedDashboardDatasourceAllowListRejectsVariables(t *testing.T) {
 	}
 }
 
-func TestManagedDashboardSyncWritesDashboardResource(t *testing.T) {
+func TestJsonnetDashboardSaveWritesEditableDashboard(t *testing.T) {
 	var requestedMethod string
 	var requestedPath string
 	var authHeader string
-	var saved dashboardResource
+	var saved map[string]any
 
 	grafana := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		requestedMethod = req.Method
 		requestedPath = req.URL.Path
 		authHeader = req.Header.Get("Authorization")
-		switch req.Method {
-		case http.MethodGet:
-			http.NotFound(w, req)
-		case http.MethodPost:
-			if err := json.NewDecoder(req.Body).Decode(&saved); err != nil {
-				t.Fatalf("decode saved resource: %s", err)
-			}
-			w.Header().Set("Content-Type", "application/json")
-			_ = json.NewEncoder(w).Encode(saved)
-		default:
-			t.Fatalf("unexpected method: %s", req.Method)
+		if req.Method != http.MethodPost || req.URL.Path != "/api/dashboards/db" {
+			t.Fatalf("unexpected Grafana request: %s %s", req.Method, req.URL.Path)
 		}
+		if err := json.NewDecoder(req.Body).Decode(&saved); err != nil {
+			t.Fatalf("decode saved dashboard: %s", err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"uid":    "direct-jsonnet-save",
+			"url":    "/d/direct-jsonnet-save/api-service-direct",
+			"status": "success",
+		})
 	}))
 	defer grafana.Close()
 
@@ -1460,14 +1677,14 @@ func TestManagedDashboardSyncWritesDashboardResource(t *testing.T) {
 		config.AppURL:          grafana.URL,
 		config.AppClientSecret: "service-account-token",
 	}))
-	source := "{ title: 'API Service Direct', uid: 'direct-jsonnet-sync', panels: [] }"
-	body, _ := json.Marshal(managedDashboardRequest{DashboardJsonnet: source})
+	source := "{ title: 'API Service Direct', uid: 'direct-jsonnet-save', panels: [] }"
+	body, _ := json.Marshal(jsonnetDashboardRequest{DashboardJsonnet: source, FolderUID: "observability"})
 
 	var sender mockCallResourceResponseSender
 	err = app.CallResource(ctx, &backend.CallResourceRequest{
 		PluginContext: adminPluginContext(),
 		Method:        http.MethodPost,
-		Path:          "managed-dashboards/sync",
+		Path:          "jsonnet-dashboards/save",
 		Body:          body,
 	}, &sender)
 	if err != nil {
@@ -1479,25 +1696,32 @@ func TestManagedDashboardSyncWritesDashboardResource(t *testing.T) {
 	if sender.responses[0].Status != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", sender.responses[0].Status, string(sender.responses[0].Body))
 	}
-	if requestedMethod != http.MethodPost || requestedPath != "/apis/dashboard.grafana.app/v1/namespaces/default/dashboards" {
+	if requestedMethod != http.MethodPost || requestedPath != "/api/dashboards/db" {
 		t.Fatalf("unexpected Grafana request: %s %s", requestedMethod, requestedPath)
 	}
 	if authHeader != "Bearer service-account-token" {
 		t.Fatalf("unexpected auth header: %s", authHeader)
 	}
-	if saved.Metadata.Annotations[annotationManagedBy] != "plugin" || saved.Metadata.Annotations[annotationManagerID] != pluginID {
-		t.Fatalf("saved resource is not plugin managed: %#v", saved.Metadata.Annotations)
+	dashboard, ok := saved["dashboard"].(map[string]any)
+	if !ok {
+		t.Fatalf("saved payload did not include dashboard: %#v", saved)
 	}
-	if saved.Metadata.Annotations[annotationJsonnetSource] != source {
-		t.Fatalf("saved resource did not store Jsonnet source: %#v", saved.Metadata.Annotations)
+	if dashboard["uid"] != "direct-jsonnet-save" || dashboard["editable"] != true {
+		t.Fatalf("saved dashboard should be editable with expected UID: %#v", dashboard)
+	}
+	if metadata, exists := saved["metadata"]; exists {
+		t.Fatalf("save payload should not include manager metadata: %#v", metadata)
+	}
+	if saved["folderUid"] != "observability" || saved["overwrite"] != true {
+		t.Fatalf("unexpected save options: %#v", saved)
 	}
 
-	var response managedDashboardSyncResponse
+	var response jsonnetDashboardSaveResponse
 	if err := json.Unmarshal(sender.responses[0].Body, &response); err != nil {
 		t.Fatalf("decode response: %s", err)
 	}
-	if response.Status != "created" || response.UID != "direct-jsonnet-sync" {
-		t.Fatalf("unexpected sync response: %#v", response)
+	if response.Status != "success" || response.UID != "direct-jsonnet-save" || response.URL != grafana.URL+"/d/direct-jsonnet-save/api-service-direct" {
+		t.Fatalf("unexpected save response: %#v", response)
 	}
 }
 
@@ -1508,6 +1732,27 @@ func containsTag(raw any, expected string) bool {
 	}
 	for _, tag := range tags {
 		if tag == expected {
+			return true
+		}
+	}
+	return false
+}
+
+func containsString(values []string, expected string) bool {
+	for _, value := range values {
+		if value == expected {
+			return true
+		}
+	}
+	return false
+}
+
+func validationHasWarning(report *dashboardValidationReport, code string) bool {
+	if report == nil {
+		return false
+	}
+	for _, warning := range report.Warnings {
+		if warning.Code == code {
 			return true
 		}
 	}

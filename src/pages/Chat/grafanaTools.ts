@@ -22,7 +22,7 @@ export type {
   ArtifactRef,
   ArtifactRuntime,
   CreateGrafanaToolsOptions,
-  DashboardSyncFolderSelection,
+  DashboardSaveFolderSelection,
   GrafanaToolConfig,
   GrafanaToolRegistry,
   GrafanaToolRuntime,

@@ -328,7 +328,7 @@ function buildSpecialistFollowUp(
     return undefined;
   }
 
-  if (hasSuccessfulToolCall(toolCalls, 'sync_dashboard')) {
+  if (hasSuccessfulToolCall(toolCalls, 'save_dashboard')) {
     return undefined;
   }
 
@@ -339,12 +339,12 @@ function buildSpecialistFollowUp(
       {
         type: 'text',
         text: [
-          'Continue this dashboard create/update task; it is incomplete until the managed dashboard is synced.',
+          'Continue this dashboard create/update task; it is incomplete until the Jsonnet dashboard is saved.',
           `Missing successful steps: ${missing.join(', ')}.`,
           'Use the verified datasource UID and metrics already gathered.',
-          'If no virtual Jsonnet source exists, call write_jsonnet with a self-contained plain Grafana dashboard object.',
-          'Then call render_dashboard, repair Jsonnet if render fails, and call sync_dashboard.',
-          'Do not report completion until sync_dashboard succeeds. If a required tool fails, return the exact failure.',
+          'If no virtual Jsonnet source exists, call write_jsonnet with Jsonnet that evaluates to a classic Grafana dashboard object; prefer the bundled github.com/g42/pi-dashboard helper import for new dashboards.',
+          'Then call render_dashboard, repair Jsonnet if render fails, repair material validation warnings if render reports them, and call save_dashboard.',
+          'Do not report completion until save_dashboard succeeds. If a required tool fails, return the exact failure.',
         ].join('\n'),
       },
     ],
@@ -357,7 +357,11 @@ function dashboardTaskRequiresSync(task: string) {
   if (/\bintent:\s*review\b/.test(normalized)) {
     return false;
   }
-  if (/\b(draft|preview|plan only|design only|no-sync|no sync|do not sync|without syncing)\b/.test(normalized)) {
+  if (
+    /\b(draft|preview|plan only|design only|no-save|no save|do not save|without saving|no-sync|no sync|do not sync|without syncing)\b/.test(
+      normalized
+    )
+  ) {
     return false;
   }
   if (
@@ -367,7 +371,9 @@ function dashboardTaskRequiresSync(task: string) {
   ) {
     return false;
   }
-  return /\bintent:\s*(create|update)\b/.test(normalized) || /\b(create|build|update|apply|sync)\b/.test(normalized);
+  return (
+    /\bintent:\s*(create|update)\b/.test(normalized) || /\b(create|build|update|apply|save|sync)\b/.test(normalized)
+  );
 }
 
 function missingDashboardCompletionSteps(toolCalls: Map<string, SubagentToolCall>) {
@@ -378,8 +384,8 @@ function missingDashboardCompletionSteps(toolCalls: Map<string, SubagentToolCall
   if (!hasSuccessfulToolCall(toolCalls, 'render_dashboard')) {
     missing.push('render_dashboard');
   }
-  if (!hasSuccessfulToolCall(toolCalls, 'sync_dashboard')) {
-    missing.push('sync_dashboard');
+  if (!hasSuccessfulToolCall(toolCalls, 'save_dashboard')) {
+    missing.push('save_dashboard');
   }
   return missing;
 }

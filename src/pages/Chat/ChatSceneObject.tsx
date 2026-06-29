@@ -37,7 +37,7 @@ import {
   artifactizeToolResult,
   normalizeJsonnetPath,
   type Artifact,
-  type DashboardSyncFolderSelection,
+  type DashboardSaveFolderSelection,
   type ArtifactRuntime,
   type GrafanaToolRuntime,
   type InvestigationReport,
@@ -68,13 +68,13 @@ import {
 } from './dashboardLaunch';
 import { getAssistantDockRoute, storeAssistantSidebarDockRequest } from './sidebarDock';
 import {
-  clearDashboardSyncFolderOverride,
+  clearDashboardSaveFolderOverride,
   getChatRun,
-  getDashboardSyncFolderOverride,
+  getDashboardSaveFolderOverride,
   isStoredChatRunAgent,
   removeChatRun,
   setChatRunConfirmationHandler,
-  setDashboardSyncFolderOverride,
+  setDashboardSaveFolderOverride,
   storeChatRun,
   type ChatRunSnapshot,
   type ChatToolConfirmationHandler,
@@ -108,7 +108,7 @@ type ToolConfirmationView = {
   description: string;
   fields: Array<{ label: string; value: string }>;
   args: unknown;
-  syncDashboardFolder?: DashboardSyncFolderSelection;
+  saveDashboardFolder?: DashboardSaveFolderSelection;
 };
 
 type DashboardFolderApiItem = {
@@ -131,7 +131,7 @@ const CHAT_SESSION_EXPORT_KIND = 'g42-pi-app.chat-session';
 const LEGACY_CHAT_SESSION_EXPORT_KINDS = ['grafana-pi-app.chat-session'];
 const CHAT_SESSION_EXPORT_SCHEMA_VERSION = 1;
 const PERSISTENT_WRITE_TOOLS = new Set([
-  'sync_dashboard',
+  'save_dashboard',
   'upload_dashboard',
   'delete_dashboard',
   ...LIVE_DASHBOARD_WRITE_TOOLS,
@@ -159,8 +159,12 @@ type BenchmarkAgentEvent = {
   [key: string]: unknown;
 };
 
+const BENCHMARK_EVENT_CONSOLE_PREFIX = '__PI_AGENT_BENCHMARK_EVENT__ ';
+
 declare global {
   interface Window {
+    __PI_AGENT_BENCHMARK_CAPTURE__?: boolean;
+    __PI_AGENT_BENCHMARK_EVENTS__?: BenchmarkAgentEvent[];
     __PI_AGENT_BENCHMARK_RECORD_EVENT__?: (event: BenchmarkAgentEvent) => void;
   }
 }
@@ -297,10 +301,10 @@ export function ChatApp({
     },
     [artifactRuntime]
   );
-  const dashboardSyncFolderRuntime = useMemo(
+  const dashboardSaveFolderRuntime = useMemo(
     () => ({
-      getFolderOverride: (toolCallId: string) => getDashboardSyncFolderOverride(sessionIdRef.current, toolCallId),
-      clearFolderOverride: (toolCallId: string) => clearDashboardSyncFolderOverride(sessionIdRef.current, toolCallId),
+      getFolderOverride: (toolCallId: string) => getDashboardSaveFolderOverride(sessionIdRef.current, toolCallId),
+      clearFolderOverride: (toolCallId: string) => clearDashboardSaveFolderOverride(sessionIdRef.current, toolCallId),
     }),
     []
   );
@@ -402,7 +406,7 @@ export function ChatApp({
         });
       }
 
-      if (confirmation.syncDashboardFolder) {
+      if (confirmation.saveDashboardFolder) {
         void loadDashboardFolders();
       }
 
@@ -415,13 +419,13 @@ export function ChatApp({
           settled = true;
           signal?.removeEventListener('abort', handleAbort);
           const pending = pendingToolConfirmationRef.current;
-          if (approved && pending?.toolCallId === toolCallId && pending.syncDashboardFolder) {
+          if (approved && pending?.toolCallId === toolCallId && pending.saveDashboardFolder) {
             const sessionId = sessionIdRef.current;
             if (sessionId) {
-              setDashboardSyncFolderOverride(sessionId, toolCallId, pending.syncDashboardFolder);
+              setDashboardSaveFolderOverride(sessionId, toolCallId, pending.saveDashboardFolder);
             }
           } else {
-            clearDashboardSyncFolderOverride(sessionIdRef.current, toolCallId);
+            clearDashboardSaveFolderOverride(sessionIdRef.current, toolCallId);
           }
           toolConfirmationResolverRef.current = undefined;
           setPendingToolConfirmation(undefined);
@@ -462,12 +466,12 @@ export function ChatApp({
       const uid = option.value || undefined;
       const title = selectableLabel(option) || (uid ? uid : GENERAL_FOLDER_TITLE);
       setPendingToolConfirmation((current) => {
-        if (!current?.syncDashboardFolder) {
+        if (!current?.saveDashboardFolder) {
           return current;
         }
         return {
           ...current,
-          syncDashboardFolder: {
+          saveDashboardFolder: {
             uid,
             title,
           },
@@ -491,7 +495,7 @@ export function ChatApp({
           afterToolCall,
         },
         virtualJsonnetFiles: virtualJsonnetRuntime,
-        dashboardSyncFolders: dashboardSyncFolderRuntime,
+        dashboardSaveFolders: dashboardSaveFolderRuntime,
         investigationReport: investigationReportRuntime,
         artifacts: artifactRuntime,
         dashboardMutation: dashboardMutationAPI,
@@ -521,7 +525,7 @@ export function ChatApp({
       artifactRuntime,
       confirmToolCall,
       dashboardMutationAPI,
-      dashboardSyncFolderRuntime,
+      dashboardSaveFolderRuntime,
       liveDashboardEditingAvailable,
       jsonData,
       llmModel,
@@ -1678,8 +1682,8 @@ function ToolConfirmationModal({
   const styles = useStyles2(getStyles);
   const args = useMemo(() => formatConfirmationArgs(confirmation?.args), [confirmation?.args]);
   const selectedFolderOption = useMemo(
-    () => selectedDashboardFolderOption(confirmation?.syncDashboardFolder, folderOptions),
-    [confirmation?.syncDashboardFolder, folderOptions]
+    () => selectedDashboardFolderOption(confirmation?.saveDashboardFolder, folderOptions),
+    [confirmation?.saveDashboardFolder, folderOptions]
   );
 
   return (
@@ -1708,11 +1712,11 @@ function ToolConfirmationModal({
               </div>
             ))}
           </dl>
-          {confirmation.syncDashboardFolder && (
+          {confirmation.saveDashboardFolder && (
             <div className={styles.toolConfirmationFolder}>
-              <label htmlFor="assistant-sync-dashboard-folder">Folder</label>
+              <label htmlFor="assistant-save-dashboard-folder">Folder</label>
               <Combobox<string>
-                id="assistant-sync-dashboard-folder"
+                id="assistant-save-dashboard-folder"
                 loading={foldersLoading}
                 noOptionsMessage="No folders found"
                 options={folderOptions}
@@ -1928,15 +1932,15 @@ function buildToolConfirmation(toolCallId: string, toolName: string, args: unkno
   const record = isRecord(args) ? args : {};
   const id = `confirm-${toolCallId || toolName}-${Date.now()}`;
 
-  if (toolName === 'sync_dashboard') {
+  if (toolName === 'save_dashboard') {
     const folderUid = stringValue(record.folderUid);
     return {
       id,
       toolCallId,
       toolName,
-      title: 'Approve dashboard sync',
+      title: 'Approve dashboard save',
       description:
-        'The assistant wants to create or update a Grafana dashboard from managed Jsonnet source. Approve only if this is the dashboard change you requested.',
+        'The assistant wants to create or update an editable Grafana dashboard from Jsonnet. Approve only if this is the dashboard change you requested.',
       fields: compactConfirmationFields([
         confirmationField('UID', stringValue(record.uid) ?? 'compiled dashboard UID'),
         confirmationField('Folder UID', folderUid),
@@ -1945,7 +1949,7 @@ function buildToolConfirmation(toolCallId: string, toolName: string, args: unkno
         confirmationField('Tags', stringArrayValue(record.tags)),
       ]),
       args,
-      syncDashboardFolder: folderUid ? undefined : { title: GENERAL_FOLDER_TITLE },
+      saveDashboardFolder: folderUid ? undefined : { title: GENERAL_FOLDER_TITLE },
     };
   }
 
@@ -2157,7 +2161,7 @@ function selectableLabel(option: ComboboxOption<string> | undefined) {
 }
 
 function selectedDashboardFolderOption(
-  selection: DashboardSyncFolderSelection | undefined,
+  selection: DashboardSaveFolderSelection | undefined,
   options: Array<ComboboxOption<string>>
 ) {
   const uid = selection?.uid ?? '';
@@ -2346,14 +2350,46 @@ function shouldBatchRevision(event: AgentEvent) {
 }
 
 function emitBenchmarkEvent(event: AgentEvent) {
-  if (typeof window === 'undefined' || typeof window.__PI_AGENT_BENCHMARK_RECORD_EVENT__ !== 'function') {
+  if (typeof window === 'undefined') {
     return;
   }
 
+  const serialized = serializeBenchmarkEvent(event);
+  let recorded = false;
+
   try {
-    window.__PI_AGENT_BENCHMARK_RECORD_EVENT__(serializeBenchmarkEvent(event));
+    if (typeof window.__PI_AGENT_BENCHMARK_RECORD_EVENT__ === 'function') {
+      window.__PI_AGENT_BENCHMARK_RECORD_EVENT__(serialized);
+      recorded = true;
+    }
   } catch {
     // Benchmark instrumentation must not affect chat behavior.
+  }
+
+  try {
+    if (!recorded && Array.isArray(window.__PI_AGENT_BENCHMARK_EVENTS__)) {
+      window.__PI_AGENT_BENCHMARK_EVENTS__.push(serialized);
+    } else if (!recorded && isBenchmarkCaptureEnabled()) {
+      window.__PI_AGENT_BENCHMARK_EVENTS__ = [...(window.__PI_AGENT_BENCHMARK_EVENTS__ ?? []), serialized];
+    }
+
+    if (isBenchmarkCaptureEnabled()) {
+      console.info(`${BENCHMARK_EVENT_CONSOLE_PREFIX}${JSON.stringify(serialized)}`);
+    }
+  } catch {
+    // Benchmark instrumentation must not affect chat behavior.
+  }
+}
+
+function isBenchmarkCaptureEnabled() {
+  if (window.__PI_AGENT_BENCHMARK_CAPTURE__ === true) {
+    return true;
+  }
+
+  try {
+    return new URLSearchParams(window.location.search).get('piAgentBenchmark') === '1';
+  } catch {
+    return false;
   }
 }
 

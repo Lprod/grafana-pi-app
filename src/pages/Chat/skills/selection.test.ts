@@ -9,7 +9,7 @@ describe('Grafana skill selection', () => {
     expect(selection.activeSkillNames).toEqual([]);
     expect(selection.toolGroups).toEqual(expect.arrayContaining(['metrics', 'subagents']));
     expect(selection.toolGroups).not.toContain('skillResources');
-    expect(selection.toolGroups).not.toContain('managedDashboards');
+    expect(selection.toolGroups).not.toContain('jsonnetDashboards');
     expect(selection.toolGroups).not.toContain('jsonnetFiles');
   });
 
@@ -41,7 +41,7 @@ describe('Grafana skill selection', () => {
         'subagents',
         'dashboardRead',
         'jsonnetFiles',
-        'managedDashboards',
+        'jsonnetDashboards',
         'skillResources',
       ])
     );

@@ -42,13 +42,13 @@ Live dashboard editing is available for the currently loaded dashboard.
 - Apply one small mutation at a time, then verify the changed panel, layout, dashboard settings, or variable list.
 - add_live_dashboard_panel and move_or_resize_live_dashboard_panel automatically attach screenshot verification when Grafana image rendering is configured.
 - Use apply_live_dashboard_mutation only for advanced commands that do not have a typed tool.
-- Use managed Jsonnet render/sync for durable generated dashboards or managed copies, not for small live edits to the current dashboard unless the user asks for that path.`;
+- Use Jsonnet render/save for durable generated dashboards, not for small live edits to the current dashboard unless the user asks for that path.`;
   }
 
   return `## Dashboard Editing Capability
 Live dashboard editing is not available in this plugin/runtime context.
 - Do not claim that you can directly edit the currently open dashboard.
-- For dashboard changes, offer managed Jsonnet dashboard generation, raw dashboard upload when available, or clear manual edit guidance.`;
+- For dashboard changes, offer Jsonnet dashboard generation, raw dashboard upload when available, or clear manual edit guidance.`;
 }
 
 function renderAvailableSkills(skills: readonly GrafanaSkill[]) {

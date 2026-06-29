@@ -159,6 +159,25 @@ describe('grafana datasource tool policy', () => {
     expect(result.details).toMatchObject({ datasourceUid: 'prom-b', batch: true, prefixes: ['http', 'node_'] });
   });
 
+  it('normalizes datasource resource failures into readable tool errors', async () => {
+    const dataSource = {
+      uid: 'prom-b',
+      type: 'prometheus',
+      getResource: jest.fn().mockRejectedValue({
+        status: 502,
+        statusText: 'Bad Gateway',
+        data: { message: 'dial tcp 10.0.0.1:9090: connect: connection refused' },
+        config: { method: 'GET', url: 'api/v1/label/__name__/values' },
+      }),
+    };
+    mockDataSourceSrv.get.mockResolvedValue(dataSource);
+    const tool = getTool(createGrafanaTools({ allowedPrometheusDatasourceUids: ['prom-b'] }), 'list_metrics');
+
+    await expect(tool.execute('call-1', {}, undefined)).rejects.toThrow(
+      'Prometheus resource api/v1/label/__name__/values failed for datasource prom-b: Grafana request failed (502 Bad Gateway) while calling GET api/v1/label/__name__/values: dial tcp 10.0.0.1:9090: connect: connection refused'
+    );
+  });
+
   it('inspects metric series labels through the selected datasource', async () => {
     const dataSource = {
       uid: 'prom-b',
@@ -497,7 +516,7 @@ describe('grafana datasource tool policy', () => {
     ).rejects.toThrow('Dashboard references datasource UIDs not available to the assistant: $datasource, prom-b');
   });
 
-  it('sends Jsonnet source to the managed dashboard sync endpoint', async () => {
+  it('sends Jsonnet source to the dashboard save endpoint', async () => {
     const fetch = jest.fn().mockReturnValue(
       of({
         data: {
@@ -505,27 +524,37 @@ describe('grafana datasource tool policy', () => {
           url: '/d/direct-jsonnet',
           status: 'created',
           sourceChecksum: 'sha256:test',
+          validation: {
+            warnings: [{ code: 'layout_missing', message: 'Panel was missing a complete gridPos.' }],
+            layoutFixes: [{ message: 'Assigned missing gridPos.' }],
+          },
         },
       })
     );
     (getBackendSrv as jest.Mock).mockReturnValue({ fetch });
-    const tool = getTool(createGrafanaTools({ allowedPrometheusDatasourceUids: ['prom-a'] }), 'sync_dashboard');
+    const tool = getTool(createGrafanaTools({ allowedPrometheusDatasourceUids: ['prom-a'] }), 'save_dashboard');
     const source = "{ title: 'Direct Jsonnet', uid: 'direct-jsonnet', panels: [] }";
 
     const result = await tool.execute('call-1', { dashboard_jsonnet: source }, undefined);
 
     expect(fetch).toHaveBeenCalledWith(
       expect.objectContaining({
-        url: '/api/plugins/g42-pi-app/resources/managed-dashboards/sync',
+        url: '/api/plugins/g42-pi-app/resources/jsonnet-dashboards/save',
         method: 'POST',
         data: { dashboard_jsonnet: source },
         showErrorAlert: false,
       })
     );
-    expect(result.content[0].text).toContain('Managed dashboard created');
+    expect(result.content[0].text).toContain('Dashboard created');
+    expect(result.details).toMatchObject({
+      validation: {
+        warnings: [{ code: 'layout_missing' }],
+        layoutFixes: [{ message: 'Assigned missing gridPos.' }],
+      },
+    });
   });
 
-  it('applies the approved folder override to one managed dashboard sync call', async () => {
+  it('applies the approved folder override to one dashboard save call', async () => {
     const fetch = jest.fn().mockReturnValue(
       of({
         data: {
@@ -541,12 +570,12 @@ describe('grafana datasource tool policy', () => {
     const tool = getTool(
       createGrafanaTools({
         allowedPrometheusDatasourceUids: ['prom-a'],
-        dashboardSyncFolders: {
+        dashboardSaveFolders: {
           getFolderOverride: jest.fn(() => ({ uid: 'team-folder', title: 'Team folder' })),
           clearFolderOverride,
         },
       }),
-      'sync_dashboard'
+      'save_dashboard'
     );
     const source = "{ title: 'Direct Jsonnet', uid: 'direct-jsonnet', panels: [] }";
 
@@ -612,14 +641,14 @@ describe('grafana datasource tool policy', () => {
     expect(fetch).toHaveBeenNthCalledWith(
       1,
       expect.objectContaining({
-        url: '/api/plugins/g42-pi-app/resources/managed-dashboards/jsonnet-files/write',
+        url: '/api/plugins/g42-pi-app/resources/jsonnet-dashboards/jsonnet-files/write',
         data: { sessionId: 'session-tools', path: 'dashboard.jsonnet', content: source },
       })
     );
     expect(fetch).toHaveBeenNthCalledWith(
       2,
       expect.objectContaining({
-        url: '/api/plugins/g42-pi-app/resources/managed-dashboards/jsonnet-files/edit',
+        url: '/api/plugins/g42-pi-app/resources/jsonnet-dashboards/jsonnet-files/edit',
         data: {
           sessionId: 'session-tools',
           path: 'dashboard.jsonnet',
@@ -751,7 +780,7 @@ describe('grafana datasource tool policy', () => {
     expect(fetch).toHaveBeenNthCalledWith(
       2,
       expect.objectContaining({
-        url: '/api/plugins/g42-pi-app/resources/managed-dashboards/jsonnet-files/repair',
+        url: '/api/plugins/g42-pi-app/resources/jsonnet-dashboards/jsonnet-files/repair',
         data: {
           sessionId: 'session-fix',
           path: 'dashboard.jsonnet',
@@ -807,6 +836,17 @@ describe('grafana datasource tool policy', () => {
             },
             resource: { metadata: { name: 'hydrated-jsonnet' } },
             sourceChecksum: 'sha256:saved',
+            validation: {
+              warnings: [
+                {
+                  code: 'table_columns_uncontrolled',
+                  message: 'Table panel does not explicitly filter or organize visible columns.',
+                  panelId: 1,
+                  panelTitle: 'Requests',
+                },
+              ],
+              layoutFixes: [],
+            },
             jsonnetFile: {
               path: 'dashboard.jsonnet',
               version: 4,
@@ -825,14 +865,14 @@ describe('grafana datasource tool policy', () => {
     expect(fetch).toHaveBeenNthCalledWith(
       1,
       expect.objectContaining({
-        url: '/api/plugins/g42-pi-app/resources/managed-dashboards/jsonnet-files/write',
+        url: '/api/plugins/g42-pi-app/resources/jsonnet-dashboards/jsonnet-files/write',
         data: { sessionId: 'session-render', path: 'dashboard.jsonnet', content: source, version: 4 },
       })
     );
     expect(fetch).toHaveBeenNthCalledWith(
       2,
       expect.objectContaining({
-        url: '/api/plugins/g42-pi-app/resources/managed-dashboards/render',
+        url: '/api/plugins/g42-pi-app/resources/jsonnet-dashboards/render',
         data: { path: 'dashboard.jsonnet', sessionId: 'session-render' },
       })
     );
@@ -846,6 +886,9 @@ describe('grafana datasource tool policy', () => {
       path: 'dashboard.jsonnet',
       sourceBytes: source.length,
       sourceChecksum: 'sha256:saved',
+      validation: {
+        warnings: [{ code: 'table_columns_uncontrolled', panelTitle: 'Requests' }],
+      },
     });
     expect(result.content[0].text).not.toContain('resource');
   });
@@ -912,7 +955,7 @@ describe('grafana datasource tool policy', () => {
     expect(result.content[0].text).not.toContain('g.panel.new');
   });
 
-  it('surfaces managed dashboard sync backend errors as readable messages', async () => {
+  it('surfaces dashboard save backend errors as readable messages', async () => {
     const fetch = jest.fn().mockReturnValue(
       throwError(() => ({
         status: 400,
@@ -922,15 +965,15 @@ describe('grafana datasource tool policy', () => {
         },
         config: {
           method: 'POST',
-          url: '/api/plugins/g42-pi-app/resources/managed-dashboards/sync',
+          url: '/api/plugins/g42-pi-app/resources/jsonnet-dashboards/save',
         },
       }))
     );
     (getBackendSrv as jest.Mock).mockReturnValue({ fetch });
-    const tool = getTool(createGrafanaTools({ allowedPrometheusDatasourceUids: ['prom-a'] }), 'sync_dashboard');
+    const tool = getTool(createGrafanaTools({ allowedPrometheusDatasourceUids: ['prom-a'] }), 'save_dashboard');
 
     await expect(tool.execute('call-1', { dashboard_jsonnet: 'let textPanel() = {}' }, undefined)).rejects.toThrow(
-      'Grafana request failed (400 Bad Request) while calling POST /api/plugins/g42-pi-app/resources/managed-dashboards/sync: jsonnet compilation failed: dashboard.jsonnet:3:5-14 Did not expect: (IDENTIFIER, "textPanel")'
+      'Grafana request failed (400 Bad Request) while calling POST /api/plugins/g42-pi-app/resources/jsonnet-dashboards/save: jsonnet compilation failed: dashboard.jsonnet:3:5-14 Did not expect: (IDENTIFIER, "textPanel")'
     );
   });
 
@@ -1047,8 +1090,7 @@ describe('grafana datasource tool policy', () => {
     expect(names).toContain('edit_jsonnet');
     expect(names).toContain('fix_jsonnet');
     expect(names).toContain('read_jsonnet');
-    expect(names).toContain('sync_dashboard');
-    expect(names).toContain('get_dashboard_source');
+    expect(names).toContain('save_dashboard');
     expect(names).toContain('inspect_dashboard_context');
     expect(names).toContain('screenshot_dashboard');
     expect(names).toContain('run_query_agent');
@@ -1321,7 +1363,6 @@ describe('grafana datasource tool policy', () => {
     expect(names).toContain('query_prometheus_raw');
     expect(names).toContain('upload_dashboard');
     expect(names).toContain('delete_dashboard');
-    expect(names).toContain('get_dashboard_source');
     expect(names).toContain('inspect_dashboard_context');
     expect(names).toContain('search_grafonnet');
     expect(names).toContain('run_query_agent');
@@ -1784,12 +1825,12 @@ describe('grafana datasource tool policy', () => {
     expect(names).toContain('run_navigation_agent');
     expect(names).not.toContain('write_jsonnet');
     expect(names).not.toContain('render_dashboard');
-    expect(names).not.toContain('sync_dashboard');
+    expect(names).not.toContain('save_dashboard');
     expect(names).not.toContain('get_dashboard');
     expect(names).not.toContain('screenshot_dashboard');
   });
 
-  it('adds managed dashboard tools when the dashboard skill group is selected', () => {
+  it('adds Jsonnet dashboard tools when the dashboard skill group is selected', () => {
     const names = createGrafanaToolsForSkillGroups(
       {
         runtime: {
@@ -1798,14 +1839,13 @@ describe('grafana datasource tool policy', () => {
           thinkingLevel: 'off',
         },
       },
-      ['metrics', 'dashboardRead', 'jsonnetFiles', 'managedDashboards', 'subagents']
+      ['metrics', 'dashboardRead', 'jsonnetFiles', 'jsonnetDashboards', 'subagents']
     ).map((tool) => tool.name);
 
     expect(names).toContain('query_prometheus');
     expect(names).toContain('write_jsonnet');
     expect(names).toContain('render_dashboard');
-    expect(names).toContain('sync_dashboard');
-    expect(names).toContain('get_dashboard_source');
+    expect(names).toContain('save_dashboard');
     expect(names).toContain('get_dashboard');
     expect(names).toContain('inspect_dashboard_context');
     expect(names).toContain('screenshot_dashboard');
@@ -1815,7 +1855,7 @@ describe('grafana datasource tool policy', () => {
     expect(names).not.toContain('delete_dashboard');
   });
 
-  it('runs the dashboard agent with managed-dashboard child tools', async () => {
+  it('runs the dashboard agent with Jsonnet dashboard child tools', async () => {
     const registry = createGrafanaToolRegistry({
       skillTools: createSkillTools(GRAFANA_SKILLS),
       runtime: {
@@ -1858,10 +1898,8 @@ describe('grafana datasource tool policy', () => {
         'edit_jsonnet',
         'fix_jsonnet',
         'read_jsonnet',
-        'list_managed_dashboards',
-        'get_dashboard_source',
         'render_dashboard',
-        'sync_dashboard',
+        'save_dashboard',
         'get_dashboard',
         'list_dashboards',
         'inspect_dashboard_context',
@@ -1917,6 +1955,16 @@ describe('grafana datasource tool policy', () => {
       skill: 'grafana-dashboard',
       path: 'references/dashboard-jsonnet-workflow.md',
       truncated: false,
+    });
+    await expect(
+      tool.execute('call-example', { skill: 'grafana-dashboard', path: 'references/example.md' }, undefined)
+    ).resolves.toMatchObject({
+      details: { skill: 'grafana-dashboard', path: 'references/example.md', truncated: false },
+    });
+    await expect(
+      tool.execute('call-template', { skill: 'grafana-dashboard', path: 'templates/prometheus.md' }, undefined)
+    ).resolves.toMatchObject({
+      details: { skill: 'grafana-dashboard', path: 'templates/prometheus.md', truncated: false },
     });
     await expect(tool.execute('call-2', { skill: 'grafana-dashboard', path: 'missing.md' }, undefined)).rejects.toThrow(
       'Unknown resource for grafana-dashboard: missing.md'

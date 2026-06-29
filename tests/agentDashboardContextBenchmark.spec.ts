@@ -85,10 +85,10 @@ test.describe('dashboard context benchmark', () => {
       const richPrompt = [
         'This benchmark validates the rich dashboard context repair path.',
         'Use exactly one run_dashboard_agent top-level tool call.',
-        `Ask the dashboard agent to repair existing dashboard UID ${sourceUid} into a managed dashboard copy titled "${fixedTitle}" with UID ${fixedUid}.`,
+        `Ask the dashboard agent to repair existing dashboard UID ${sourceUid} into an editable Jsonnet dashboard titled "${fixedTitle}" with UID ${fixedUid}.`,
         'The dashboard agent must inspect the existing dashboard with inspect_dashboard_context using validateQueries=true before writing the replacement.',
         'It should use the validation evidence to replace stale metric and label names with the demo Prometheus schema: http_requests_total, route, status, vm, and http_request_duration_seconds_bucket.',
-        'It must write Jsonnet, render_dashboard, then sync_dashboard with overwrite=true.',
+        'It must write Jsonnet, render_dashboard, then save_dashboard with overwrite=true.',
         'The repaired dashboard should include request rate, HTTP 5xx/error signal, and p95 latency panels for /render/report over the last 6 hours.',
       ].join(' ');
 
@@ -408,16 +408,16 @@ function findRichQualityError(run: BenchmarkRun, expectedUid: string) {
     return 'dashboard agent did not complete render_dashboard';
   }
 
-  const synced = [...nested]
+  const saved = [...nested]
     .reverse()
-    .find((call) => call.name === 'sync_dashboard' && call.status === 'completed' && !call.isError);
-  if (!synced) {
-    return 'dashboard agent did not complete sync_dashboard';
+    .find((call) => call.name === 'save_dashboard' && call.status === 'completed' && !call.isError);
+  if (!saved) {
+    return 'dashboard agent did not complete save_dashboard';
   }
 
-  const syncDetails = getRecord(getRecord(synced.result)?.details);
-  if (stringField(syncDetails, 'uid') !== expectedUid) {
-    return `sync_dashboard wrote UID ${stringField(syncDetails, 'uid') ?? 'unknown'} instead of ${expectedUid}`;
+  const saveDetails = getRecord(getRecord(saved.result)?.details);
+  if (stringField(saveDetails, 'uid') !== expectedUid) {
+    return `save_dashboard wrote UID ${stringField(saveDetails, 'uid') ?? 'unknown'} instead of ${expectedUid}`;
   }
 
   const dashboard = getRecord(getRecord(getRecord(rendered.result)?.details)?.dashboard);

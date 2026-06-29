@@ -1,22 +1,22 @@
 ---
 name: grafana-dashboard
-description: Design, generate, review, live-edit, and sync Grafana dashboards.
+description: Design, generate, review, live-edit, and save Grafana dashboards.
 ---
 
 # Grafana Dashboard Skill
 
-Use this skill when the user asks for a dashboard, panel, row, variable, live dashboard edit, Jsonnet change, managed dashboard sync, or dashboard review.
+Use this skill when the user asks for a dashboard, panel, row, variable, live dashboard edit, Jsonnet change, dashboard save, or dashboard review.
 
 ## Operating Rules
 
 - Treat dashboard generation as a persistent artifact. Only create, update, or live-edit dashboards when the user explicitly asks for a dashboard change.
-- For create, update, review, live edit, render, or sync work, call `run_dashboard_agent`; it owns the dashboard workflow and can use either live mutation tools or the session virtual Jsonnet file.
+- For create, update, review, live edit, render, or save work, call `run_dashboard_agent`; it owns the dashboard workflow and can use either live mutation tools or the session virtual Jsonnet file.
 - Inspect available metrics before selecting panel queries. Use `run_dashboard_agent` for dashboard-level planning and `run_query_agent` for narrow metric reconnaissance.
 - Prefer live dashboard mutation tools for small on-the-fly edits to the currently open dashboard when those tools are available.
-- Prefer managed Jsonnet dashboards for durable generated dashboards and managed copies.
+- Prefer Jsonnet dashboards for durable generated dashboards.
 - Use dashboard read tools to inspect existing dashboards before updating them when the user references an existing dashboard.
 - Keep generated dashboards focused. A small useful dashboard is better than a broad dashboard with speculative panels.
-- For a managed create or update dashboard request, render and sync the managed dashboard after the Jsonnet compiles unless the user explicitly asks for a draft, preview, live-edit, or no-sync workflow.
+- For a Jsonnet create or update dashboard request, render and save the dashboard after the Jsonnet compiles unless the user explicitly asks for a draft, preview, live-edit, or no-save workflow.
 
 ## Live Editing Workflow
 
@@ -27,23 +27,26 @@ Use this skill when the user asks for a dashboard, panel, row, variable, live da
 5. Apply one small live edit at a time.
 6. Verify with `list_live_dashboard_panels`, `get_live_dashboard_layout`, `get_live_dashboard_info`, `list_live_dashboard_variables`, or the screenshot attached by layout-affecting live edit tools.
 7. If a live mutation fails, inspect panels/layout/variables again and retry with corrected element names or paths before giving up.
-8. Do not call `write_jsonnet`, `render_dashboard`, or `sync_dashboard` for a live-edit request unless the user asks for a durable managed dashboard copy.
+8. Do not call `write_jsonnet`, `render_dashboard`, or `save_dashboard` for a live-edit request unless the user asks for a durable Jsonnet dashboard.
 
 ## Jsonnet Workflow
 
 1. Call `run_dashboard_agent` with the user task, known datasource UID, existing dashboard UID, and intent when available.
 2. Let the dashboard agent inspect metrics and existing dashboards, then write or edit the session virtual Jsonnet file.
-3. For new dashboards, the dashboard agent should write a self-contained plain Jsonnet object that evaluates directly to a Grafana dashboard object.
+3. For new dashboards, the dashboard agent should write Jsonnet that evaluates directly to a classic Grafana dashboard object. Prefer the bundled dashboard helper library for rows, layouts, Prometheus targets, and tables.
 4. The dashboard agent should render the dashboard after writing.
-5. The dashboard agent should sync the rendered dashboard for create or update requests unless the user explicitly asked for a draft or preview only.
+5. If render returns validation warnings or layout fixes, repair material layout/table issues with `edit_jsonnet`, render again, then save for create or update requests unless the user explicitly asked for a draft or preview only.
 
 ## Jsonnet Rules
 
-- For new dashboards, do not import Grafonnet.
+- For new dashboards, prefer `local d = import 'github.com/g42/pi-dashboard/main.libsonnet';` and use `d.dashboard.new`, `d.row`, `d.layout.*`, `d.panel.*`, and `d.prom.query`.
+- Read `references/example.md` or `templates/prometheus.md` when you need a concrete helper example before writing Jsonnet.
+- Do not import Grafonnet for new dashboards.
 - Do not invent or use Grafonnet constructors such as `g.dashboard.new`, `grafana.dashboard.new`, `g.panel.new`, `grafana.panel.new`, `row.new`, or chained `.with_*` methods.
 - Generate a plain object with `title`, stable `uid`, `tags`, `timezone`, `time`, `schemaVersion`, and `panels`.
-- Use Grafana's 24-column grid with explicit `gridPos` values.
+- Use the helper layout APIs for common 24-column rows: `full`, `twoUp`, `threeUp`, `fourUp`, and `statStrip`. If writing raw panels, include explicit `gridPos` values.
 - Use the selected Prometheus datasource UID directly in panel targets. Do not use datasource variables or unlisted datasource UIDs.
+- For tables, use `d.panel.table(..., columns=[...], rename={...})` so the rendered table includes explicit `labelsToFields`, `filterFieldsByName`, and `organize` transformations.
 - After the initial `write_jsonnet` call, do not call `write_jsonnet` again in the same session. Use `edit_jsonnet`, `fix_jsonnet`, or `read_jsonnet` for follow-up repairs.
 
 ## Panel Guidance
@@ -57,7 +60,7 @@ Use this skill when the user asks for a dashboard, panel, row, variable, live da
 
 ## Safety
 
-- Do not overwrite an existing managed dashboard without reading it first.
-- Do not call sync tools after a draft or preview-only request unless the user explicitly asks to apply or sync.
+- Do not overwrite an existing dashboard without reading it first.
+- Do not call save tools after a draft or preview-only request unless the user explicitly asks to apply or save.
 - If a render fails, fix the Jsonnet before offering the dashboard as complete.
 - If metrics are missing, state the gap instead of fabricating panels.

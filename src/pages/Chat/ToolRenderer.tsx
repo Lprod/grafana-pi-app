@@ -512,9 +512,6 @@ function asSimpleToolCallSummary(
     case 'list_dashboards':
     case 'grafana_list_dashboards':
       return { summary: 'List dashboards' };
-    case 'list_managed_dashboards':
-    case 'grafana_list_managed_dashboards':
-      return { summary: 'List managed dashboards' };
     case 'get_dashboard':
     case 'grafana_get_dashboard':
       return dashboardToolCallSummary('Get dashboard', record);
@@ -552,15 +549,10 @@ function asSimpleToolCallSummary(
       return liveDashboardToolCallSummary('Update live dashboard variable', record);
     case 'apply_live_dashboard_mutation':
       return liveDashboardToolCallSummary('Apply live dashboard mutation', record);
-    case 'get_dashboard_source':
-    case 'grafana_get_managed_dashboard_source':
-      return dashboardToolCallSummary('Read managed dashboard source', record);
     case 'render_dashboard':
-    case 'grafana_render_managed_dashboard':
       return dashboardToolCallSummary('Render dashboard', record);
-    case 'sync_dashboard':
-    case 'grafana_sync_managed_dashboard':
-      return dashboardToolCallSummary('Sync managed dashboard', record);
+    case 'save_dashboard':
+      return dashboardToolCallSummary('Save dashboard', record);
     case 'upload_dashboard':
     case 'grafana_upload_dashboard':
       return dashboardToolCallSummary('Upload dashboard', record);
@@ -1190,7 +1182,6 @@ const TOOL_ICONS: Record<string, IconName> = {
   list_jsonnet_libs: 'list-ul',
   list_dashboards: 'dashboard',
   grafana_list_dashboards: 'dashboard',
-  list_managed_dashboards: 'dashboard',
   get_dashboard: 'dashboard',
   grafana_get_dashboard: 'dashboard',
   inspect_dashboard_context: 'dashboard',
@@ -1210,12 +1201,8 @@ const TOOL_ICONS: Record<string, IconName> = {
   add_live_dashboard_variable: 'plus',
   update_live_dashboard_variable: 'edit',
   apply_live_dashboard_mutation: 'dashboard',
-  get_dashboard_source: 'file-alt',
-  grafana_get_managed_dashboard_source: 'file-alt',
   render_dashboard: 'dashboard',
-  grafana_render_managed_dashboard: 'dashboard',
-  sync_dashboard: 'sync',
-  grafana_sync_managed_dashboard: 'sync',
+  save_dashboard: 'save',
   upload_dashboard: 'upload',
   grafana_upload_dashboard: 'upload',
   delete_dashboard: 'trash-alt',
@@ -1381,9 +1368,7 @@ function shouldExpandSubagentToolCall(call: SubagentToolCall) {
   return (
     call.status === 'failed' ||
     call.isError ||
-    (call.status === 'completed' &&
-      !call.isError &&
-      (call.name === 'sync_dashboard' || call.name === 'grafana_sync_managed_dashboard'))
+    (call.status === 'completed' && !call.isError && call.name === 'save_dashboard')
   );
 }
 
@@ -1468,11 +1453,6 @@ function renderStructuredToolResult(
     return <DashboardListView result={dashboardList} />;
   }
 
-  const managedDashboardList = asManagedDashboardList(toolName, details, content);
-  if (managedDashboardList) {
-    return <ManagedDashboardListView result={managedDashboardList} />;
-  }
-
   const jsonnetSearch = asJsonnetSearchResult(toolName, content);
   if (jsonnetSearch) {
     return <JsonnetSearchResultView result={jsonnetSearch} />;
@@ -1486,11 +1466,6 @@ function renderStructuredToolResult(
   const jsonnetRead = asJsonnetReadResult(toolName, content);
   if (jsonnetRead) {
     return <JsonnetReadResultView result={jsonnetRead} />;
-  }
-
-  const managedSource = asManagedDashboardSource(toolName, content);
-  if (managedSource) {
-    return <ManagedDashboardSourceView result={managedSource} />;
   }
 
   const jsonnetFile = asJsonnetFileResult(toolName, details, content);
@@ -2347,63 +2322,6 @@ function DashboardListView({ result }: { result: DashboardListResult }) {
   );
 }
 
-type ManagedDashboardListResult = {
-  dashboards: ManagedDashboardListItem[];
-};
-
-type ManagedDashboardListItem = DashboardListItem & {
-  sourceChecksum?: string;
-  hasJsonnetSource?: boolean;
-  dashboardJsonnetSize?: number;
-};
-
-function ManagedDashboardListView({ result }: { result: ManagedDashboardListResult }) {
-  const styles = useStyles2(getToolStyles);
-  return (
-    <div className={styles.structuredResult}>
-      <div className={styles.resultSummary}>{formatCount(result.dashboards.length)} managed dashboards</div>
-      <div className={styles.tableWrap}>
-        <table className={styles.dataTable}>
-          <thead>
-            <tr>
-              <th>Title</th>
-              <th>UID</th>
-              <th>Folder</th>
-              <th>Source</th>
-              <th>Open</th>
-            </tr>
-          </thead>
-          <tbody>
-            {result.dashboards.map((dashboard) => (
-              <tr key={dashboard.uid}>
-                <td>{dashboard.title}</td>
-                <td className={styles.monospace}>{dashboard.uid}</td>
-                <td>{dashboard.folderUid || <span className={styles.muted}>-</span>}</td>
-                <td>
-                  {dashboard.hasJsonnetSource ? (
-                    <span title={dashboard.sourceChecksum}>
-                      {formatBytes(dashboard.dashboardJsonnetSize) ?? 'stored'} Jsonnet
-                    </span>
-                  ) : (
-                    <span className={styles.muted}>missing</span>
-                  )}
-                </td>
-                <td>
-                  {dashboard.url ? (
-                    <ExternalLink href={dashboard.url}>Open</ExternalLink>
-                  ) : (
-                    <span className={styles.muted}>-</span>
-                  )}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-    </div>
-  );
-}
-
 function DashboardTable({ dashboards }: { dashboards: DashboardListItem[] }) {
   const styles = useStyles2(getToolStyles);
   return (
@@ -2577,38 +2495,6 @@ function JsonnetFileResultView({ result }: { result: JsonnetFileResult }) {
       />
       {result.lines.length > 0 && <CodeViewer lines={result.lines} />}
       {result.diff && <DiffViewer diff={result.diff} />}
-    </div>
-  );
-}
-
-type ManagedDashboardSourceResult = {
-  uid: string;
-  title: string;
-  url?: string;
-  folderUid?: string;
-  sourceChecksum?: string;
-  dashboardJsonnet: string;
-  dashboardJsonnetSize?: number;
-};
-
-function ManagedDashboardSourceView({ result }: { result: ManagedDashboardSourceResult }) {
-  const styles = useStyles2(getToolStyles);
-  return (
-    <div className={styles.structuredResult}>
-      <ResultMetaGrid
-        items={[
-          { label: 'Title', value: result.title },
-          { label: 'UID', value: <code>{result.uid}</code> },
-          { label: 'Folder', value: result.folderUid },
-          { label: 'Source', value: formatBytes(result.dashboardJsonnetSize) },
-          {
-            label: 'Checksum',
-            value: result.sourceChecksum ? <code>{shortChecksum(result.sourceChecksum)}</code> : undefined,
-          },
-          { label: 'Open', value: result.url ? <ExternalLink href={result.url}>Open</ExternalLink> : undefined },
-        ]}
-      />
-      <CodeViewer lines={textToCodeLines(result.dashboardJsonnet)} />
     </div>
   );
 }
@@ -3687,34 +3573,6 @@ function asDashboardListItem(record: unknown): DashboardListItem | undefined {
   };
 }
 
-function asManagedDashboardList(
-  toolName: string | undefined,
-  details: unknown,
-  content: unknown
-): ManagedDashboardListResult | undefined {
-  if (toolName !== 'list_managed_dashboards' && toolName !== 'grafana_list_managed_dashboards') {
-    return undefined;
-  }
-
-  const dashboards = parseToolJsonArray(content, details)
-    ?.map(asManagedDashboardListItem)
-    .filter((item): item is ManagedDashboardListItem => Boolean(item));
-  return dashboards ? { dashboards } : undefined;
-}
-
-function asManagedDashboardListItem(record: unknown): ManagedDashboardListItem | undefined {
-  const dashboard = asDashboardListItem(record);
-  if (!dashboard || !isRecord(record)) {
-    return undefined;
-  }
-  return {
-    ...dashboard,
-    sourceChecksum: stringField(record, 'sourceChecksum'),
-    hasJsonnetSource: booleanField(record, 'hasJsonnetSource'),
-    dashboardJsonnetSize: numberField(record, 'dashboardJsonnetSize'),
-  };
-}
-
 function asJsonnetSearchResult(toolName: string | undefined, content: unknown): JsonnetSearchResult | undefined {
   if (toolName !== 'search_grafonnet' && toolName !== 'search_jsonnet_libs') {
     return undefined;
@@ -3778,37 +3636,6 @@ function asJsonnetReadResult(toolName: string | undefined, content: unknown): Js
   };
 }
 
-function asManagedDashboardSource(
-  toolName: string | undefined,
-  content: unknown
-): ManagedDashboardSourceResult | undefined {
-  if (toolName !== 'get_dashboard_source' && toolName !== 'grafana_get_managed_dashboard_source') {
-    return undefined;
-  }
-
-  const record = parseJsonRecord(content);
-  if (!record) {
-    return undefined;
-  }
-
-  const uid = stringField(record, 'uid');
-  const title = stringField(record, 'title');
-  const dashboardJsonnet = stringField(record, 'dashboard_jsonnet');
-  if (!uid || !title || dashboardJsonnet === undefined) {
-    return undefined;
-  }
-
-  return {
-    uid,
-    title,
-    url: stringField(record, 'url'),
-    folderUid: stringField(record, 'folderUid'),
-    sourceChecksum: stringField(record, 'sourceChecksum'),
-    dashboardJsonnet,
-    dashboardJsonnetSize: numberField(record, 'dashboardJsonnetSize') ?? dashboardJsonnet.length,
-  };
-}
-
 function asJsonnetFileResult(
   toolName: string | undefined,
   details: unknown,
@@ -3864,12 +3691,7 @@ function asDashboardSummary(
   details: unknown,
   content: unknown
 ): DashboardSummaryResult | undefined {
-  if (
-    toolName !== 'render_dashboard' &&
-    toolName !== 'get_dashboard' &&
-    toolName !== 'grafana_render_managed_dashboard' &&
-    toolName !== 'grafana_get_dashboard'
-  ) {
+  if (toolName !== 'render_dashboard' && toolName !== 'get_dashboard' && toolName !== 'grafana_get_dashboard') {
     return undefined;
   }
 
@@ -3885,12 +3707,10 @@ function asDashboardSummary(
     return undefined;
   }
 
-  const resource = recordField(record, 'resource');
-  const metadata = resource ? recordField(resource, 'metadata') : undefined;
   const detailRecord = isRecord(details) ? details : {};
   return {
     title,
-    uid: stringField(dashboard, 'uid') ?? stringField(metadata, 'name') ?? stringField(detailRecord, 'uid'),
+    uid: stringField(dashboard, 'uid') ?? stringField(detailRecord, 'uid'),
     url: stringField(meta, 'url'),
     folder: stringField(meta, 'folderTitle') ?? stringField(meta, 'folderUid'),
     tags: stringArrayField(dashboard, 'tags') ?? [],
@@ -3914,13 +3734,13 @@ function asDashboardAction(toolName: string | undefined, details: unknown): Dash
     };
   }
 
-  if (toolName === 'sync_dashboard' || toolName === 'grafana_sync_managed_dashboard') {
+  if (toolName === 'save_dashboard') {
     const status = stringField(details, 'status');
     if (!status) {
       return undefined;
     }
     return {
-      title: `Managed dashboard ${status}`,
+      title: status === 'success' || status === 'saved' ? 'Dashboard saved' : `Dashboard ${status}`,
       status,
       uid: stringField(details, 'uid'),
       url: stringField(details, 'url'),

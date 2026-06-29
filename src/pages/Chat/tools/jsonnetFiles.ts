@@ -55,7 +55,7 @@ export async function ensureVirtualJsonnetFileHydrated(
     return;
   }
   throwIfAborted(signal);
-  await pluginResourceFetch<JsonnetFileBackendResponse>('/managed-dashboards/jsonnet-files/write', {
+  await pluginResourceFetch<JsonnetFileBackendResponse>('/jsonnet-dashboards/jsonnet-files/write', {
     method: 'POST',
     data: {
       sessionId: requireSessionId(runtime),
@@ -77,12 +77,12 @@ function makeWriteJsonnetFileTool(runtime: VirtualJsonnetFileRuntime | undefined
     name: 'write_jsonnet',
     label: 'Write Jsonnet file',
     description:
-      'Create the session virtual Jsonnet file used for managed dashboards. Write dashboard.jsonnet once with the full initial source. If the file already exists, use edit_jsonnet for every follow-up change.',
+      'Create the session virtual Jsonnet file used for dashboard rendering and saving. Write dashboard.jsonnet once with the full initial source. If the file already exists, use edit_jsonnet for every follow-up change. For new dashboards use the function-based helper API: local d = import "github.com/g42/pi-dashboard/main.libsonnet"; d.dashboard.new(title="...", uid="...", rows=[d.row("Overview", [d.layout.twoUp([...])])]).',
     parameters: Type.Object({
       path: Type.Optional(Type.String({ description: `Virtual file path. Defaults to ${DEFAULT_JSONNET_FILE_PATH}.` })),
       content: Type.String({
         description:
-          'Complete Jsonnet source that evaluates to a Grafana dashboard object. For new dashboards, write a plain object Jsonnet file; do not import Grafonnet unless editing existing Grafonnet source.',
+          'Complete Jsonnet source that evaluates to a classic Grafana dashboard object. For new dashboards, prefer importing github.com/g42/pi-dashboard/main.libsonnet for layout/table helpers; do not import Grafonnet unless editing existing Grafonnet source. Prefer d.dashboard.new(title=..., uid=..., rows=...), d.row(...), d.layout.twoUp/fourUp(...), d.panel.timeseries/stat/table(...), and d.prom.query(...).',
       }),
     }),
     async execute(_toolCallId, params, signal) {
@@ -96,7 +96,7 @@ function makeWriteJsonnetFileTool(runtime: VirtualJsonnetFileRuntime | undefined
       }
       throwIfAborted(signal);
       const content = normalizeDashboardJsonnetDraft(args.content);
-      const result = await pluginResourceFetch<JsonnetFileBackendResponse>('/managed-dashboards/jsonnet-files/write', {
+      const result = await pluginResourceFetch<JsonnetFileBackendResponse>('/jsonnet-dashboards/jsonnet-files/write', {
         method: 'POST',
         data: {
           sessionId: requireSessionId(runtime),
@@ -144,7 +144,7 @@ function makeEditJsonnetFileTool(runtime: VirtualJsonnetFileRuntime | undefined)
       const path = normalizeJsonnetPath(args.path);
       await ensureVirtualJsonnetFileHydrated(runtime, path, signal);
       throwIfAborted(signal);
-      const result = await pluginResourceFetch<JsonnetFileBackendResponse>('/managed-dashboards/jsonnet-files/edit', {
+      const result = await pluginResourceFetch<JsonnetFileBackendResponse>('/jsonnet-dashboards/jsonnet-files/edit', {
         method: 'POST',
         data: {
           sessionId: requireSessionId(runtime),
@@ -187,7 +187,7 @@ function makeFixJsonnetFileTool(runtime: VirtualJsonnetFileRuntime | undefined):
       if (args.error) {
         data.error = args.error;
       }
-      const result = await pluginResourceFetch<JsonnetFileBackendResponse>('/managed-dashboards/jsonnet-files/repair', {
+      const result = await pluginResourceFetch<JsonnetFileBackendResponse>('/jsonnet-dashboards/jsonnet-files/repair', {
         method: 'POST',
         data,
       });
@@ -217,7 +217,7 @@ function makeReadJsonnetFileTool(runtime: VirtualJsonnetFileRuntime | undefined)
       const path = normalizeJsonnetPath(args.path);
       await ensureVirtualJsonnetFileHydrated(runtime, path, signal);
       throwIfAborted(signal);
-      const result = await pluginResourceFetch<JsonnetFileBackendResponse>('/managed-dashboards/jsonnet-files/read', {
+      const result = await pluginResourceFetch<JsonnetFileBackendResponse>('/jsonnet-dashboards/jsonnet-files/read', {
         method: 'POST',
         data: {
           sessionId: requireSessionId(runtime),

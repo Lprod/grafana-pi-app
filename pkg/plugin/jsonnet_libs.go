@@ -32,6 +32,7 @@ type jsonnetLibMatch struct {
 }
 
 var allowedJsonnetLibPrefixes = []string{
+	"github.com/g42/pi-dashboard/",
 	"github.com/grafana/grafonnet/",
 	"github.com/jsonnet-libs/xtd/",
 	"github.com/jsonnet-libs/docsonnet/",
@@ -60,7 +61,7 @@ func (a *App) handleJsonnetLibSearch(w http.ResponseWriter, req *http.Request) {
 
 	searchPath := body.Path
 	if searchPath == "" {
-		searchPath = "github.com/grafana/grafonnet"
+		searchPath = "github.com/g42/pi-dashboard"
 	}
 	root, err := safeJsonnetLibPath(searchPath)
 	if err != nil {
@@ -158,7 +159,7 @@ func (a *App) handleJsonnetLibList(w http.ResponseWriter, req *http.Request) {
 	}
 	listPath := body.Path
 	if listPath == "" {
-		listPath = "github.com/grafana/grafonnet/gen/grafonnet-v11.4.0"
+		listPath = "github.com/g42/pi-dashboard"
 	}
 	root, err := safeJsonnetLibPath(listPath)
 	if err != nil {

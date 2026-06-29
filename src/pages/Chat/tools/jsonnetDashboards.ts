@@ -2,16 +2,15 @@ import type { AgentTool } from '@earendil-works/pi-agent-core';
 import { Type } from 'typebox';
 import { pluginResourceFetch } from './client';
 import { DEFAULT_JSONNET_FILE_PATH, ensureVirtualJsonnetFileHydrated, normalizeJsonnetPath } from './jsonnetFiles';
-import { textResult, throwIfAborted, truncateText } from './result';
+import { textResult, throwIfAborted } from './result';
 import type {
   CreateGrafanaToolsOptions,
-  DashboardSyncFolderSelection,
-  ManagedDashboardParams,
-  ManagedDashboardSourceParams,
-  ManagedDashboardToolSet,
+  DashboardSaveFolderSelection,
+  JsonnetDashboardParams,
+  JsonnetDashboardToolSet,
 } from './types';
 
-type ManagedJsonnetFileInfo = {
+type JsonnetFileInfo = {
   path: string;
   version: number;
   checksum: string;
@@ -19,117 +18,85 @@ type ManagedJsonnetFileInfo = {
   dashboardJsonnetSize: number;
 };
 
-type ManagedDashboardRenderResult = {
+type JsonnetDashboardValidation = {
+  warnings?: Array<{ code: string; message: string; panelId?: number; panelTitle?: string }>;
+  layoutFixes?: Array<{ message: string; panelId?: number; panelTitle?: string }>;
+};
+
+type JsonnetDashboardRenderResult = {
   dashboard?: Record<string, unknown>;
-  resource?: {
-    metadata?: {
-      name?: unknown;
-    };
-  };
   sourceChecksum?: string;
+  validation?: JsonnetDashboardValidation;
   autoRepaired?: boolean;
   repairs?: string[];
-  jsonnetFile?: ManagedJsonnetFileInfo;
+  jsonnetFile?: JsonnetFileInfo;
   dashboard_jsonnet?: string;
 };
 
-type ManagedDashboardSyncResult = {
+type JsonnetDashboardSaveResult = {
   uid: string;
   url: string;
   status: string;
   sourceChecksum: string;
+  validation?: JsonnetDashboardValidation;
   autoRepaired?: boolean;
   repairs?: string[];
-  jsonnetFile?: ManagedJsonnetFileInfo;
+  jsonnetFile?: JsonnetFileInfo;
   dashboard_jsonnet?: string;
+  saveResponse?: Record<string, unknown>;
 };
 
-export function createManagedDashboardTools(toolConfig: CreateGrafanaToolsOptions): ManagedDashboardToolSet {
-  const listManaged = makeGrafanaListManagedDashboardsTool();
-  const getSource = makeGrafanaGetManagedDashboardSourceTool();
-  const render = makeGrafanaRenderManagedDashboardTool(toolConfig);
-  const sync = makeGrafanaSyncManagedDashboardTool(toolConfig);
+export function createJsonnetDashboardTools(toolConfig: CreateGrafanaToolsOptions): JsonnetDashboardToolSet {
+  const render = makeGrafanaRenderJsonnetDashboardTool(toolConfig);
+  const save = makeGrafanaSaveJsonnetDashboardTool(toolConfig);
 
   return {
-    all: [listManaged, getSource, render, sync],
-    listManaged,
-    getSource,
+    all: [render, save],
     render,
-    sync,
+    save,
   };
 }
 
-function makeGrafanaListManagedDashboardsTool(): AgentTool {
-  return {
-    name: 'list_managed_dashboards',
-    label: 'List managed dashboards',
-    description: 'List dashboards currently managed by this app plugin, including Jsonnet source metadata.',
-    parameters: Type.Object({}),
-    async execute(_toolCallId, _params, signal) {
-      throwIfAborted(signal);
-      const result = await pluginResourceFetch<{ dashboards: unknown[] }>('/managed-dashboards');
-      return textResult(JSON.stringify(result.dashboards, null, 2), { count: result.dashboards.length });
-    },
-  };
-}
-
-function makeGrafanaGetManagedDashboardSourceTool(): AgentTool {
-  return {
-    name: 'get_dashboard_source',
-    label: 'Get managed dashboard source',
-    description: 'Fetch the stored Jsonnet source for an app-managed dashboard so it can be edited and re-synced.',
-    parameters: Type.Object({
-      uid: Type.String({ description: 'Managed dashboard UID.' }),
-    }),
-    async execute(_toolCallId, params, signal) {
-      const args = params as ManagedDashboardSourceParams;
-      throwIfAborted(signal);
-      const result = await pluginResourceFetch<unknown>('/managed-dashboards/source', { method: 'POST', data: args });
-      return textResult(truncateText(JSON.stringify(result, null, 2), 120000), { uid: args.uid });
-    },
-  };
-}
-
-function makeGrafanaRenderManagedDashboardTool(toolConfig: CreateGrafanaToolsOptions): AgentTool {
+function makeGrafanaRenderJsonnetDashboardTool(toolConfig: CreateGrafanaToolsOptions): AgentTool {
   return {
     name: 'render_dashboard',
-    label: 'Render managed dashboard',
+    label: 'Render Jsonnet dashboard',
     description:
-      'Compile the current virtual Jsonnet file into an app-managed Grafana dashboard resource without saving it. Defaults to dashboard.jsonnet unless dashboard_jsonnet is supplied explicitly.',
-    parameters: managedDashboardParameters(),
+      'Compile the current virtual Jsonnet file into an editable Grafana dashboard JSON preview without saving it. Defaults to dashboard.jsonnet unless dashboard_jsonnet is supplied explicitly.',
+    parameters: jsonnetDashboardParameters(),
     async execute(_toolCallId, params, signal) {
-      const args = await prepareManagedDashboardParams(params as ManagedDashboardParams, toolConfig, signal);
+      const args = await prepareJsonnetDashboardParams(params as JsonnetDashboardParams, toolConfig, signal);
       throwIfAborted(signal);
-      const result = await pluginResourceFetch<ManagedDashboardRenderResult>('/managed-dashboards/render', {
+      const result = await pluginResourceFetch<JsonnetDashboardRenderResult>('/jsonnet-dashboards/render', {
         method: 'POST',
         data: args,
       });
       hydrateAutoRepairedJsonnetFile(result, toolConfig);
-      const summary = compactManagedDashboardRenderResult(result, args, toolConfig);
+      const summary = compactJsonnetDashboardRenderResult(result, args, toolConfig);
       return textResult(JSON.stringify(summary, null, 2), summary);
     },
   };
 }
 
-function makeGrafanaSyncManagedDashboardTool(toolConfig: CreateGrafanaToolsOptions): AgentTool {
+function makeGrafanaSaveJsonnetDashboardTool(toolConfig: CreateGrafanaToolsOptions): AgentTool {
   return {
-    name: 'sync_dashboard',
-    label: 'Sync managed dashboard',
+    name: 'save_dashboard',
+    label: 'Save Jsonnet dashboard',
     description:
-      'Create or update an app-managed dashboard from the current virtual Jsonnet file. The resolved source is stored with the dashboard so future edits can fetch, modify, and re-sync it.',
-    parameters: managedDashboardParameters(),
+      'Create or update an editable Grafana dashboard from the current virtual Jsonnet file. This saves the rendered dashboard through Grafana without blocking manual edits.',
+    parameters: jsonnetDashboardParameters(),
     async execute(toolCallId, params, signal) {
-      const rawArgs = params as ManagedDashboardParams;
-      const folderOverride = syncFolderOverrideForCall(toolConfig, toolCallId, rawArgs);
+      const rawArgs = params as JsonnetDashboardParams;
+      const folderOverride = saveFolderOverrideForCall(toolConfig, toolCallId, rawArgs);
 
       try {
-        const args = await prepareManagedDashboardParams(
-          applySyncFolderOverride(rawArgs, folderOverride),
+        const args = await prepareJsonnetDashboardParams(
+          applySaveFolderOverride(rawArgs, folderOverride),
           toolConfig,
           signal
         );
         throwIfAborted(signal);
-        const result = await pluginResourceFetch<ManagedDashboardSyncResult>('/managed-dashboards/sync', {
+        const result = await pluginResourceFetch<JsonnetDashboardSaveResult>('/jsonnet-dashboards/save', {
           method: 'POST',
           data: args,
         });
@@ -143,36 +110,41 @@ function makeGrafanaSyncManagedDashboardTool(toolConfig: CreateGrafanaToolsOptio
           sourceBytes: sourceBytes(args, toolConfig),
           folderUid: args.folderUid,
           folderTitle: folderOverride?.title,
+          validation: result.validation,
           autoRepaired: result.autoRepaired,
           repairs: result.repairs,
           jsonnetFile: result.jsonnetFile,
         };
         return textResult(
-          `Managed dashboard ${result.status}: ${result.url}\nUID: ${result.uid}\nSource: ${result.sourceChecksum}`,
+          `Dashboard ${dashboardSaveStatusLabel(result.status)}: ${result.url}\nUID: ${result.uid}\nSource: ${result.sourceChecksum}`,
           details
         );
       } finally {
-        toolConfig.dashboardSyncFolders?.clearFolderOverride(toolCallId);
+        toolConfig.dashboardSaveFolders?.clearFolderOverride(toolCallId);
       }
     },
   };
 }
 
-function syncFolderOverrideForCall(
+function dashboardSaveStatusLabel(status: string) {
+  return status === 'success' ? 'saved' : status;
+}
+
+function saveFolderOverrideForCall(
   toolConfig: CreateGrafanaToolsOptions,
   toolCallId: string,
-  args: ManagedDashboardParams
-): DashboardSyncFolderSelection | undefined {
+  args: JsonnetDashboardParams
+): DashboardSaveFolderSelection | undefined {
   if (args.folderUid) {
     return undefined;
   }
-  return toolConfig.dashboardSyncFolders?.getFolderOverride(toolCallId);
+  return toolConfig.dashboardSaveFolders?.getFolderOverride(toolCallId);
 }
 
-function applySyncFolderOverride(
-  args: ManagedDashboardParams,
-  folderOverride: DashboardSyncFolderSelection | undefined
-): ManagedDashboardParams {
+function applySaveFolderOverride(
+  args: JsonnetDashboardParams,
+  folderOverride: DashboardSaveFolderSelection | undefined
+): JsonnetDashboardParams {
   if (!folderOverride || args.folderUid) {
     return args;
   }
@@ -183,12 +155,12 @@ function applySyncFolderOverride(
   };
 }
 
-function managedDashboardParameters() {
+function jsonnetDashboardParameters() {
   return Type.Object({
     dashboard_jsonnet: Type.Optional(
       Type.String({
         description:
-          'Optional self-contained Jsonnet source. Prefer writing dashboard.jsonnet with write_jsonnet and omit this field for render/sync.',
+          'Optional self-contained Jsonnet source. Prefer writing dashboard.jsonnet with write_jsonnet and omit this field for render/save.',
       })
     ),
     path: Type.Optional(
@@ -207,11 +179,11 @@ function managedDashboardParameters() {
   });
 }
 
-async function prepareManagedDashboardParams(
-  params: ManagedDashboardParams,
+async function prepareJsonnetDashboardParams(
+  params: JsonnetDashboardParams,
   toolConfig: CreateGrafanaToolsOptions,
   signal?: AbortSignal
-): Promise<ManagedDashboardParams> {
+): Promise<JsonnetDashboardParams> {
   const args = { ...params };
   if (typeof args.dashboard_jsonnet === 'string' && args.dashboard_jsonnet.trim()) {
     return args;
@@ -222,7 +194,7 @@ async function prepareManagedDashboardParams(
   await ensureVirtualJsonnetFileHydrated(runtime, path, signal);
   const sessionId = runtime?.getSessionId();
   if (!sessionId) {
-    throw new Error('A chat session is required before rendering or syncing a virtual Jsonnet file.');
+    throw new Error('A chat session is required before rendering or saving a virtual Jsonnet file.');
   }
 
   return {
@@ -232,7 +204,7 @@ async function prepareManagedDashboardParams(
   };
 }
 
-function sourceBytes(args: ManagedDashboardParams, toolConfig: CreateGrafanaToolsOptions): number | undefined {
+function sourceBytes(args: JsonnetDashboardParams, toolConfig: CreateGrafanaToolsOptions): number | undefined {
   if (typeof args.dashboard_jsonnet === 'string') {
     return args.dashboard_jsonnet.length;
   }
@@ -241,14 +213,14 @@ function sourceBytes(args: ManagedDashboardParams, toolConfig: CreateGrafanaTool
   return runtime?.getFile(path)?.dashboardJsonnetSize;
 }
 
-function compactManagedDashboardRenderResult(
-  result: ManagedDashboardRenderResult,
-  args: ManagedDashboardParams,
+function compactJsonnetDashboardRenderResult(
+  result: JsonnetDashboardRenderResult,
+  args: JsonnetDashboardParams,
   toolConfig: CreateGrafanaToolsOptions
 ) {
   const dashboard = result.dashboard ?? {};
   const panels = recordsField(dashboard, 'panels');
-  const uid = stringField(dashboard, 'uid') ?? stringField(result.resource?.metadata, 'name') ?? args.uid;
+  const uid = stringField(dashboard, 'uid') ?? args.uid;
   const path = result.jsonnetFile?.path ?? args.path;
   const sourceByteCount = result.jsonnetFile?.dashboardJsonnetSize ?? sourceBytes(args, toolConfig);
 
@@ -265,12 +237,13 @@ function compactManagedDashboardRenderResult(
     sourceBytes: sourceByteCount,
     autoRepaired: result.autoRepaired,
     repairs: result.repairs,
+    validation: result.validation,
     jsonnetFile: result.jsonnetFile,
   };
 }
 
 function hydrateAutoRepairedJsonnetFile(
-  result: { jsonnetFile?: ManagedJsonnetFileInfo; dashboard_jsonnet?: string },
+  result: { jsonnetFile?: JsonnetFileInfo; dashboard_jsonnet?: string },
   toolConfig: CreateGrafanaToolsOptions
 ) {
   if (!result.jsonnetFile || typeof result.dashboard_jsonnet !== 'string') {

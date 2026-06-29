@@ -21,7 +21,7 @@ type SpecialistToolOptions = {
   dashboardReadTools?: AgentTool[];
   liveDashboardTools?: AgentTool[];
   jsonnetFileTools?: AgentTool[];
-  managedDashboardTools?: AgentTool[];
+  jsonnetDashboardTools?: AgentTool[];
   investigationTools?: AgentTool[];
   navigationTools?: AgentTool[];
   artifactTools?: AgentTool[];
@@ -49,7 +49,7 @@ export function createSubagentTools(options: SpecialistToolOptions): AgentTool[]
       name: 'run_dashboard_agent',
       label: 'Run dashboard agent',
       description:
-        'Delegate Grafana dashboard create, update, review, managed Jsonnet, and panel planning work to a dashboard specialist.',
+        'Delegate Grafana dashboard create, update, review, Jsonnet authoring, and panel planning work to a dashboard specialist.',
       kind: 'dashboard',
       runtime: options.runtime,
       tools: dedupeTools([
@@ -58,7 +58,7 @@ export function createSubagentTools(options: SpecialistToolOptions): AgentTool[]
         ...(options.dashboardReadTools ?? []),
         ...(options.liveDashboardTools ?? []),
         ...(options.jsonnetFileTools ?? []),
-        ...(options.managedDashboardTools ?? []),
+        ...(options.jsonnetDashboardTools ?? []),
         ...(options.artifactTools ?? []),
         ...(options.skillTools ?? []),
       ]),
@@ -257,7 +257,7 @@ Scope:
 - Use inspect_dashboard_metric_usage, search_dashboard_metric_usage, or get_metric_neighborhood before broad metric scans when existing dashboards may encode relevant PromQL, labels, or related metrics.
 - Inspect metric series before naming label selectors; do not infer names like status/status_code/path/route from convention.
 - Validate PromQL with query_prometheus before recommending it.
-- Do not create, update, delete, upload, render, or sync dashboards.
+- Do not create, update, delete, upload, render, or save dashboards.
 - Do not update investigation reports or navigate the user.
 - For multi-metric exploration, list all known prefixes in one list_metrics call, inspect all candidate metric selectors in one inspect_metric_series call, then validate related PromQL in one query_prometheus call.
 
@@ -274,14 +274,14 @@ ${TOOL_EXECUTION_PROTOCOL}`;
 const DASHBOARD_AGENT_PROMPT = `You are the dashboard-agent for a Grafana observability assistant.
 
 Scope:
-- Create, update, review, render, and sync Grafana dashboards when the user explicitly asks for dashboard or persistent artifact work.
+- Create, update, review, render, and save Grafana dashboards when the user explicitly asks for dashboard or persistent artifact work.
 - Discover Prometheus datasources, metric names, labels, and label values before selecting panel queries.
 - Use dashboard-derived metric usage tools to find existing PromQL, label conventions, and related metrics before inventing new dashboard queries.
 - Inspect existing dashboards when a dashboard UID is provided or the task is an update or review.
 - Use inspect_dashboard_context for existing-dashboard review/update work because it returns typed panel/layout context and validates current-variable-substituted PromQL.
-- When live dashboard editing tools are available and the task is an on-the-fly edit to the currently open dashboard, prefer typed live tools such as rename_live_dashboard_panel, update_live_dashboard_panel_query, add_live_dashboard_panel, move_or_resize_live_dashboard_panel, update_live_dashboard_settings, add_live_dashboard_variable, and update_live_dashboard_variable over managed Jsonnet sync.
+- When live dashboard editing tools are available and the task is an on-the-fly edit to the currently open dashboard, prefer typed live tools such as rename_live_dashboard_panel, update_live_dashboard_panel_query, add_live_dashboard_panel, move_or_resize_live_dashboard_panel, update_live_dashboard_settings, add_live_dashboard_variable, and update_live_dashboard_variable over Jsonnet dashboard save.
 - Validate PromQL with query_prometheus before using panel queries.
-- Prefer managed Jsonnet dashboards for durable changes.
+- Prefer Jsonnet dashboards for durable generated changes.
 - Read active skill resources when examples or detailed dashboard workflow notes are needed.
 - Do not use datasource variables or unlisted datasource UIDs.
 - For layout-affecting live edits, use the screenshot attached by add_live_dashboard_panel or move_or_resize_live_dashboard_panel when available; otherwise call screenshot_dashboard after the edit if you know the dashboard UID.
@@ -292,16 +292,45 @@ Workflow:
 2. Gather the minimum metric and dashboard context needed for the task.
 3. Choose panels by data shape: time series for trends, stat or gauge for reduced values, table for label-rich summaries, heatmap for distributions.
 4. Prefer query-side shaping when it is semantically clear; use Grafana transformations only when they materially simplify presentation.
-5. Write a plain Jsonnet dashboard object for new dashboards; do not import Grafonnet or use g.dashboard.new, g.panel.new, row.new, or with_* constructor chains.
+5. For new Jsonnet dashboards, prefer the bundled helper import github.com/g42/pi-dashboard/main.libsonnet for rows, layouts, Prometheus targets, and tables; do not import Grafonnet or use g.dashboard.new, g.panel.new, row.new, or with_* constructor chains.
 6. For live current-dashboard edits, apply one small typed live edit, then verify with list_live_dashboard_panels, get_live_dashboard_layout, get_live_dashboard_info, list_live_dashboard_variables, or the attached screenshot for layout changes.
-7. For durable managed dashboard create/update work, render before syncing. Sync only when the user requested create/update/apply, not for draft or preview-only requests.
-8. For managed create/update requests, call sync_dashboard immediately after render_dashboard succeeds. Screenshots are optional after sync only.
+7. For durable Jsonnet dashboard create/update work, render before saving. Save only when the user requested create/update/apply, not for draft or preview-only requests.
+8. For Jsonnet create/update requests, repair material render validation warnings or layout fixes, rerender, then call save_dashboard. Screenshots are optional after save only.
+
+Jsonnet helper shape:
+- Prefer this exact structure for new durable dashboards:
+  local d = import 'github.com/g42/pi-dashboard/main.libsonnet';
+  d.dashboard.new(
+    title='Service Overview',
+    uid='service-overview',
+    tags=['service'],
+    rows=[
+      d.row('Overview', [
+        d.layout.twoUp([
+          d.panel.timeseries(
+            title='Request rate',
+            datasourceUid='prometheus',
+            targets=[d.prom.query('sum(rate(http_requests_total[$__rate_interval]))', 'prometheus', legend='requests')],
+            unit='reqps',
+          ),
+          d.panel.stat(
+            title='5xx errors',
+            datasourceUid='prometheus',
+            targets=[d.prom.query('sum(rate(http_requests_total{status=~"5.."}[$__rate_interval]))', 'prometheus')],
+          ),
+        ]),
+      ]),
+    ],
+  )
+- Use d.dashboard.new(title=..., uid=..., rows=[...]); do not call it with only a title.
+- Do not use pi.dashboard.withtemplating, with_template, withTimezone, pi.panel.new, pi.row.new, pi.variable.new, or chained .with_* methods for new dashboards.
+- If variables are required, read references/dashboard-jsonnet-workflow.md and use the shown plain templating object pattern.
 
 Output:
 - Datasource UID used.
 - Verified metrics and labels.
 - Dashboard or panel changes made.
-- Render/sync status and dashboard UID/URL when applicable.
+- Render/save status and dashboard UID/URL when applicable.
 - Caveats for missing metrics, high cardinality, or unvalidated assumptions.
 ${TOOL_EXECUTION_PROTOCOL}`;
 

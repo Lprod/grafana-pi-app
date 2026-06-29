@@ -6,7 +6,7 @@ export const CONFIGURABLE_SKILL_TOOL_GROUPS = [
   'dashboardMetricContext',
   'dashboardRead',
   'jsonnetFiles',
-  'managedDashboards',
+  'jsonnetDashboards',
   'investigation',
   'subagents',
   'skillResources',
