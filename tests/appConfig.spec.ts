@@ -1,7 +1,7 @@
 import { test, expect } from './fixtures';
 import type { AppConfigPage, Page } from '@grafana/plugin-e2e';
 import { testIds } from '../src/components/testIds';
-import type { PiAppThinkingFormat, PiAppThinkingLevel } from '../src/types';
+import type { PiAppCustomSkill, PiAppThinkingFormat, PiAppThinkingLevel } from '../src/types';
 
 const defaultLocalLLMSettings = {
   baseURL: 'http://host.docker.internal:8080/v1',
@@ -108,16 +108,22 @@ async function addCustomSkill(
     content: string;
   }
 ) {
-  await page.getByTestId(testIds.appConfig.customSkillAdd).click();
-  await page.getByTestId(testIds.appConfig.customSkillName).clear();
-  await page.getByTestId(testIds.appConfig.customSkillName).fill(skill.name);
-  await page.getByTestId(testIds.appConfig.customSkillDescription).fill(skill.description);
+  const customSkills: PiAppCustomSkill[] = [
+    {
+      name: skill.name,
+      description: skill.description,
+      content: skill.content,
+      activation: { explicitOnly: true },
+      toolGroups: ['skillResources'],
+    },
+  ];
 
-  const editor = page.getByTestId(testIds.appConfig.customSkillContent).locator('.monaco-editor').first();
-  await editor.click();
-  await page.keyboard.press(process.platform === 'darwin' ? 'Meta+A' : 'Control+A');
-  await page.keyboard.insertText(skill.content);
-  await page.getByRole('button', { name: 'Done' }).click();
+  await page.getByTestId(testIds.appConfig.customSkillsJsonOpen).click();
+  await page.getByTestId(testIds.appConfig.customSkillsJson).fill(JSON.stringify(customSkills, null, 2));
+  await page.getByRole('button', { name: 'Apply JSON' }).click();
+
+  const skillRow = page.getByTestId(testIds.appConfig.customSkillRow).filter({ hasText: skill.name });
+  await expect(skillRow).toContainText(skill.description);
 }
 
 function readThinkingLevel(value: string | undefined): PiAppThinkingLevel {
