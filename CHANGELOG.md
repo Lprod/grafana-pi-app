@@ -1,3 +1,10 @@
+# [2.10.0](https://github.com/elohmeier/grafana-pi-app/compare/v2.9.0...v2.10.0) (2026-06-30)
+
+
+### Features
+
+* add custom skills configuration editor ([f0fe127](https://github.com/elohmeier/grafana-pi-app/commit/f0fe127f006f03dabbd9a60c55b4fff4ecc4ce36))
+
 # [2.9.0](https://github.com/elohmeier/grafana-pi-app/compare/v2.8.1...v2.9.0) (2026-06-29)
 
 
