@@ -14,16 +14,17 @@ import {
   Alert,
   Badge,
   Button,
-  Combobox,
+  Dropdown,
   EmptyState,
+  Field,
   Icon,
+  Menu,
   Modal,
   Spinner,
   TextArea,
   useStyles2,
-  type ComboboxOption,
 } from '@grafana/ui';
-import { getBackendSrv, locationService, usePluginUserStorage } from '@grafana/runtime';
+import { FolderPicker, locationService, usePluginUserStorage } from '@grafana/runtime';
 import { useRestrictedGrafanaApis, type DashboardMutationAPI, type GrafanaTheme2 } from '@grafana/data';
 import { PLUGIN_BASE_URL, PLUGIN_ID } from '../../constants';
 import { testIds } from '../../components/testIds';
@@ -126,12 +127,6 @@ type ToolConfirmationView = {
   saveDashboardFolder?: DashboardSaveFolderSelection;
 };
 
-type DashboardFolderApiItem = {
-  uid?: unknown;
-  title?: unknown;
-  fullTitle?: unknown;
-};
-
 type ChatLeaveGuardAction = {
   title: string;
   description: string;
@@ -155,9 +150,9 @@ const ACTIVE_CHAT_LEAVE_MESSAGE =
   'The assistant is still working. Leaving now will stop the run and discard any partial response.';
 const DRAFT_CHAT_LEAVE_MESSAGE = 'The current draft message will be discarded.';
 const CHAT_SESSION_PARAM = 'session';
+const SIDEBAR_SESSION_MENU_LIMIT = 8;
 const ASSISTANT_SIDEBAR_PLUGIN_ID = 'grafana-assistant-app';
 const GENERAL_FOLDER_TITLE = 'General';
-const GENERAL_FOLDER_OPTION: ComboboxOption<string> = { label: GENERAL_FOLDER_TITLE, value: '' };
 const STREAMING_REVISION_WATCHDOG_MS = 80;
 const sessionKey = (id: string) => `sessions:${id}`;
 
@@ -339,18 +334,11 @@ export function ChatApp({
   const [error, setError] = useState<string>();
   const [toolRuns, setToolRuns] = useState<ToolRunState>({});
   const [runStatus, setRunStatus] = useState<ChatRunStatus>();
-  const [dashboardFolderOptions, setDashboardFolderOptions] = useState<Array<ComboboxOption<string>>>([
-    GENERAL_FOLDER_OPTION,
-  ]);
-  const [dashboardFoldersLoading, setDashboardFoldersLoading] = useState(false);
-  const [dashboardFoldersError, setDashboardFoldersError] = useState<string>();
   const unsubscribeRef = useRef<() => void>();
   const titleRef = useRef('New chat');
   const sessionsRef = useRef<SessionIndexItem[]>([]);
   const storageRef = useRef(storage);
   const runStatusRef = useRef<ChatRunStatus>();
-  const dashboardFoldersRequestedRef = useRef(false);
-  const dashboardFoldersLoadedRef = useRef(false);
   const importSessionInputRef = useRef<HTMLInputElement | null>(null);
   const messagesContainerRef = useRef<HTMLElement | null>(null);
   const autoScrollRef = useRef(true);
@@ -407,26 +395,6 @@ export function ChatApp({
     [setPendingToolConfirmation]
   );
 
-  const loadDashboardFolders = useCallback(async () => {
-    if (dashboardFoldersRequestedRef.current || dashboardFoldersLoadedRef.current || dashboardFoldersLoading) {
-      return;
-    }
-
-    dashboardFoldersRequestedRef.current = true;
-    setDashboardFoldersLoading(true);
-    setDashboardFoldersError(undefined);
-    try {
-      const folders = await getBackendSrv().get<DashboardFolderApiItem[]>('/api/folders', { limit: 1000 });
-      const options = [GENERAL_FOLDER_OPTION, ...folders.map(dashboardFolderOption).filter(isSelectableFolderOption)];
-      setDashboardFolderOptions(dedupeFolderOptions(options));
-      dashboardFoldersLoadedRef.current = true;
-    } catch (err) {
-      setDashboardFoldersError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setDashboardFoldersLoading(false);
-    }
-  }, [dashboardFoldersLoading]);
-
   const requestToolConfirmation = useCallback<ChatToolConfirmationHandler>(
     (toolCallId: string, toolName: string, args: unknown, signal?: AbortSignal) => {
       const confirmation = buildToolConfirmation(toolCallId, toolName, args);
@@ -439,10 +407,6 @@ export function ChatApp({
           block: true,
           reason: `Persistent Grafana write tool ${toolName} was blocked because another approval is pending.`,
         });
-      }
-
-      if (confirmation.saveDashboardFolder) {
-        void loadDashboardFolders();
       }
 
       return new Promise((resolve) => {
@@ -485,7 +449,7 @@ export function ChatApp({
         }
       });
     },
-    [loadDashboardFolders, setPendingToolConfirmation]
+    [setPendingToolConfirmation]
   );
 
   const confirmToolCall = useCallback<NonNullable<GrafanaToolRuntime['beforeToolCall']>>(
@@ -497,9 +461,9 @@ export function ChatApp({
   );
 
   const handleDashboardFolderChange = useCallback(
-    (option: ComboboxOption<string>) => {
-      const uid = option.value || undefined;
-      const title = selectableLabel(option) || (uid ? uid : GENERAL_FOLDER_TITLE);
+    (folderUid: string | undefined, folderTitle: string | undefined) => {
+      const uid = folderUid || undefined;
+      const title = folderTitle || (uid ? uid : GENERAL_FOLDER_TITLE);
       setPendingToolConfirmation((current) => {
         if (!current?.saveDashboardFolder) {
           return current;
@@ -639,7 +603,7 @@ export function ChatApp({
       if (event.type === 'agent_end') {
         const sessionId = sessionIdRef.current;
         if (sessionId) {
-          void saveSession(sessionId, titleRef.current, eventAgent.state.messages);
+          void saveSession(sessionId, titleRef.current, event.messages);
         }
       }
     },
@@ -1100,6 +1064,9 @@ export function ChatApp({
       await currentAgent.prompt(prompt);
       assistantTelemetry.recordTranscriptSnapshot(currentAgent.state.messages);
       emitBenchmarkTranscriptSnapshot(currentAgent.state.messages);
+      if (agentRef.current === currentAgent && sessionIdRef.current === sessionId) {
+        await saveSession(sessionId, titleRef.current, currentAgent.state.messages);
+      }
     } catch (err) {
       if (agentRef.current === currentAgent && sessionIdRef.current === sessionId) {
         setError(err instanceof Error ? err.message : String(err));
@@ -1510,6 +1477,48 @@ export function ChatApp({
   const streamingBadgeText = runStatusBadgeText(displayRunStatus, pendingApprovalToolName);
   const hasLLMConfig = Boolean(jsonData.isOpenAIAPIKeySet);
   const hasCurrentMessages = hasPersistableMessages(agent?.state.messages ?? []);
+  const visibleSidebarSessions = sessions.slice(0, SIDEBAR_SESSION_MENU_LIMIT);
+  const sidebarSessionMenu = (
+    <div className={styles.sidebarSessionMenu}>
+      <Menu
+        ariaLabel="Assistant sessions"
+        className={styles.sidebarSessionMenuContent}
+        header={
+          <div className={styles.sidebarSessionMenuHeader}>
+            <span className={styles.sidebarSessionMenuTitle}>Sessions</span>
+            <span className={styles.sidebarSessionMenuMeta}>{sessions.length} saved</span>
+          </div>
+        }
+      >
+        <Menu.Item disabled={isBusy} icon="plus" label="New chat" onClick={requestNewSession} />
+        <Menu.Item disabled={isBusy} icon="import" label="Import session" onClick={openImportSessionPicker} />
+        <Menu.Divider />
+        {visibleSidebarSessions.map((session) => (
+          <Menu.Item
+            active={session.id === currentSessionId}
+            description={formatDate(session.updatedAt)}
+            disabled={isBusy}
+            icon="comment-alt"
+            key={session.id}
+            label={session.title}
+            onClick={() => requestLoadSession(session.id)}
+          />
+        ))}
+        {sessions.length === 0 && <Menu.Item disabled label="No saved chats yet" />}
+        {sessions.length > SIDEBAR_SESSION_MENU_LIMIT && (
+          <>
+            <Menu.Divider />
+            <Menu.Item
+              disabled={isBusy}
+              icon="external-link-alt"
+              label={`Open full page for ${sessions.length - SIDEBAR_SESSION_MENU_LIMIT} more`}
+              onClick={requestOpenFullPage}
+            />
+          </>
+        )}
+      </Menu>
+    </div>
+  );
 
   return (
     <div
@@ -1518,9 +1527,6 @@ export function ChatApp({
     >
       <ToolConfirmationModal
         confirmation={pendingToolConfirmation}
-        folderOptions={dashboardFolderOptions}
-        foldersLoading={dashboardFoldersLoading}
-        foldersError={dashboardFoldersError}
         onFolderChange={handleDashboardFolderChange}
         onApprove={() => settleToolConfirmation(true)}
         onDeny={() => settleToolConfirmation(false)}
@@ -1583,6 +1589,17 @@ export function ChatApp({
           <div className={styles.toolbarActions}>
             {isSidebarVariant && (
               <>
+                <Dropdown overlay={sidebarSessionMenu} placement="bottom-start">
+                  <Button
+                    aria-label="Sessions"
+                    disabled={isBusy}
+                    icon="history"
+                    size="sm"
+                    title="Sessions"
+                    type="button"
+                    variant="secondary"
+                  />
+                </Dropdown>
                 <Button
                   aria-label="New chat"
                   disabled={isBusy}
@@ -1605,7 +1622,7 @@ export function ChatApp({
                 />
               </>
             )}
-            {isStreaming && (
+            {isStreaming && !isSidebarVariant && (
               <Button
                 aria-label="Abort response"
                 data-testid={testIds.chat.stop}
@@ -1682,7 +1699,7 @@ export function ChatApp({
             onTouchStart={handleMessagesTouchStart}
             onWheel={handleMessagesWheel}
           >
-            {visibleMessages.length === 0 ? (
+            {visibleMessages.length === 0 && !isStreaming ? (
               <EmptyState
                 variant="call-to-action"
                 message="Ask about metrics, PromQL, or dashboards"
@@ -1727,7 +1744,7 @@ export function ChatApp({
           )}
         </div>
 
-        <form className={styles.composer} onSubmit={submitPrompt}>
+        <form className={cx(styles.composer, isSidebarVariant && styles.composerSidebar)} onSubmit={submitPrompt}>
           <div className={styles.composerInputGroup}>
             <TextArea
               data-testid={testIds.chat.composer}
@@ -1743,20 +1760,29 @@ export function ChatApp({
               }}
             />
           </div>
-          <div className={styles.composerActions}>
+          <div className={cx(styles.composerActions, isSidebarVariant && styles.composerActionsSidebar)}>
             {isStreaming && (
-              <Button icon="pause" type="button" variant="secondary" onClick={abortAgent}>
+              <Button
+                aria-label="Abort response"
+                data-testid={isSidebarVariant ? testIds.chat.stop : undefined}
+                icon="pause"
+                type="button"
+                variant="secondary"
+                onClick={abortAgent}
+              >
                 Stop
               </Button>
             )}
-            <Button
-              data-testid={testIds.chat.send}
-              icon="message"
-              type="submit"
-              disabled={!agent || !input.trim() || isBusy || !hasLLMConfig}
-            >
-              Send
-            </Button>
+            {(!isSidebarVariant || !isStreaming) && (
+              <Button
+                data-testid={testIds.chat.send}
+                icon="message"
+                type="submit"
+                disabled={!agent || !input.trim() || isBusy || !hasLLMConfig}
+              >
+                Send
+              </Button>
+            )}
           </div>
         </form>
       </main>
@@ -1766,27 +1792,17 @@ export function ChatApp({
 
 function ToolConfirmationModal({
   confirmation,
-  folderOptions,
-  foldersLoading,
-  foldersError,
   onFolderChange,
   onApprove,
   onDeny,
 }: {
   confirmation?: ToolConfirmationView;
-  folderOptions: Array<ComboboxOption<string>>;
-  foldersLoading: boolean;
-  foldersError?: string;
-  onFolderChange: (option: ComboboxOption<string>) => void;
+  onFolderChange: (folderUid: string | undefined, folderTitle: string | undefined) => void;
   onApprove: () => void;
   onDeny: () => void;
 }) {
   const styles = useStyles2(getStyles);
   const args = useMemo(() => formatConfirmationArgs(confirmation?.args), [confirmation?.args]);
-  const selectedFolderOption = useMemo(
-    () => selectedDashboardFolderOption(confirmation?.saveDashboardFolder, folderOptions),
-    [confirmation?.saveDashboardFolder, folderOptions]
-  );
 
   return (
     <Modal
@@ -1816,16 +1832,13 @@ function ToolConfirmationModal({
           </dl>
           {confirmation.saveDashboardFolder && (
             <div className={styles.toolConfirmationFolder}>
-              <label htmlFor="assistant-save-dashboard-folder">Folder</label>
-              <Combobox<string>
-                id="assistant-save-dashboard-folder"
-                loading={foldersLoading}
-                noOptionsMessage="No folders found"
-                options={folderOptions}
-                value={selectedFolderOption}
-                onChange={onFolderChange}
-              />
-              {foldersError && <div className={styles.toolConfirmationFolderError}>{foldersError}</div>}
+              <Field noMargin label="Folder">
+                <FolderPicker
+                  value={confirmation.saveDashboardFolder.uid ?? ''}
+                  onChange={onFolderChange}
+                  showRootFolder
+                />
+              </Field>
             </div>
           )}
           <details className={styles.toolConfirmationDetails}>
@@ -2237,52 +2250,6 @@ function formatConfirmationArgs(value: unknown) {
   } catch {
     return String(value);
   }
-}
-
-function dashboardFolderOption(folder: DashboardFolderApiItem): ComboboxOption<string> | undefined {
-  const uid = stringValue(folder.uid);
-  const title = stringValue(folder.fullTitle) ?? stringValue(folder.title);
-  if (!uid || !title) {
-    return undefined;
-  }
-  return {
-    label: title,
-    value: uid,
-    description: uid,
-  };
-}
-
-function isSelectableFolderOption(value: ComboboxOption<string> | undefined): value is ComboboxOption<string> {
-  return Boolean(value);
-}
-
-function dedupeFolderOptions(options: Array<ComboboxOption<string>>) {
-  const seen = new Set<string>();
-  return options.filter((option) => {
-    const key = option.value ?? '';
-    if (seen.has(key)) {
-      return false;
-    }
-    seen.add(key);
-    return true;
-  });
-}
-
-function selectableLabel(option: ComboboxOption<string> | undefined) {
-  return typeof option?.label === 'string' ? option.label : undefined;
-}
-
-function selectedDashboardFolderOption(
-  selection: DashboardSaveFolderSelection | undefined,
-  options: Array<ComboboxOption<string>>
-) {
-  const uid = selection?.uid ?? '';
-  return (
-    options.find((option) => (option.value ?? '') === uid) ?? {
-      label: selection?.title ?? (uid ? uid : GENERAL_FOLDER_TITLE),
-      value: uid,
-    }
-  );
 }
 
 function dashboardActionRoute(action: DashboardAction) {
@@ -3279,6 +3246,51 @@ const getStyles = (theme: GrafanaTheme2) => ({
     gap: theme.spacing(1),
     flexWrap: 'wrap',
   }),
+  sidebarSessionMenu: css({
+    background: theme.colors.background.secondary,
+    border: `1px solid ${theme.colors.border.weak}`,
+    borderRadius: theme.shape.radius.default,
+    boxShadow: theme.shadows.z2,
+    width: 'min(280px, calc(100vw - 24px))',
+    maxHeight: 'min(420px, calc(100vh - 96px))',
+    overflowX: 'hidden',
+    overflowY: 'auto',
+  }),
+  sidebarSessionMenuContent: css({
+    width: '100%',
+    maxWidth: '100%',
+    '& [data-role="menuitem"]': {
+      width: '100%',
+      maxWidth: '100%',
+    },
+    '& [data-role="menuitem"] > div': {
+      minWidth: 0,
+    },
+    '& [data-role="menuitem"] span': {
+      minWidth: 0,
+      overflow: 'hidden',
+      textOverflow: 'ellipsis',
+      whiteSpace: 'nowrap',
+    },
+  }),
+  sidebarSessionMenuHeader: css({
+    display: 'grid',
+    gap: theme.spacing(0.25),
+    minWidth: 0,
+    padding: theme.spacing(1, 1.5, 0.5),
+  }),
+  sidebarSessionMenuTitle: css({
+    color: theme.colors.text.primary,
+    fontWeight: theme.typography.fontWeightMedium,
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
+  }),
+  sidebarSessionMenuMeta: css({
+    color: theme.colors.text.secondary,
+    fontSize: theme.typography.bodySmall.fontSize,
+    lineHeight: theme.typography.bodySmall.lineHeight,
+  }),
   messagesFrame: css({
     position: 'relative',
     display: 'grid',
@@ -3467,6 +3479,10 @@ const getStyles = (theme: GrafanaTheme2) => ({
       gridTemplateColumns: '1fr',
     },
   }),
+  composerSidebar: css({
+    gridTemplateColumns: '1fr',
+    padding: theme.spacing(1.5),
+  }),
   composerInputGroup: css({
     display: 'grid',
     gap: theme.spacing(1),
@@ -3477,6 +3493,9 @@ const getStyles = (theme: GrafanaTheme2) => ({
     justifyContent: 'flex-end',
     gap: theme.spacing(1),
     flexWrap: 'wrap',
+  }),
+  composerActionsSidebar: css({
+    flexWrap: 'nowrap',
   }),
   toolConfirmationModal: css({
     width: 'min(620px, calc(100vw - 32px))',
@@ -3519,10 +3538,6 @@ const getStyles = (theme: GrafanaTheme2) => ({
       fontSize: theme.typography.bodySmall.fontSize,
       fontWeight: theme.typography.fontWeightMedium,
     },
-  }),
-  toolConfirmationFolderError: css({
-    color: theme.colors.error.text,
-    fontSize: theme.typography.bodySmall.fontSize,
   }),
   toolConfirmationDetails: css({
     '& summary': {
