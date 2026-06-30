@@ -105,7 +105,9 @@ function makeListMetricsTool(toolConfig: GrafanaToolConfig): AgentTool {
       const ds = await getPrometheusDatasource(toolConfig, args.datasourceUid);
       const response = await getDatasourceResource<PrometheusMetadataResponse<string[]>>(
         ds,
-        'api/v1/label/__name__/values'
+        'api/v1/label/__name__/values',
+        undefined,
+        signal
       );
       const metricNames = response.data ?? [];
       const prefixes = listMetricPrefixes(args);
@@ -165,7 +167,8 @@ function makeListLabelValuesTool(toolConfig: GrafanaToolConfig): AgentTool {
       const response = await getDatasourceResource<PrometheusMetadataResponse<string[]>>(
         ds,
         `api/v1/label/${encodeURIComponent(args.label)}/values`,
-        args.match ? { 'match[]': args.match } : undefined
+        args.match ? { 'match[]': args.match } : undefined,
+        signal
       );
       const values = response.data ?? [];
       const limited = values.slice(0, 1000);
@@ -220,7 +223,7 @@ function makeInspectMetricSeriesTool(toolConfig: GrafanaToolConfig): AgentTool {
       const inspections = await Promise.all(
         matches.slice(0, 10).map(async (match) => {
           throwIfAborted(signal);
-          return inspectMetricSeries(ds, match, limit);
+          return inspectMetricSeries(ds, match, limit, signal);
         })
       );
 
@@ -281,13 +284,14 @@ function metricSeriesMatches(args: InspectMetricSeriesParams) {
   return Array.from(new Set(matches)).slice(0, 20);
 }
 
-async function inspectMetricSeries(ds: ResourceCapableDataSource, match: string, limit: number) {
+async function inspectMetricSeries(ds: ResourceCapableDataSource, match: string, limit: number, signal?: AbortSignal) {
   const response = await getDatasourceResource<PrometheusMetadataResponse<Array<Record<string, string>>>>(
     ds,
     'api/v1/series',
     {
       'match[]': match,
-    }
+    },
+    signal
   );
   const series = response.data ?? [];
   const examples = series.slice(0, limit);
@@ -433,7 +437,7 @@ function makeQueryPrometheusRawTool(toolConfig: GrafanaToolConfig): AgentTool {
       const timeRange =
         queryType === 'range' ? makeTimeRange(args.start ?? 'now-1h', args.end ?? 'now') : getDefaultTimeRange();
       const interval = queryType === 'range' ? chooseRangeInterval(timeRange) : '1m';
-      const response = await runPrometheusQuery(ds, args.query, queryType, timeRange, interval);
+      const response = await runPrometheusQuery(ds, args.query, queryType, timeRange, interval, signal);
       const frames = response.data ?? [];
       const result = truncateText(JSON.stringify(frames.map(frameToJson), null, 2), 120000);
 
@@ -467,7 +471,7 @@ export async function runPrometheusQuerySummaryOrValidationError(
   signal?: AbortSignal
 ): Promise<PrometheusQueryValidationSummary> {
   try {
-    return await runPrometheusQuerySummary(ds, querySpec);
+    return await runPrometheusQuerySummary(ds, querySpec, signal);
   } catch (error) {
     throwIfAborted(signal);
     return failedPrometheusQuerySummary(ds, querySpec, error);
@@ -476,13 +480,14 @@ export async function runPrometheusQuerySummaryOrValidationError(
 
 async function runPrometheusQuerySummary(
   ds: ResourceCapableDataSource,
-  querySpec: PrometheusQuerySpec
+  querySpec: PrometheusQuerySpec,
+  signal?: AbortSignal
 ): Promise<PrometheusQuerySummary> {
   const queryType = querySpec.type ?? 'instant';
   const timeRange =
     queryType === 'range' ? makeTimeRange(querySpec.start ?? 'now-1h', querySpec.end ?? 'now') : getDefaultTimeRange();
   const interval = queryType === 'range' ? chooseRangeInterval(timeRange) : '1m';
-  const response = await runPrometheusQuery(ds, querySpec.query, queryType, timeRange, interval);
+  const response = await runPrometheusQuery(ds, querySpec.query, queryType, timeRange, interval, signal);
   const frames = response.data ?? [];
   return summarizePrometheusQuery({
     datasourceUid: ds.uid,
@@ -553,20 +558,23 @@ export async function getPrometheusDatasource(
 async function getDatasourceResource<T>(
   ds: ResourceCapableDataSource,
   path: string,
-  params?: Record<string, unknown>
+  params?: Record<string, unknown>,
+  signal?: AbortSignal
 ): Promise<T> {
   try {
-    if (typeof ds.getResource === 'function') {
-      return await ds.getResource<T>(path, params);
-    }
+    return await withPrometheusRetry({ operation: 'resource request', datasourceUid: ds.uid, signal }, async () => {
+      if (typeof ds.getResource === 'function') {
+        return await ds.getResource<T>(path, params);
+      }
 
-    const settings = getDataSourceSrv().getInstanceSettings(ds.getRef());
-    if (!settings?.uid) {
-      throw new Error('Datasource does not expose resource calls');
-    }
+      const settings = getDataSourceSrv().getInstanceSettings(ds.getRef());
+      if (!settings?.uid) {
+        throw new Error('Datasource does not expose resource calls');
+      }
 
-    return await backendFetch<T>(`/api/datasources/uid/${encodeURIComponent(settings.uid)}/resources/${path}`, {
-      params,
+      return await backendFetch<T>(`/api/datasources/uid/${encodeURIComponent(settings.uid)}/resources/${path}`, {
+        params,
+      });
     });
   } catch (error) {
     throw new Error(
@@ -580,7 +588,8 @@ async function runPrometheusQuery(
   query: string,
   queryType: 'instant' | 'range',
   timeRange: TimeRange,
-  interval: string
+  interval: string,
+  signal?: AbortSignal
 ): Promise<DataQueryResponse> {
   const intervalMs = durationToMs(interval) ?? 60000;
   const target = {
@@ -593,26 +602,156 @@ async function runPrometheusQuery(
     editorMode: 'code',
   } as DataQueryRequest['targets'][number];
 
-  const request: DataQueryRequest = {
-    app: CoreApp.Unknown,
-    requestId: `observability-query-${Date.now()}`,
-    interval,
-    intervalMs,
-    maxDataPoints: PROMETHEUS_QUERY_MAX_DATA_POINTS,
-    range: timeRange,
-    rangeRaw: timeRange.raw,
-    scopedVars: {},
-    targets: [target],
-    timezone: config.bootData.user.timezone || 'browser',
-    startTime: Date.now(),
-  };
+  return withPrometheusRetry({ operation: 'Prometheus query', datasourceUid: ds.uid, signal }, async (attempt) => {
+    const request: DataQueryRequest = {
+      app: CoreApp.Unknown,
+      requestId: `observability-query-${Date.now()}-${attempt}`,
+      interval,
+      intervalMs,
+      maxDataPoints: PROMETHEUS_QUERY_MAX_DATA_POINTS,
+      range: timeRange,
+      rangeRaw: timeRange.raw,
+      scopedVars: {},
+      targets: [target],
+      timezone: config.bootData.user.timezone || 'browser',
+      startTime: Date.now(),
+    };
 
-  const response = await resolveQueryResponse(ds.query(request));
-  if (response.state === LoadingState.Error) {
-    throw new Error(response.errors?.[0]?.message || 'Prometheus query failed');
+    const response = await resolveQueryResponse(ds.query(request));
+    if (response.state === LoadingState.Error) {
+      throw prometheusQueryResponseError(response);
+    }
+
+    return response;
+  });
+}
+
+async function withPrometheusRetry<T>(
+  options: {
+    operation: string;
+    datasourceUid?: string;
+    signal?: AbortSignal;
+  },
+  execute: (attempt: number) => Promise<T>
+): Promise<T> {
+  let lastError: unknown;
+
+  for (let attempt = 1; attempt <= PROMETHEUS_TRANSIENT_RETRY_ATTEMPTS; attempt++) {
+    throwIfAborted(options.signal);
+
+    try {
+      return await execute(attempt);
+    } catch (error) {
+      throwIfAborted(options.signal);
+      lastError = error;
+
+      if (!isRetryablePrometheusError(error)) {
+        throw error;
+      }
+
+      if (attempt >= PROMETHEUS_TRANSIENT_RETRY_ATTEMPTS) {
+        const datasource = options.datasourceUid ? ` for datasource ${options.datasourceUid}` : '';
+        throw new Error(
+          `${options.operation}${datasource} failed after ${attempt} attempts: ${formatBackendFetchError(error)}`
+        );
+      }
+
+      await sleep(prometheusRetryDelayMs(attempt), options.signal);
+    }
   }
 
-  return response;
+  throw lastError instanceof Error ? lastError : new Error(String(lastError ?? 'Prometheus request failed'));
+}
+
+function prometheusQueryResponseError(response: DataQueryResponse): Error {
+  const first = response.errors?.[0] as Record<string, unknown> | undefined;
+  const message =
+    stringRecordValue(first, 'message') ||
+    stringRecordValue(first, 'error') ||
+    stringRecordValue(first, 'status') ||
+    'Prometheus query failed';
+  const error = new Error(message);
+  const status = numberRecordValue(first, 'status') ?? numberRecordValue(first, 'statusCode');
+  if (status !== undefined) {
+    (error as Error & { status?: number }).status = status;
+  }
+  return error;
+}
+
+function isRetryablePrometheusError(error: unknown): boolean {
+  const status = httpStatusCode(error);
+  if (status !== undefined) {
+    return status === 408 || status === 429 || status === 502 || status === 503 || status === 504 || status >= 500;
+  }
+
+  const message = formatBackendFetchError(error).toLowerCase();
+  return (
+    /\b(?:http|status(?: code)?)\s*(?:408|429|5\d\d)\b/.test(message) ||
+    /\b(?:408|429|502|503|504)\b/.test(message) ||
+    /\b(?:too many requests|bad gateway|service unavailable|gateway timeout)\b/.test(message) ||
+    /\b(?:timeout|timed out|network error|connection reset|connection refused|econnreset|econnrefused)\b/.test(message)
+  );
+}
+
+function httpStatusCode(error: unknown): number | undefined {
+  const record = isRecord(error) ? error : undefined;
+  return (
+    numberRecordValue(record, 'status') ??
+    numberRecordValue(record, 'statusCode') ??
+    numberRecordValue(recordFieldValue(record, 'response'), 'status') ??
+    numberRecordValue(recordFieldValue(record, 'data'), 'status')
+  );
+}
+
+function prometheusRetryDelayMs(attempt: number): number {
+  return Math.min(
+    PROMETHEUS_TRANSIENT_RETRY_MAX_DELAY_MS,
+    PROMETHEUS_TRANSIENT_RETRY_BASE_DELAY_MS * 2 ** Math.max(0, attempt - 1)
+  );
+}
+
+function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+  if (ms <= 0) {
+    return Promise.resolve();
+  }
+  return new Promise((resolve, reject) => {
+    const timeout = globalThis.setTimeout(() => {
+      signal?.removeEventListener('abort', onAbort);
+      resolve();
+    }, ms);
+    const onAbort = () => {
+      globalThis.clearTimeout(timeout);
+      reject(new Error('Tool call aborted'));
+    };
+
+    if (signal?.aborted) {
+      onAbort();
+      return;
+    }
+    signal?.addEventListener('abort', onAbort, { once: true });
+  });
+}
+
+function stringRecordValue(record: Record<string, unknown> | undefined, key: string): string | undefined {
+  const value = record?.[key];
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined;
+}
+
+function numberRecordValue(record: Record<string, unknown> | undefined, key: string): number | undefined {
+  const value = record?.[key];
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+}
+
+function recordFieldValue(
+  record: Record<string, unknown> | undefined,
+  key: string
+): Record<string, unknown> | undefined {
+  const value = record?.[key];
+  return isRecord(value) ? value : undefined;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === 'object');
 }
 
 function makeTimeRange(fromRaw: string, toRaw: string): TimeRange {
@@ -702,6 +841,9 @@ type SummaryPoint = {
 const MAX_SERIES_SUMMARIES = 8;
 const MAX_BATCH_SERIES_SUMMARIES = 3;
 const PROMETHEUS_QUERY_MAX_DATA_POINTS = 1200;
+const PROMETHEUS_TRANSIENT_RETRY_ATTEMPTS = 3;
+const PROMETHEUS_TRANSIENT_RETRY_BASE_DELAY_MS = 250;
+const PROMETHEUS_TRANSIENT_RETRY_MAX_DELAY_MS = 1000;
 
 function summarizePrometheusQuery(options: {
   datasourceUid: string;

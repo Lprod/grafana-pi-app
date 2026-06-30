@@ -159,23 +159,61 @@ describe('grafana datasource tool policy', () => {
     expect(result.details).toMatchObject({ datasourceUid: 'prom-b', batch: true, prefixes: ['http', 'node_'] });
   });
 
+  it('retries transient datasource resource failures transparently', async () => {
+    jest.useFakeTimers();
+    try {
+      const dataSource = {
+        uid: 'prom-b',
+        type: 'prometheus',
+        getResource: jest
+          .fn()
+          .mockRejectedValueOnce(
+            grafanaFetchError(503, 'Service Unavailable', 'upstream Prometheus is temporarily unavailable')
+          )
+          .mockResolvedValueOnce({ data: ['up'] }),
+      };
+      mockDataSourceSrv.get.mockResolvedValue(dataSource);
+      const tool = getTool(createGrafanaTools({ allowedPrometheusDatasourceUids: ['prom-b'] }), 'list_metrics');
+
+      const pending = tool.execute('call-1', {}, undefined);
+      await runPendingRetryTimers();
+      const result = await pending;
+
+      expect(dataSource.getResource).toHaveBeenCalledTimes(2);
+      expect(result.content[0].text).toBe('up');
+      expect(result.content[0].text).not.toContain('failed after');
+      expect(result.details).toMatchObject({ datasourceUid: 'prom-b', count: 1, truncated: false });
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
   it('normalizes datasource resource failures into readable tool errors', async () => {
+    jest.useFakeTimers();
     const dataSource = {
       uid: 'prom-b',
       type: 'prometheus',
-      getResource: jest.fn().mockRejectedValue({
-        status: 502,
-        statusText: 'Bad Gateway',
-        data: { message: 'dial tcp 10.0.0.1:9090: connect: connection refused' },
-        config: { method: 'GET', url: 'api/v1/label/__name__/values' },
-      }),
+      getResource: jest
+        .fn()
+        .mockRejectedValue(
+          grafanaFetchError(502, 'Bad Gateway', 'dial tcp 10.0.0.1:9090: connect: connection refused')
+        ),
     };
     mockDataSourceSrv.get.mockResolvedValue(dataSource);
     const tool = getTool(createGrafanaTools({ allowedPrometheusDatasourceUids: ['prom-b'] }), 'list_metrics');
 
-    await expect(tool.execute('call-1', {}, undefined)).rejects.toThrow(
-      'Prometheus resource api/v1/label/__name__/values failed for datasource prom-b: Grafana request failed (502 Bad Gateway) while calling GET api/v1/label/__name__/values: dial tcp 10.0.0.1:9090: connect: connection refused'
-    );
+    try {
+      const pending = tool.execute('call-1', {}, undefined);
+      const expectation = expect(pending).rejects.toThrow(
+        'Prometheus resource api/v1/label/__name__/values failed for datasource prom-b: resource request for datasource prom-b failed after 3 attempts: Grafana request failed (502 Bad Gateway) while calling GET api/v1/label/__name__/values: dial tcp 10.0.0.1:9090: connect: connection refused'
+      );
+      await runPendingRetryTimers();
+
+      await expectation;
+      expect(dataSource.getResource).toHaveBeenCalledTimes(3);
+    } finally {
+      jest.useRealTimers();
+    }
   });
 
   it('inspects metric series labels through the selected datasource', async () => {
@@ -359,6 +397,42 @@ describe('grafana datasource tool policy', () => {
     });
   });
 
+  it('retries transient Prometheus query failures without exposing retry noise', async () => {
+    jest.useFakeTimers();
+    try {
+      const frame = makePrometheusFrame({
+        displayName: 'up{job="api"}',
+        labels: { job: 'api' },
+        times: [Date.UTC(2026, 0, 1, 0, 0, 0)],
+        values: [1],
+      });
+      const dataSource = {
+        uid: 'prom-b',
+        type: 'prometheus',
+        query: jest
+          .fn()
+          .mockRejectedValueOnce(
+            grafanaFetchError(503, 'Service Unavailable', 'upstream Prometheus is temporarily unavailable')
+          )
+          .mockResolvedValueOnce({ state: 'Done', data: [frame] }),
+      };
+      mockDataSourceSrv.get.mockResolvedValue(dataSource);
+      const tool = getTool(createGrafanaTools({ allowedPrometheusDatasourceUids: ['prom-b'] }), 'query_prometheus');
+
+      const pending = tool.execute('call-1', { query: 'up{job="api"}' }, undefined);
+      await runPendingRetryTimers();
+      const result = await pending;
+      const body = JSON.parse(result.content[0].text);
+
+      expect(dataSource.query).toHaveBeenCalledTimes(2);
+      expect(body.validationError).toBeUndefined();
+      expect(result.content[0].text).not.toContain('failed after');
+      expect(result.details).toMatchObject({ datasourceUid: 'prom-b', summarized: true, totalSeries: 1 });
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
   it('returns PromQL validation errors as query summaries instead of failed tool calls', async () => {
     const dataSource = {
       uid: 'prom-b',
@@ -374,6 +448,7 @@ describe('grafana datasource tool policy', () => {
     const result = await tool.execute('call-1', { query: 'rate(node_load1[5m])' }, undefined);
     const body = JSON.parse(result.content[0].text);
 
+    expect(dataSource.query).toHaveBeenCalledTimes(1);
     expect(body).toMatchObject({
       datasourceUid: 'prom-b',
       query: 'rate(node_load1[5m])',
@@ -390,6 +465,50 @@ describe('grafana datasource tool policy', () => {
       validationError: 'bad_data: invalid parameter "query": parse error',
       summarized: true,
     });
+  });
+
+  it('summarizes persistent transient query failures after retries are exhausted', async () => {
+    jest.useFakeTimers();
+    try {
+      const dataSource = {
+        uid: 'prom-b',
+        type: 'prometheus',
+        query: jest.fn().mockResolvedValue({
+          state: 'Error',
+          errors: [{ status: 503, message: '503 Service Unavailable' }],
+        }),
+      };
+      mockDataSourceSrv.get.mockResolvedValue(dataSource);
+      const tool = getTool(createGrafanaTools({ allowedPrometheusDatasourceUids: ['prom-b'] }), 'query_prometheus');
+
+      const pending = tool.execute('call-1', { query: 'up' }, undefined);
+      await runPendingRetryTimers();
+      const result = await pending;
+      const body = JSON.parse(result.content[0].text);
+
+      expect(dataSource.query).toHaveBeenCalledTimes(3);
+      expect(body).toMatchObject({
+        datasourceUid: 'prom-b',
+        query: 'up',
+        frameCount: 0,
+        totalSeries: 0,
+        validationError: 'Prometheus query for datasource prom-b failed after 3 attempts: 503 Service Unavailable',
+        notices: [
+          {
+            severity: 'error',
+            text: 'Prometheus query for datasource prom-b failed after 3 attempts: 503 Service Unavailable',
+          },
+        ],
+        series: [],
+      });
+      expect(result.details).toMatchObject({
+        datasourceUid: 'prom-b',
+        validationError: 'Prometheus query for datasource prom-b failed after 3 attempts: 503 Service Unavailable',
+        summarized: true,
+      });
+    } finally {
+      jest.useRealTimers();
+    }
   });
 
   it('keeps anomalous Prometheus series when compacting batch summaries', async () => {
@@ -2078,6 +2197,20 @@ function getTool(tools: AgentTool[], name: string) {
 
   return tool as Omit<AgentTool, 'execute'> & {
     execute: (toolCallId: string, params: unknown, signal?: AbortSignal) => Promise<ToolResult>;
+  };
+}
+
+async function runPendingRetryTimers() {
+  await Promise.resolve();
+  await jest.runAllTimersAsync();
+}
+
+function grafanaFetchError(status: number, statusText: string, message: string) {
+  return {
+    status,
+    statusText,
+    data: { message },
+    config: { method: 'GET', url: 'api/v1/label/__name__/values' },
   };
 }
 
