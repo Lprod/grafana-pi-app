@@ -460,6 +460,32 @@ export function ChatApp({
     [requestToolConfirmation]
   );
 
+  const emitRuntimeToolUpdate = useCallback<NonNullable<GrafanaToolRuntime['emitToolUpdate']>>(
+    (update) => {
+      const event: AgentEvent = {
+        type: 'tool_execution_update',
+        toolCallId: update.toolCallId,
+        toolName: update.toolName,
+        args: update.args,
+        partialResult: update.partialResult,
+      };
+
+      updateRunStatus(event);
+      scheduleRevision();
+      setToolRuns((value) => {
+        const next = reduceToolRuns(value, event);
+        const sessionId = sessionIdRef.current;
+        const run = getChatRun(sessionId);
+        if (run && run.agent === agentRef.current) {
+          run.toolRuns = next;
+          run.updatedAt = Date.now();
+        }
+        return next;
+      });
+    },
+    [scheduleRevision, updateRunStatus]
+  );
+
   const handleDashboardFolderChange = useCallback(
     (folderUid: string | undefined, folderTitle: string | undefined) => {
       const uid = folderUid || undefined;
@@ -495,6 +521,7 @@ export function ChatApp({
           thinkingLevel,
           beforeToolCall: confirmToolCall,
           afterToolCall,
+          emitToolUpdate: emitRuntimeToolUpdate,
         },
         virtualJsonnetFiles: virtualJsonnetRuntime,
         dashboardSaveFolders: dashboardSaveFolderRuntime,
@@ -528,6 +555,7 @@ export function ChatApp({
       afterToolCall,
       artifactRuntime,
       confirmToolCall,
+      emitRuntimeToolUpdate,
       dashboardMutationAPI,
       dashboardSaveFolderRuntime,
       isSidebarVariant,
@@ -2397,7 +2425,7 @@ function reduceToolRuns(state: ToolRunState, event: AgentEvent): ToolRunState {
         id: event.toolCallId,
         name: event.toolName,
         args: event.args,
-        status: 'running',
+        status: toolRunStatusFromPartialResult(event.partialResult),
         partialResult: event.partialResult,
         updatedAt: Date.now(),
       },
@@ -2422,6 +2450,18 @@ function reduceToolRuns(state: ToolRunState, event: AgentEvent): ToolRunState {
   }
 
   return state;
+}
+
+function toolRunStatusFromPartialResult(partialResult: { details?: unknown } | undefined): ToolRunView['status'] {
+  const details = partialResult?.details;
+  if (!details || typeof details !== 'object') {
+    return 'running';
+  }
+  const status = (details as Record<string, unknown>).status;
+  if (status === 'completed' || status === 'failed') {
+    return status;
+  }
+  return 'running';
 }
 
 function shouldBatchRevision(event: AgentEvent) {

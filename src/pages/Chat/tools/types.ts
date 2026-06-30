@@ -2,6 +2,7 @@ import type {
   AfterToolCallContext,
   AfterToolCallResult,
   AgentTool,
+  AgentToolResult,
   BeforeToolCallContext,
   BeforeToolCallResult,
   StreamFn,
@@ -20,6 +21,14 @@ export type GrafanaToolRuntime = {
   thinkingLevel: PiAppThinkingLevel;
   beforeToolCall?: (context: BeforeToolCallContext, signal?: AbortSignal) => Promise<BeforeToolCallResult | undefined>;
   afterToolCall?: (context: AfterToolCallContext, signal?: AbortSignal) => Promise<AfterToolCallResult | undefined>;
+  emitToolUpdate?: (update: GrafanaToolRuntimeToolUpdate) => void;
+};
+
+export type GrafanaToolRuntimeToolUpdate = {
+  toolCallId: string;
+  toolName: string;
+  args: unknown;
+  partialResult: AgentToolResult<any>;
 };
 
 export type InvestigationReportStatus = 'active' | 'complete';

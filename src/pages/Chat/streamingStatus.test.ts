@@ -132,6 +132,35 @@ describe('streaming status', () => {
     expect(runStatusBadgeText(status, 'save_dashboard')).toBe('Approval');
   });
 
+  it('treats terminal subagent partial updates as tool result processing', () => {
+    let status = reduceChatRunStatus(
+      createInitialRunStatus(1000),
+      {
+        type: 'tool_execution_update',
+        toolName: 'run_query_agent',
+        toolCallId: 'call-1',
+        args: {},
+        partialResult: {
+          content: [{ type: 'text', text: 'done' }],
+          details: { type: 'subagent', status: 'completed' },
+        },
+      } as any,
+      1500
+    );
+    expect(runStatusText(status)).toBe('Processing tool result');
+    expect(runStatusBadgeText(status)).toBe('Waiting');
+
+    status = resolveChatRunStatusFromStreamingMessage(
+      status,
+      {
+        role: 'assistant',
+        content: [{ type: 'text', text: 'final answer' }],
+      } as any,
+      1800
+    );
+    expect(runStatusText(status)).toBe('Generating answer');
+  });
+
   it('formats elapsed run time compactly', () => {
     expect(formatRunElapsed(250)).toBe('0s');
     expect(formatRunElapsed(12_000)).toBe('12s');

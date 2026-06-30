@@ -128,7 +128,7 @@ function makeSpecialistTool(options: {
     description: options.description,
     executionMode: 'sequential',
     parameters: options.params,
-    async execute(_toolCallId, params, signal, onUpdate) {
+    async execute(toolCallId, params, signal, onUpdate) {
       const args = params as SpecialistToolParams;
       const task = [...options.taskPrefix(args), args.task].filter(Boolean).join('\n');
 
@@ -140,6 +140,11 @@ function makeSpecialistTool(options: {
         runtime: options.runtime,
         signal,
         onUpdate,
+        parentTool: {
+          id: toolCallId,
+          name: options.name,
+          args,
+        },
       });
     },
   };

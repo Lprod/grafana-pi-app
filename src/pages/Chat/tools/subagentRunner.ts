@@ -53,6 +53,11 @@ type RunSubagentOptions = {
   runtime: GrafanaToolRuntime;
   signal?: AbortSignal;
   onUpdate?: (partialResult: TextToolResult<SubagentRunDetails>) => void;
+  parentTool?: {
+    id: string;
+    name: string;
+    args: unknown;
+  };
 };
 
 const CHILD_TOOL_CALL_LIMITS: Record<SubagentKind, number> = {
@@ -84,10 +89,24 @@ export async function runSpecialistAgent(options: RunSubagentOptions): Promise<T
     error,
   });
 
+  const emitPartialResult = (partialResult: TextToolResult<SubagentRunDetails>) => {
+    options.onUpdate?.(partialResult);
+    if (options.parentTool) {
+      options.runtime.emitToolUpdate?.({
+        toolCallId: options.parentTool.id,
+        toolName: options.parentTool.name,
+        args: options.parentTool.args,
+        partialResult,
+      });
+    }
+  };
+
   const emitUpdate = (status: SubagentRunStatus = 'running', error?: string) => {
-    options.onUpdate?.(
-      textResult(subagentStatusText(options.kind, status, toolCalls.size, finalOutput, error), details(status, error))
+    const partialResult = textResult(
+      subagentStatusText(options.kind, status, toolCalls.size, finalOutput, error),
+      details(status, error)
     );
+    emitPartialResult(partialResult);
   };
   const emitTextUpdate = () => {
     const now = Date.now();
@@ -162,11 +181,15 @@ export async function runSpecialistAgent(options: RunSubagentOptions): Promise<T
     emitUpdate('running');
     await child.prompt(options.task);
     finalOutput = getLastAssistantText(child.state.messages) || finalOutput || '(no output)';
-    return textResult(finalOutput, details('completed'));
+    const result = textResult(finalOutput, details('completed'));
+    emitPartialResult(result);
+    return result;
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     finalOutput = finalOutput || message;
-    return textResult(`Subagent failed: ${message}`, details('failed', message));
+    const result = textResult(`Subagent failed: ${message}`, details('failed', message));
+    emitPartialResult(result);
+    return result;
   } finally {
     unsubscribe();
     options.signal?.removeEventListener('abort', abortChild);

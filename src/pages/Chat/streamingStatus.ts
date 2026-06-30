@@ -50,7 +50,14 @@ export function reduceChatRunStatus(
     }
   }
 
-  if (event.type === 'tool_execution_start' || event.type === 'tool_execution_update') {
+  if (event.type === 'tool_execution_start') {
+    return nextRunStatus(current, 'running_tool', event.toolName, now);
+  }
+
+  if (event.type === 'tool_execution_update') {
+    if (isTerminalToolUpdate(event.partialResult)) {
+      return nextRunStatus(current, 'waiting_model', 'Processing tool result', now);
+    }
     return nextRunStatus(current, 'running_tool', event.toolName, now);
   }
 
@@ -205,6 +212,15 @@ function latestToolCallName(content: unknown) {
 
 function formatToolName(name: string) {
   return name.replace(/_/g, ' ');
+}
+
+function isTerminalToolUpdate(partialResult: { details?: unknown } | undefined) {
+  const details = partialResult?.details;
+  if (!details || typeof details !== 'object') {
+    return false;
+  }
+  const status = (details as Record<string, unknown>).status;
+  return status === 'completed' || status === 'failed';
 }
 
 function stringField(value: unknown, field: string) {
