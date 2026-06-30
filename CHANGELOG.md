@@ -1,3 +1,12 @@
+## [2.11.1](https://github.com/elohmeier/grafana-pi-app/compare/v2.11.0...v2.11.1) (2026-06-30)
+
+
+### Bug Fixes
+
+* **chat:** stream subagent progress ([a99bfe6](https://github.com/elohmeier/grafana-pi-app/commit/a99bfe6560dd6845f9b6e6c8a3abcae75d56b1f4))
+* compact live dashboard artifacts ([7e19115](https://github.com/elohmeier/grafana-pi-app/commit/7e191154f50063c20ad869611dfb9fd881e47346))
+* retry transient Prometheus failures ([65a2c58](https://github.com/elohmeier/grafana-pi-app/commit/65a2c5839da30f2759ceb8df6e95892511650daa))
+
 # [2.11.0](https://github.com/elohmeier/grafana-pi-app/compare/v2.10.0...v2.11.0) (2026-06-30)
 
 
