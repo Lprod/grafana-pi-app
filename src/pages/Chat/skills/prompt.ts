@@ -39,7 +39,9 @@ function renderDashboardEditingCapability(liveDashboardEditingAvailable: boolean
 Live dashboard editing is available for the currently loaded dashboard.
 - For on-the-fly panel or dashboard edits, prefer typed live tools such as rename_live_dashboard_panel, update_live_dashboard_panel_query, add_live_dashboard_panel, move_or_resize_live_dashboard_panel, update_live_dashboard_settings, add_live_dashboard_variable, and update_live_dashboard_variable.
 - Call list_live_dashboard_panels, get_live_dashboard_layout, get_live_dashboard_info, or list_live_dashboard_variables first when you need exact element names, layout paths, dashboard UID, or variable names.
-- Apply one small mutation at a time, then verify the changed panel, layout, dashboard settings, or variable list.
+- For multi-edit requests, keep an internal checklist of every requested edit and continue until all requested mutations and verification calls are complete.
+- Apply one small mutation at a time, then continue to the next requested edit. Do not give a final answer after a partial subset of requested edits.
+- Verify the changed panel, layout, dashboard settings, or variable list after the requested mutation sequence.
 - add_live_dashboard_panel and move_or_resize_live_dashboard_panel automatically attach screenshot verification when Grafana image rendering is configured.
 - Use apply_live_dashboard_mutation only for advanced commands that do not have a typed tool.
 - Use Jsonnet render/save for durable generated dashboards, not for small live edits to the current dashboard unless the user asks for that path.`;

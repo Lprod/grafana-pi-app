@@ -4,7 +4,8 @@ import { Type } from 'typebox';
 import { renderDashboardScreenshot } from './dashboards';
 import { textResult, throwIfAborted, truncateText } from './result';
 
-const MAX_MUTATION_RESULT_TEXT = 100000;
+const MAX_MUTATION_RESULT_TEXT = 20000;
+const MAX_MUTATION_RESULT_DATA_TEXT = 12000;
 const DEFAULT_VISUAL_VERIFICATION_WIDTH = 1200;
 const DEFAULT_VISUAL_VERIFICATION_HEIGHT = 700;
 
@@ -647,18 +648,25 @@ async function mutationResult(
   options: { signal?: AbortSignal; visualVerification?: boolean } = {}
 ) {
   const status = result.success ? 'succeeded' : 'failed';
-  const summaryLines = [
-    `Live dashboard mutation ${command} ${status}.`,
-    result.error ? `Error: ${result.error}` : undefined,
-    result.warnings?.length ? `Warnings: ${result.warnings.join('; ')}` : undefined,
-    `Changes: ${result.changes.length}`,
-    '',
-    truncateText(JSON.stringify(result, null, 2), MAX_MUTATION_RESULT_TEXT),
-  ]
-    .filter(Boolean)
-    .join('\n');
+  const dataSummary = compactMutationResultData(command, result.data);
+  const summaryText = truncateText(
+    [
+      `Live dashboard mutation ${command} ${status}.`,
+      result.error ? `Error: ${result.error}` : undefined,
+      result.warnings?.length ? `Warnings: ${result.warnings.join('; ')}` : undefined,
+      `Changes: ${result.changes.length}`,
+      dataSummary !== undefined ? '' : undefined,
+      dataSummary !== undefined
+        ? `Result:\n${truncateText(JSON.stringify(dataSummary, null, 2), MAX_MUTATION_RESULT_DATA_TEXT)}`
+        : undefined,
+      '',
+    ]
+      .filter(Boolean)
+      .join('\n'),
+    MAX_MUTATION_RESULT_TEXT
+  );
 
-  const toolResult = textResult(summaryLines, {
+  const toolResult = textResult(summaryText, {
     command,
     payload,
     success: result.success,
@@ -731,6 +739,161 @@ function compactDeep(value: unknown): unknown {
       .filter(([, item]) => item !== undefined)
       .map(([key, item]) => [key, compactDeep(item)])
   );
+}
+
+function compactMutationResultData(command: string, data: unknown): unknown {
+  if (!isRecord(data)) {
+    return data;
+  }
+
+  switch (command) {
+    case 'LIST_PANELS':
+      return compactLiveDashboardPanels(data);
+    case 'GET_LAYOUT':
+      return compactLiveDashboardLayout(data);
+    case 'GET_DASHBOARD_INFO':
+      return compactLiveDashboardInfo(data);
+    case 'LIST_VARIABLES':
+      return compactLiveDashboardVariables(data);
+    default:
+      return undefined;
+  }
+}
+
+function compactLiveDashboardPanels(data: Record<string, unknown>) {
+  const panels = recordsField(data, 'elements').map(compactLiveDashboardPanel).filter(isRecord);
+  return { panelCount: panels.length, panels };
+}
+
+function compactLiveDashboardPanel(panel: Record<string, unknown>) {
+  const element = recordField(panel, 'element');
+  const spec = recordField(element, 'spec');
+  const layoutItem = recordField(panel, 'layoutItem');
+  const layoutSpec = recordField(layoutItem, 'spec');
+  const grid = compactGrid(layoutSpec);
+  const layoutElement = recordField(layoutSpec, 'element');
+  const vizConfig = recordField(spec, 'vizConfig');
+
+  return compactDeep({
+    elementName: stringField(panel, 'name') ?? stringField(layoutElement, 'name'),
+    id: numberField(spec, 'id'),
+    title: stringField(spec, 'title'),
+    description: stringField(spec, 'description'),
+    visualizationType: stringField(vizConfig, 'group'),
+    grid,
+    queries: compactLiveDashboardPanelQueries(spec),
+  });
+}
+
+function compactLiveDashboardPanelQueries(spec: Record<string, unknown> | undefined) {
+  const data = recordField(spec, 'data');
+  const dataSpec = recordField(data, 'spec');
+  const queries = recordsField(dataSpec, 'queries').map((query) => {
+    const querySpec = recordField(query, 'spec');
+    const dataQuery = recordField(querySpec, 'query');
+    const datasource = recordField(dataQuery, 'datasource');
+    const datasourceSpec = recordField(dataQuery, 'spec');
+
+    return compactDeep({
+      refId: stringField(querySpec, 'refId'),
+      hidden: booleanField(querySpec, 'hidden'),
+      datasourceType: stringField(dataQuery, 'group'),
+      datasourceName: stringField(datasource, 'name'),
+      expr:
+        stringField(datasourceSpec, 'expr') ??
+        stringField(datasourceSpec, 'query') ??
+        stringField(datasourceSpec, '__grafana_string_value'),
+    });
+  });
+
+  return queries.length > 0 ? queries : undefined;
+}
+
+function compactLiveDashboardLayout(data: Record<string, unknown>) {
+  return compactDeep({
+    layout: compactLayoutNode(recordField(data, 'layout')),
+    elements: compactLiveDashboardElements(recordField(data, 'elements')),
+  });
+}
+
+function compactLayoutNode(node: Record<string, unknown> | undefined): unknown {
+  if (!node) {
+    return undefined;
+  }
+
+  const spec = recordField(node, 'spec');
+  const element = recordField(spec, 'element');
+  const items = recordsField(spec, 'items').map(compactLayoutNode).filter(Boolean);
+
+  return compactDeep({
+    kind: stringField(node, 'kind'),
+    elementName: stringField(element, 'name'),
+    grid: compactGrid(spec),
+    items: items.length > 0 ? items : undefined,
+  });
+}
+
+function compactLiveDashboardElements(elements: Record<string, unknown> | undefined) {
+  if (!elements) {
+    return undefined;
+  }
+
+  return Object.fromEntries(
+    Object.entries(elements).map(([name, element]) => {
+      const elementRecord = isRecord(element) ? element : undefined;
+      const spec = recordField(elementRecord, 'spec');
+      const vizConfig = recordField(spec, 'vizConfig');
+      return [
+        name,
+        compactDeep({
+          kind: stringField(elementRecord, 'kind'),
+          title: stringField(spec, 'title'),
+          visualizationType: stringField(vizConfig, 'group'),
+        }),
+      ];
+    })
+  );
+}
+
+function compactLiveDashboardInfo(data: Record<string, unknown>) {
+  const timeSettings = recordField(data, 'timeSettings') ?? recordField(data, 'time');
+  return compactDeep({
+    uid: stringField(data, 'uid'),
+    title: stringField(data, 'title'),
+    description: stringField(data, 'description'),
+    folderUid: stringField(data, 'folderUid'),
+    folderTitle: stringField(data, 'folderTitle'),
+    tags: arrayField(data, 'tags'),
+    timeSettings,
+    editable: booleanField(data, 'editable'),
+  });
+}
+
+function compactLiveDashboardVariables(data: Record<string, unknown>) {
+  const variables = recordsField(data, 'variables').map((variable) => {
+    const spec = recordField(variable, 'spec') ?? variable;
+    const query = recordField(spec, 'query');
+    return compactDeep({
+      kind: stringField(variable, 'kind'),
+      name: stringField(spec, 'name'),
+      label: stringField(spec, 'label'),
+      query: stringField(spec, 'query') ?? stringField(query, 'query') ?? stringField(query, '__grafana_string_value'),
+      current: recordField(spec, 'current'),
+      multi: booleanField(spec, 'multi'),
+      includeAll: booleanField(spec, 'includeAll'),
+    });
+  });
+  return { variableCount: variables.length, variables };
+}
+
+function compactGrid(spec: Record<string, unknown> | undefined) {
+  const grid = compactRecord({
+    x: numberField(spec, 'x'),
+    y: numberField(spec, 'y'),
+    width: numberField(spec, 'width') ?? numberField(spec, 'w'),
+    height: numberField(spec, 'height') ?? numberField(spec, 'h'),
+  });
+  return Object.keys(grid).length > 0 ? grid : undefined;
 }
 
 function elementReference(elementName: string) {
@@ -1077,6 +1240,36 @@ function stringValue(value: unknown, field: string, fallback?: string) {
 
 function optionalStringValue(value: unknown) {
   return typeof value === 'string' && value.trim() ? value.trim() : undefined;
+}
+
+function recordField(record: Record<string, unknown> | undefined, field: string): Record<string, unknown> | undefined {
+  const value = record?.[field];
+  return isRecord(value) ? value : undefined;
+}
+
+function recordsField(record: Record<string, unknown> | undefined, field: string): Array<Record<string, unknown>> {
+  const value = record?.[field];
+  return Array.isArray(value) ? value.filter(isRecord) : [];
+}
+
+function stringField(record: Record<string, unknown> | undefined, field: string): string | undefined {
+  const value = record?.[field];
+  return typeof value === 'string' ? value : undefined;
+}
+
+function numberField(record: Record<string, unknown> | undefined, field: string): number | undefined {
+  const value = record?.[field];
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+}
+
+function booleanField(record: Record<string, unknown> | undefined, field: string): boolean | undefined {
+  const value = record?.[field];
+  return typeof value === 'boolean' ? value : undefined;
+}
+
+function arrayField(record: Record<string, unknown> | undefined, field: string): unknown[] | undefined {
+  const value = record?.[field];
+  return Array.isArray(value) ? value : undefined;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

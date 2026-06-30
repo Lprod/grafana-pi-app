@@ -84,6 +84,64 @@ describe('artifact tools', () => {
     expect(textContent(jq).trim()).toBe('2');
     expect(jq.details).toMatchObject({ artifactRead: true, mode: 'jq', exitCode: 0 });
   });
+
+  it('stores live dashboard read artifacts as jq-readable JSON from details', async () => {
+    const { runtime, artifacts } = createTestArtifactRuntime();
+    const result = artifactizeToolResult(runtime, 'list_live_dashboard_panels', {
+      content: [
+        {
+          type: 'text',
+          text: 'Live dashboard mutation LIST_PANELS succeeded.\nChanges: 0\n{human readable text}',
+        },
+      ],
+      details: {
+        command: 'LIST_PANELS',
+        success: true,
+        changes: [],
+        data: {
+          elements: [
+            {
+              element: { kind: 'Panel', spec: { title: 'Requests' } },
+              layoutItem: {
+                kind: 'GridLayoutItem',
+                spec: { element: { kind: 'ElementReference', name: 'panel-1' } },
+              },
+            },
+          ],
+        },
+        availableCommands: ['LIST_PANELS', 'UPDATE_PANEL'],
+      },
+    });
+
+    expect(result?.details).toMatchObject({
+      artifactRef: { id: 'artifact_1', kind: 'dashboard' },
+      artifactPreview: { type: 'json' },
+    });
+    expect(artifacts.artifact_1.data).toMatchObject({
+      command: 'LIST_PANELS',
+      summary: {
+        panelCount: 1,
+        panels: [{ elementName: 'panel-1', title: 'Requests' }],
+      },
+      data: { elements: expect.any(Array) },
+    });
+
+    const [tool] = createArtifactTools(runtime);
+    const jq = await tool.execute(
+      'call-1',
+      { id: 'artifact_1', mode: 'jq', jq: '.data.elements[] | .element.spec.title' },
+      undefined
+    );
+    expect(textContent(jq).trim()).toBe('"Requests"');
+    expect(jq.details).toMatchObject({ artifactRead: true, mode: 'jq', exitCode: 0 });
+
+    const summaryJq = await tool.execute(
+      'call-2',
+      { id: 'artifact_1', mode: 'jq', jq: '.summary.panels[] | {elementName, title}' },
+      undefined
+    );
+    expect(textContent(summaryJq).trim()).toBe('{"elementName":"panel-1","title":"Requests"}');
+  });
 });
 
 function createTestArtifactRuntime() {

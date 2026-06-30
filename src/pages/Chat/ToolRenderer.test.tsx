@@ -1393,6 +1393,65 @@ describe('ToolRenderer', () => {
     expect(container.textContent).not.toContain('Stored artifact [artifact: artifact_1]');
   });
 
+  it('renders live dashboard JSON artifacts without dumping raw preview data', () => {
+    const rawMarker = `RAW_LIVE_DASHBOARD_JSON_${'x'.repeat(2048)}`;
+    const { container } = render(
+      <ToolResultMessageBody
+        toolName="list_live_dashboard_panels"
+        content={[
+          {
+            type: 'text',
+            text: `Stored artifact [artifact: artifact_1]\n${rawMarker}`,
+          },
+        ]}
+        details={{
+          artifactRef: {
+            id: 'artifact_1',
+            kind: 'dashboard',
+            title: 'list_live_dashboard_panels',
+            toolName: 'list_live_dashboard_panels',
+            createdAt: '2026-06-05T00:00:00.000Z',
+            bytes: 256000,
+            summary: '24 live dashboard panels summarized.',
+          },
+          artifactPreview: {
+            type: 'json',
+            data: {
+              command: 'LIST_PANELS',
+              summary: {
+                panelCount: 24,
+                panels: [{ elementName: 'panel-1', title: 'Request rate' }],
+              },
+              data: {
+                elements: [
+                  {
+                    element: {
+                      kind: 'Panel',
+                      spec: {
+                        title: 'Request rate',
+                        fieldConfig: { defaults: { custom: { rawMarker } } },
+                      },
+                    },
+                  },
+                ],
+              },
+            },
+            truncated: true,
+          },
+        }}
+      />
+    );
+
+    expect(screen.getByTestId('artifact-result')).toBeInTheDocument();
+    expect(container.textContent).toContain('artifact_1');
+    expect(container.textContent).toContain('24 live dashboard panels summarized.');
+    expect(container.textContent).toContain('250.0 KiB');
+    expect(container.textContent).toContain('read_artifact {"id":"artifact_1"}');
+    expect(container.textContent).not.toContain('Stored artifact [artifact: artifact_1]');
+    expect(container.textContent).not.toContain(rawMarker);
+    expect(container.textContent).not.toContain('"elements"');
+  });
+
   it('renders read_artifact output instead of hiding it behind an artifact card', () => {
     const { container } = render(
       <ToolResultMessageBody

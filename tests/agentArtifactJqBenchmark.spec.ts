@@ -68,6 +68,7 @@ type ToolCallSummary = {
   nestedToolCalls?: NestedToolCallSummary[];
   errorText?: string;
   resultText?: string;
+  result?: unknown;
 };
 
 type NestedToolCallSummary = {
@@ -366,6 +367,7 @@ function summarizeToolCalls(events: BenchmarkEvent[]): ToolCallSummary[] {
         nestedToolCalls: extractNestedToolCalls(event.result) ?? existing.nestedToolCalls,
         errorText: event.isError ? extractResultText(event.result) : undefined,
         resultText: extractResultText(event.result),
+        result: event.result,
       });
     }
   }
@@ -374,6 +376,10 @@ function summarizeToolCalls(events: BenchmarkEvent[]): ToolCallSummary[] {
 }
 
 function findArtifactJqQualityError(events: BenchmarkEvent[]) {
+  if (events.length === 0) {
+    return 'benchmark recorder captured no events';
+  }
+
   const toolCalls = summarizeToolCalls(events);
   const queryAgent = toolCalls.find((call) => call.name === 'run_query_agent');
   if (!queryAgent || queryAgent.status !== 'completed' || queryAgent.isError) {
@@ -383,6 +389,11 @@ function findArtifactJqQualityError(events: BenchmarkEvent[]) {
   const jqRead = toolCalls.find((call) => call.name === 'read_artifact' && isJqArtifactReadArgs(call.args));
   if (!jqRead || jqRead.status !== 'completed' || jqRead.isError) {
     return 'read_artifact jq call did not complete successfully';
+  }
+
+  const jqDetails = getRecord(getRecord(jqRead.result)?.details);
+  if (jqDetails?.mode !== 'jq' || jqDetails.exitCode !== 0) {
+    return 'read_artifact jq call did not report jq mode with exitCode 0';
   }
 
   const unexpected = toolCalls.find((call) => call.name !== 'run_query_agent' && call.name !== 'read_artifact');

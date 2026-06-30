@@ -66,7 +66,7 @@ test.describe('dashboard live editing benchmark', () => {
     await seedDashboard(page, uid, dashboardTitle, originalPanelTitle);
 
     try {
-      await page.goto(`/d/${uid}/live-edit-benchmark?orgId=1`);
+      await page.goto(`/d/${uid}/live-edit-benchmark?orgId=1&piAgentBenchmark=1`);
       await expect(page.getByText(originalPanelTitle)).toBeVisible();
       await installBenchmarkRecorder(page);
       await openAssistantSidebar(page, uid);
@@ -75,20 +75,24 @@ test.describe('dashboard live editing benchmark', () => {
       const prompt = [
         'This benchmark validates typed live dashboard editing from the assistant sidebar.',
         'Use typed live dashboard editing tools only.',
-        'First call list_live_dashboard_panels and get_live_dashboard_layout.',
-        `Use rename_live_dashboard_panel to rename the existing panel to "${editedPanelTitle}".`,
-        'Use move_or_resize_live_dashboard_panel to move that panel to x=0 y=8 width=12 height=8.',
-        `Use add_live_dashboard_panel to add a timeseries panel titled "${addedPanelTitle}" with query sum(rate(http_requests_total{status=~"5.."}[$__rate_interval])) at x=12 y=8 width=12 height=8.`,
-        'Verify with list_live_dashboard_panels and get_live_dashboard_layout.',
+        'Complete this exact tool checklist before answering:',
+        '1. Call list_live_dashboard_panels.',
+        '2. Call get_live_dashboard_layout.',
+        `3. Call rename_live_dashboard_panel to rename the existing panel to "${editedPanelTitle}".`,
+        '4. Call move_or_resize_live_dashboard_panel on the same panel element with x=0 y=8 width=12 height=8.',
+        `5. Call add_live_dashboard_panel to add a timeseries panel titled "${addedPanelTitle}" with query sum(rate(http_requests_total{status=~"5.."}[$__rate_interval])) at x=12 y=8 width=12 height=8.`,
+        '6. Call list_live_dashboard_panels again.',
+        '7. Call get_live_dashboard_layout again.',
         'Do not call apply_live_dashboard_mutation, write_jsonnet, render_dashboard, save_dashboard, upload_dashboard, or delete_dashboard.',
-        'After verification succeeds, answer with one short sentence.',
+        'Do not answer until all seven checklist items have completed successfully.',
+        'After verification succeeds, answer exactly: LIVE_EDIT_BENCHMARK_DONE.',
       ].join(' ');
 
       const run = await runPrompt({
         page,
         prompt,
         timeoutMs,
-        finishTexts: ['"panel-2"'],
+        finishTexts: ['LIVE_EDIT_BENCHMARK_DONE'],
       });
       await assertBenchmarkRun({
         run,
@@ -110,7 +114,7 @@ test.describe('dashboard live editing benchmark', () => {
             'upload_dashboard',
             'delete_dashboard',
           ],
-          requiredTranscript: ['"panel-2"'],
+          requiredTranscript: [editedPanelTitle, addedPanelTitle, 'LIVE_EDIT_BENCHMARK_DONE'],
         },
       });
 
@@ -132,7 +136,7 @@ test.describe('dashboard live editing benchmark', () => {
     await seedDashboard(page, uid, dashboardTitle, originalPanelTitle);
 
     try {
-      await page.goto(`/d/${uid}/live-edit-recovery?orgId=1`);
+      await page.goto(`/d/${uid}/live-edit-recovery?orgId=1&piAgentBenchmark=1`);
       await expect(page.getByText(originalPanelTitle)).toBeVisible();
       await installBenchmarkRecorder(page);
       await openAssistantSidebar(page, uid);
@@ -140,18 +144,20 @@ test.describe('dashboard live editing benchmark', () => {
       const prompt = [
         'This benchmark validates recovery after a failed live dashboard edit.',
         'Use typed live dashboard editing tools only.',
-        'First intentionally call rename_live_dashboard_panel with elementName "panel-does-not-exist" and title "Should fail".',
-        'After that fails, call list_live_dashboard_panels to find the correct element.',
-        `Then call rename_live_dashboard_panel again to rename the existing panel to "${editedPanelTitle}".`,
+        'Complete this exact recovery checklist before answering:',
+        '1. Intentionally call rename_live_dashboard_panel with elementName "panel-does-not-exist" and title "Should fail".',
+        '2. After that fails, call list_live_dashboard_panels to find the correct element.',
+        `3. Call rename_live_dashboard_panel again to rename the existing panel to "${editedPanelTitle}".`,
         'Do not call apply_live_dashboard_mutation, write_jsonnet, render_dashboard, save_dashboard, upload_dashboard, or delete_dashboard.',
-        'After the successful retry, answer with one short sentence.',
+        'Do not answer until all three checklist items have completed.',
+        'After the successful retry, answer exactly: LIVE_EDIT_RECOVERY_DONE.',
       ].join(' ');
 
       const run = await runPrompt({
         page,
         prompt,
         timeoutMs,
-        finishTexts: ['Live dashboard mutation UPDATE_PANEL succeeded'],
+        finishTexts: ['LIVE_EDIT_RECOVERY_DONE'],
       });
       await assertBenchmarkRun({
         run,
@@ -167,7 +173,7 @@ test.describe('dashboard live editing benchmark', () => {
             'upload_dashboard',
             'delete_dashboard',
           ],
-          requiredTranscript: ['Live dashboard mutation UPDATE_PANEL succeeded'],
+          requiredTranscript: ['Live dashboard mutation succeeded', 'UPDATE_PANEL', 'LIVE_EDIT_RECOVERY_DONE'],
           requireFailedTool: 'rename_live_dashboard_panel',
         },
       });
@@ -180,7 +186,7 @@ test.describe('dashboard live editing benchmark', () => {
 
   test('falls back when live dashboard editing is unavailable', async ({ page }, testInfo) => {
     const timeoutMs = readPositiveInteger(process.env.BENCH_TIMEOUT_MS, DEFAULT_TIMEOUT_MS);
-    await page.goto('/a/grafana-assistant-app/chat?orgId=1');
+    await page.goto('/a/grafana-assistant-app/chat?orgId=1&piAgentBenchmark=1');
     await installBenchmarkRecorder(page);
     await expect(page.getByTestId(testIds.chat.composer)).toBeVisible();
 
@@ -292,11 +298,13 @@ async function installBenchmarkRecorder(page: Page) {
 
   const installRecorder = () => {
     const benchmarkWindow = window as typeof window & {
+      __PI_AGENT_BENCHMARK_CAPTURE__?: boolean;
       __PI_AGENT_BENCHMARK_EVENTS__?: unknown[];
       __PI_AGENT_BENCHMARK_RECORD_EVENT__?: (event: unknown) => void;
       __PI_AGENT_BENCHMARK_STREAM_EVENT__?: (event: unknown) => Promise<void>;
     };
 
+    benchmarkWindow.__PI_AGENT_BENCHMARK_CAPTURE__ = true;
     benchmarkWindow.__PI_AGENT_BENCHMARK_EVENTS__ = [];
     benchmarkWindow.__PI_AGENT_BENCHMARK_RECORD_EVENT__ = (event: unknown) => {
       benchmarkWindow.__PI_AGENT_BENCHMARK_EVENTS__?.push(event);
@@ -305,7 +313,7 @@ async function installBenchmarkRecorder(page: Page) {
   };
 
   await page.addInitScript(installRecorder);
-  await page.evaluate(installRecorder);
+  await Promise.all(page.frames().map((frame) => frame.evaluate(installRecorder).catch(() => undefined)));
 }
 
 async function runPrompt({
@@ -407,15 +415,16 @@ async function assertBenchmarkRun({
 }
 
 async function waitForAgentEndEvent(page: Page, timeoutMs: number) {
-  await page.waitForFunction(
-    () => {
-      const benchmarkWindow = window as typeof window & { __PI_AGENT_BENCHMARK_EVENTS__?: BenchmarkEvent[] };
-      return benchmarkWindow.__PI_AGENT_BENCHMARK_EVENTS__?.some((event) => event.type === 'agent_end') ?? false;
-    },
-    undefined,
-    { timeout: timeoutMs }
-  );
-  return 'agent_event' as const;
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const events = await readBenchmarkEvents(page);
+    if (events.some((event) => event.type === 'agent_end')) {
+      return 'agent_event' as const;
+    }
+    await page.waitForTimeout(500);
+  }
+
+  throw new Error(`Dashboard live editing benchmark timed out after ${timeoutMs}ms.`);
 }
 
 async function waitForDomFinishTextAfterPrompt(page: Page, prompt: string, text: string, timeoutMs: number) {
@@ -443,17 +452,35 @@ async function waitForDomFinishTextAfterPrompt(page: Page, prompt: string, text:
 }
 
 async function resetBenchmarkEvents(page: Page) {
-  await page.evaluate(() => {
-    const benchmarkWindow = window as typeof window & { __PI_AGENT_BENCHMARK_EVENTS__?: BenchmarkEvent[] };
-    benchmarkWindow.__PI_AGENT_BENCHMARK_EVENTS__ = [];
-  });
+  await Promise.all(
+    page.frames().map((frame) =>
+      frame
+        .evaluate(() => {
+          const benchmarkWindow = window as typeof window & {
+            __PI_AGENT_BENCHMARK_CAPTURE__?: boolean;
+            __PI_AGENT_BENCHMARK_EVENTS__?: BenchmarkEvent[];
+          };
+          benchmarkWindow.__PI_AGENT_BENCHMARK_CAPTURE__ = true;
+          benchmarkWindow.__PI_AGENT_BENCHMARK_EVENTS__ = [];
+        })
+        .catch(() => undefined)
+    )
+  );
 }
 
 async function readBenchmarkEvents(page: Page): Promise<BenchmarkEvent[]> {
-  return page.evaluate(() => {
-    const benchmarkWindow = window as typeof window & { __PI_AGENT_BENCHMARK_EVENTS__?: BenchmarkEvent[] };
-    return benchmarkWindow.__PI_AGENT_BENCHMARK_EVENTS__ ?? [];
-  });
+  const frameEvents = await Promise.all(
+    page.frames().map((frame) =>
+      frame
+        .evaluate(() => {
+          const benchmarkWindow = window as typeof window & { __PI_AGENT_BENCHMARK_EVENTS__?: BenchmarkEvent[] };
+          return benchmarkWindow.__PI_AGENT_BENCHMARK_EVENTS__ ?? [];
+        })
+        .catch(() => [] as BenchmarkEvent[])
+    )
+  );
+
+  return frameEvents.flat();
 }
 
 async function readDomToolNames(page: Page) {
@@ -489,6 +516,10 @@ async function autoApproveToolConfirmations(page: Page, isDone: () => boolean) {
 }
 
 function findQualityError(run: BenchmarkRun, quality: BenchmarkQuality) {
+  if (run.events.length === 0) {
+    return 'benchmark recorder captured no events';
+  }
+
   const toolNames = observedToolNames(run);
   const assistantTranscript = transcriptAfterPrompt(run);
 

@@ -119,6 +119,13 @@ const ALWAYS_ARTIFACT_TOOL_NAMES = new Set([
   'grafana_screenshot',
 ]);
 
+const LIVE_DASHBOARD_READ_ARTIFACT_TOOL_NAMES = new Set([
+  'list_live_dashboard_panels',
+  'get_live_dashboard_layout',
+  'get_live_dashboard_info',
+  'list_live_dashboard_variables',
+]);
+
 let jqModulePromise: Promise<JqModule> | undefined;
 
 export function createArtifactTools(artifacts?: ArtifactRuntime): AgentTool[] {
@@ -334,6 +341,11 @@ function extractArtifactData(
       mimeType?: string;
     }
   | undefined {
+  const liveDashboardData = extractLiveDashboardReadArtifactData(toolName, result);
+  if (liveDashboardData) {
+    return liveDashboardData;
+  }
+
   const image = firstImageBlock(result.content);
   if (image) {
     const data = {
@@ -372,6 +384,178 @@ function extractArtifactData(
     bytes,
     preview: makePreview(data, bytes),
   };
+}
+
+function extractLiveDashboardReadArtifactData(
+  toolName: string,
+  result: AgentToolResult<any>
+):
+  | {
+      kind: ArtifactKind;
+      title: string;
+      data: unknown;
+      summary: string;
+      bytes: number;
+      preview?: ArtifactPreview;
+      mimeType?: string;
+    }
+  | undefined {
+  if (!LIVE_DASHBOARD_READ_ARTIFACT_TOOL_NAMES.has(toolName) || !isRecord(result.details)) {
+    return undefined;
+  }
+
+  const command = stringField(result.details, 'command');
+  if (!command) {
+    return undefined;
+  }
+
+  const data = compactObject({
+    command,
+    success: booleanField(result.details, 'success'),
+    error: stringField(result.details, 'error'),
+    warnings: arrayField(result.details, 'warnings'),
+    changes: arrayField(result.details, 'changes'),
+    summary: liveDashboardArtifactQuickView(command, result.details.data),
+    data: result.details.data,
+    availableCommands: arrayField(result.details, 'availableCommands'),
+  });
+  const bytes = artifactByteSize(data);
+
+  return {
+    kind: 'dashboard',
+    title: artifactTitle(toolName, result.details, data),
+    data,
+    summary: liveDashboardArtifactSummary(toolName, command, data),
+    bytes,
+    preview: makePreview(data, bytes),
+  };
+}
+
+function liveDashboardArtifactSummary(toolName: string, command: string, data: unknown) {
+  const dashboardData = isRecord(data) ? recordField(data, 'data') : undefined;
+  if (command === 'LIST_PANELS' && dashboardData) {
+    const count = recordsField(dashboardData, 'elements').length;
+    return `${toolName} returned ${count} ${count === 1 ? 'panel' : 'panels'}.`;
+  }
+  if (command === 'LIST_VARIABLES' && dashboardData) {
+    const count = recordsField(dashboardData, 'variables').length;
+    return `${toolName} returned ${count} ${count === 1 ? 'variable' : 'variables'}.`;
+  }
+  return `${toolName} ${command} result stored as JSON.`;
+}
+
+function liveDashboardArtifactQuickView(command: string, data: unknown): unknown {
+  if (!isRecord(data)) {
+    return undefined;
+  }
+
+  if (command === 'LIST_PANELS') {
+    const panels = recordsField(data, 'elements').map(compactLiveDashboardArtifactPanel);
+    return { panelCount: panels.length, panels };
+  }
+
+  if (command === 'GET_LAYOUT') {
+    return compactObject({
+      layout: compactLiveDashboardLayoutNode(recordField(data, 'layout')),
+      elements: compactLiveDashboardLayoutElements(recordField(data, 'elements')),
+    });
+  }
+
+  if (command === 'LIST_VARIABLES') {
+    const variables = recordsField(data, 'variables').map((variable) => {
+      const spec = recordField(variable, 'spec') ?? variable;
+      return compactObject({
+        kind: stringField(variable, 'kind'),
+        name: stringField(spec, 'name'),
+        label: stringField(spec, 'label'),
+        query: stringField(spec, 'query'),
+        multi: booleanField(spec, 'multi'),
+        includeAll: booleanField(spec, 'includeAll'),
+      });
+    });
+    return { variableCount: variables.length, variables };
+  }
+
+  if (command === 'GET_DASHBOARD_INFO') {
+    return compactObject({
+      uid: stringField(data, 'uid'),
+      title: stringField(data, 'title'),
+      description: stringField(data, 'description'),
+      folderUid: stringField(data, 'folderUid'),
+      folderTitle: stringField(data, 'folderTitle'),
+      tags: arrayField(data, 'tags'),
+      editable: booleanField(data, 'editable'),
+    });
+  }
+
+  return undefined;
+}
+
+function compactLiveDashboardArtifactPanel(panel: Record<string, unknown>) {
+  const element = recordField(panel, 'element');
+  const spec = recordField(element, 'spec');
+  const layoutSpec = recordField(recordField(panel, 'layoutItem'), 'spec');
+  const layoutElement = recordField(layoutSpec, 'element');
+  const vizConfig = recordField(spec, 'vizConfig');
+
+  return compactObject({
+    elementName: stringField(panel, 'name') ?? stringField(element, 'name') ?? stringField(layoutElement, 'name'),
+    kind: stringField(element, 'kind'),
+    title: stringField(spec, 'title'),
+    description: stringField(spec, 'description'),
+    visualizationType: stringField(vizConfig, 'group'),
+    grid: compactLiveDashboardGrid(layoutSpec),
+  });
+}
+
+function compactLiveDashboardLayoutElements(elements: Record<string, unknown> | undefined) {
+  if (!elements) {
+    return undefined;
+  }
+
+  return Object.fromEntries(
+    Object.entries(elements).map(([name, element]) => {
+      const elementRecord = isRecord(element) ? element : undefined;
+      const spec = recordField(elementRecord, 'spec');
+      const vizConfig = recordField(spec, 'vizConfig');
+
+      return [
+        name,
+        compactObject({
+          kind: stringField(elementRecord, 'kind'),
+          title: stringField(spec, 'title'),
+          visualizationType: stringField(vizConfig, 'group'),
+        }),
+      ];
+    })
+  );
+}
+
+function compactLiveDashboardLayoutNode(node: Record<string, unknown> | undefined): unknown {
+  if (!node) {
+    return undefined;
+  }
+
+  const spec = recordField(node, 'spec');
+  const element = recordField(spec, 'element');
+  const items = recordsField(spec, 'items').map(compactLiveDashboardLayoutNode).filter(Boolean);
+
+  return compactObject({
+    kind: stringField(node, 'kind'),
+    elementName: stringField(element, 'name'),
+    grid: compactLiveDashboardGrid(spec),
+    items: items.length > 0 ? items : undefined,
+  });
+}
+
+function compactLiveDashboardGrid(spec: Record<string, unknown> | undefined) {
+  const grid = compactObject({
+    x: numberField(spec, 'x'),
+    y: numberField(spec, 'y'),
+    width: numberField(spec, 'width') ?? numberField(spec, 'w'),
+    height: numberField(spec, 'height') ?? numberField(spec, 'h'),
+  });
+  return Object.keys(grid).length > 0 ? grid : undefined;
 }
 
 function artifactKind(toolName: string, data: unknown, details: unknown): ArtifactKind {
@@ -782,9 +966,14 @@ function recordField(record: Record<string, unknown> | undefined, key: string): 
   return record && isRecord(record[key]) ? record[key] : undefined;
 }
 
-function recordsField(record: Record<string, unknown>, key: string): Array<Record<string, unknown>> {
-  const value = record[key];
+function recordsField(record: Record<string, unknown> | undefined, key: string): Array<Record<string, unknown>> {
+  const value = record?.[key];
   return Array.isArray(value) ? value.filter(isRecord) : [];
+}
+
+function arrayField(record: Record<string, unknown>, key: string): unknown[] | undefined {
+  const value = record[key];
+  return Array.isArray(value) ? value : undefined;
 }
 
 function stringField(record: Record<string, unknown> | undefined, key: string): string | undefined {
@@ -792,9 +981,18 @@ function stringField(record: Record<string, unknown> | undefined, key: string): 
   return typeof value === 'string' ? value : undefined;
 }
 
+function booleanField(record: Record<string, unknown> | undefined, key: string): boolean | undefined {
+  const value = record?.[key];
+  return typeof value === 'boolean' ? value : undefined;
+}
+
 function numberField(record: Record<string, unknown> | undefined, key: string): number | undefined {
   const value = record?.[key];
   return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+}
+
+function compactObject(record: Record<string, unknown>): Record<string, unknown> {
+  return Object.fromEntries(Object.entries(record).filter(([, value]) => value !== undefined));
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

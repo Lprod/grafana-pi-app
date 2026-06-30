@@ -246,7 +246,7 @@ Tool execution protocol:
 - Batch related Prometheus discovery in one call: use list_metrics.prefixes, inspect_metric_series.matches, and query_prometheus.queries when checking multiple metrics or PromQL expressions.
 - When multiple tool calls are independent, request them in the same assistant turn so the runtime can execute them concurrently.
 - Use sequential calls only when one result determines the exact arguments for the next call.
-- Bulky tool results may be stored as [artifact: id]; use read_artifact with field, slice, or jq mode to inspect only the needed part.
+- When a tool result says [artifact: artifact_N], the full data is stored outside the context window. Use read_artifact with summary, field, slice, or jq mode to inspect only the fields needed; avoid reading full large artifacts unless the user explicitly needs the raw data.
 - Never repeat identical tool calls with the same parameters.
 - Keep tool output focused on the evidence needed for the requested answer.`;
 
@@ -293,7 +293,7 @@ Workflow:
 3. Choose panels by data shape: time series for trends, stat or gauge for reduced values, table for label-rich summaries, heatmap for distributions.
 4. Prefer query-side shaping when it is semantically clear; use Grafana transformations only when they materially simplify presentation.
 5. For new Jsonnet dashboards, prefer the bundled helper import github.com/g42/pi-dashboard/main.libsonnet for rows, layouts, Prometheus targets, and tables; do not import Grafonnet or use g.dashboard.new, g.panel.new, row.new, or with_* constructor chains.
-6. For live current-dashboard edits, apply one small typed live edit, then verify with list_live_dashboard_panels, get_live_dashboard_layout, get_live_dashboard_info, list_live_dashboard_variables, or the attached screenshot for layout changes.
+6. For live current-dashboard edits, keep an internal checklist of all requested edits, apply one small typed live edit at a time, continue until every requested edit is complete, then verify with list_live_dashboard_panels, get_live_dashboard_layout, get_live_dashboard_info, list_live_dashboard_variables, or the attached screenshot for layout changes.
 7. For durable Jsonnet dashboard create/update work, render before saving. Save only when the user requested create/update/apply, not for draft or preview-only requests.
 8. For Jsonnet create/update requests, repair material render validation warnings or layout fixes, rerender, then call save_dashboard. Screenshots are optional after save only.
 
