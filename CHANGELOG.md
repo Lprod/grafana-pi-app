@@ -1,3 +1,18 @@
+# [2.11.0](https://github.com/elohmeier/grafana-pi-app/compare/v2.10.0...v2.11.0) (2026-06-30)
+
+
+### Bug Fixes
+
+* **chat:** show live stream progress ([e36ae45](https://github.com/elohmeier/grafana-pi-app/commit/e36ae45209280f913c21cf022d6746811757c1a0))
+* preserve live dashboard edit context ([7da9d8e](https://github.com/elohmeier/grafana-pi-app/commit/7da9d8ec5597c38b678c01ab442d73a6e4738e4a))
+
+
+### Features
+
+* **chat:** improve save and session controls ([01cdf1c](https://github.com/elohmeier/grafana-pi-app/commit/01cdf1c571376a962b8e9f102a86eb69d2bcf2df))
+* **sidebar:** add current page context ([3b20a97](https://github.com/elohmeier/grafana-pi-app/commit/3b20a97cc87c345da52a938c094d69d8cc485057))
+* **telemetry:** expose assistant metrics ([7aa6f9b](https://github.com/elohmeier/grafana-pi-app/commit/7aa6f9bdf86957b999823b55e2819a024f417a69))
+
 # [2.10.0](https://github.com/elohmeier/grafana-pi-app/compare/v2.9.0...v2.10.0) (2026-06-30)
 
 
