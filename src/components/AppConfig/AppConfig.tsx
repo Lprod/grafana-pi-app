@@ -16,8 +16,14 @@ import { getBackendSrv, getDataSourceSrv, locationService } from '@grafana/runti
 import { css } from '@emotion/css';
 import { testIds } from '../testIds';
 import { lastValueFrom } from 'rxjs';
-import type { PiAppAccessMode, PiAppJsonData, PiAppThinkingFormat, PiAppThinkingLevel } from '../../types';
-import { parseCustomSkillsJson, validateCustomSkillsJson } from '../../pages/Chat/skills/configured';
+import type {
+  PiAppAccessMode,
+  PiAppCustomSkill,
+  PiAppJsonData,
+  PiAppThinkingFormat,
+  PiAppThinkingLevel,
+} from '../../types';
+import { GRAFANA_SKILLS } from '../../pages/Chat/skills/catalog';
 import { getConfiguredThinkingFormat, getConfiguredThinkingLevel } from '../../pages/Chat/model';
 import {
   APP_ACCESS_ACTION,
@@ -26,6 +32,12 @@ import {
   getConfiguredAccessMode,
   parseAllowedUsersInput,
 } from '../../utils/access';
+import { CustomSkillsEditor } from './CustomSkillsEditor';
+import {
+  formatCustomSkillValidationIssues,
+  serializeCustomSkills,
+  validateCustomSkillsForEditor,
+} from './customSkillsEditorModel';
 
 type State = {
   openAIBaseUrl: string;
@@ -38,7 +50,7 @@ type State = {
   allowedUsersText: string;
   allowedPrometheusDatasourceUids: string[];
   systemPromptAddendum: string;
-  customSkillsJson: string;
+  customSkills: PiAppCustomSkill[];
 };
 
 export interface AppConfigProps extends PluginConfigPageProps<AppPluginMeta<PiAppJsonData>> {}
@@ -59,10 +71,17 @@ const AppConfig = ({ plugin }: AppConfigProps) => {
       ? jsonData.allowedPrometheusDatasourceUids
       : [],
     systemPromptAddendum: typeof jsonData?.systemPromptAddendum === 'string' ? jsonData.systemPromptAddendum : '',
-    customSkillsJson: formatCustomSkillsJson(jsonData?.customSkills),
+    customSkills: Array.isArray(jsonData?.customSkills) ? jsonData.customSkills : [],
   });
   const datasourceOptions = getPrometheusDatasourceOptions(state.allowedPrometheusDatasourceUids);
-  const customSkillsError = useMemo(() => validateCustomSkillsJson(state.customSkillsJson), [state.customSkillsJson]);
+  const customSkillIssues = useMemo(
+    () =>
+      validateCustomSkillsForEditor(state.customSkills, {
+        reservedNames: GRAFANA_SKILLS.map((skill) => skill.name),
+      }),
+    [state.customSkills]
+  );
+  const customSkillsError = useMemo(() => formatCustomSkillValidationIssues(customSkillIssues), [customSkillIssues]);
   const allowedUsers = useMemo(() => parseAllowedUsersInput(state.allowedUsersText), [state.allowedUsersText]);
   const allowedUsersError =
     state.accessMode === 'users' && allowedUsers.length === 0
@@ -147,16 +166,16 @@ const AppConfig = ({ plugin }: AppConfigProps) => {
     });
   };
 
-  const onChangeCustomSkillsJson = (event: ChangeEvent<HTMLTextAreaElement>) => {
+  const onChangeCustomSkills = (customSkills: PiAppCustomSkill[]) => {
     setState({
       ...state,
-      customSkillsJson: event.currentTarget.value,
+      customSkills,
     });
   };
 
   const onSubmit = (event: FormEvent) => {
     event.preventDefault();
-    const customSkills = parseCustomSkillsJson(state.customSkillsJson);
+    const customSkills = serializeCustomSkills(state.customSkills);
 
     updatePluginAndReload(plugin.meta.id, {
       enabled,
@@ -323,22 +342,12 @@ const AppConfig = ({ plugin }: AppConfigProps) => {
       </FieldSet>
 
       <FieldSet label="Custom skills" className={s.marginTopXl}>
-        <Field
-          label="Custom skills JSON"
-          description="Optional non-secret skill definitions stored in jsonData. Users activate explicit skills with $skill-name."
-          invalid={Boolean(customSkillsError)}
+        <CustomSkillsEditor
+          value={state.customSkills}
+          issues={customSkillIssues}
           error={customSkillsError}
-        >
-          <TextArea
-            className={s.customSkillsTextArea}
-            data-testid={testIds.appConfig.customSkillsJson}
-            id="custom-skills-json"
-            rows={14}
-            value={state.customSkillsJson}
-            placeholder={CUSTOM_SKILLS_PLACEHOLDER}
-            onChange={onChangeCustomSkillsJson}
-          />
-        </Field>
+          onChange={onChangeCustomSkills}
+        />
       </FieldSet>
 
       <div className={s.marginTop}>
@@ -371,30 +380,7 @@ const getStyles = (theme: GrafanaTheme2) => ({
     width: 100%;
     font-family: ${theme.typography.fontFamilyMonospace};
   `,
-  customSkillsTextArea: css`
-    max-width: 860px;
-    width: 100%;
-    font-family: ${theme.typography.fontFamilyMonospace};
-  `,
 });
-
-const CUSTOM_SKILLS_PLACEHOLDER = `[
-  {
-    "name": "team-runbook",
-    "description": "Use the team incident workflow and dashboard conventions.",
-    "content": "# Team Runbook\\n\\nCheck service SLOs first. Prefer existing dashboards before creating new ones.",
-    "activation": {
-      "explicitOnly": true
-    },
-    "toolGroups": ["metrics", "skillResources"],
-    "resources": [
-      {
-        "path": "references/team-runbook.md",
-        "content": "# Team Runbook\\n\\nEscalate unresolved paging incidents after 15 minutes."
-      }
-    ]
-  }
-]`;
 
 const thinkingLevelOptions: Array<{ label: string; value: PiAppThinkingLevel; description: string }> = [
   { label: 'Off', value: 'off', description: 'Do not request model thinking.' },
@@ -408,14 +394,6 @@ const thinkingFormatOptions: Array<{ label: string; value: PiAppThinkingFormat; 
   { label: 'Qwen', value: 'qwen', description: 'Send enable_thinking.' },
   { label: 'Qwen template', value: 'qwen-chat-template', description: 'Send chat_template_kwargs.enable_thinking.' },
 ];
-
-function formatCustomSkillsJson(customSkills: PiAppJsonData['customSkills']) {
-  if (!Array.isArray(customSkills) || customSkills.length === 0) {
-    return '';
-  }
-
-  return JSON.stringify(customSkills, null, 2);
-}
 
 const updatePluginAndReload = async (pluginId: string, data: Partial<PluginMeta<PiAppJsonData>>) => {
   try {

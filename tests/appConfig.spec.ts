@@ -25,7 +25,11 @@ test('should be possible to save app configuration', async ({ appConfigPage, pag
     baseURL: 'https://api.openai.example/v1',
     model: 'gpt-test',
     systemPromptAddendum: 'Prefer concise incident summaries.',
-    customSkillsJson: '[{"name":"team-runbook","description":"Team incident workflow.","content":"# Team Runbook"}]',
+    customSkill: {
+      name: 'team-runbook',
+      description: 'Team incident workflow.',
+      content: '# Team Runbook\n\nUse the internal incident workflow.',
+    },
   });
   await saveLLMSettings(appConfigPage, page, localLLMSettings);
 });
@@ -40,7 +44,11 @@ async function saveLLMSettings(
     thinkingLevel?: PiAppThinkingLevel;
     thinkingFormat?: PiAppThinkingFormat;
     systemPromptAddendum?: string;
-    customSkillsJson?: string;
+    customSkill?: {
+      name: string;
+      description: string;
+      content: string;
+    };
   }
 ) {
   await page
@@ -59,9 +67,10 @@ async function saveLLMSettings(
   if (settings.systemPromptAddendum) {
     await page.getByRole('textbox', { name: 'System prompt addendum' }).fill(settings.systemPromptAddendum);
   }
-  await page.getByRole('textbox', { name: 'Custom skills JSON' }).clear();
-  if (settings.customSkillsJson) {
-    await page.getByRole('textbox', { name: 'Custom skills JSON' }).fill(settings.customSkillsJson);
+
+  await clearCustomSkills(page);
+  if (settings.customSkill) {
+    await addCustomSkill(page, settings.customSkill);
   }
 
   const saveResponse = appConfigPage.waitForSettingsResponse();
@@ -81,6 +90,34 @@ async function selectThinkingFormat(page: Page, value: PiAppThinkingFormat) {
     .getByTestId(testIds.appConfig.thinkingFormat)
     .getByRole('radio', { name: thinkingFormatLabels[value] })
     .check({ force: true });
+}
+
+async function clearCustomSkills(page: Page) {
+  const deleteButtons = page.getByTestId(testIds.appConfig.customSkillDelete);
+
+  while ((await deleteButtons.count()) > 0) {
+    await deleteButtons.first().click();
+  }
+}
+
+async function addCustomSkill(
+  page: Page,
+  skill: {
+    name: string;
+    description: string;
+    content: string;
+  }
+) {
+  await page.getByTestId(testIds.appConfig.customSkillAdd).click();
+  await page.getByTestId(testIds.appConfig.customSkillName).clear();
+  await page.getByTestId(testIds.appConfig.customSkillName).fill(skill.name);
+  await page.getByTestId(testIds.appConfig.customSkillDescription).fill(skill.description);
+
+  const editor = page.getByTestId(testIds.appConfig.customSkillContent).locator('.monaco-editor').first();
+  await editor.click();
+  await page.keyboard.press(process.platform === 'darwin' ? 'Meta+A' : 'Control+A');
+  await page.keyboard.insertText(skill.content);
+  await page.getByRole('button', { name: 'Done' }).click();
 }
 
 function readThinkingLevel(value: string | undefined): PiAppThinkingLevel {

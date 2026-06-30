@@ -12,15 +12,19 @@ export const CONFIGURABLE_SKILL_TOOL_GROUPS = [
   'skillResources',
 ] as const satisfies readonly SkillToolGroup[];
 
+export const CUSTOM_SKILL_CONFIG_LIMITS = {
+  maxSkills: 20,
+  maxSkillContentLength: 20_000,
+  maxResources: 20,
+  maxResourceLength: 40_000,
+  maxResourcePathLength: 256,
+} as const;
+
+export const CUSTOM_SKILL_NAME_PATTERN = /^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/;
+
 const CONFIGURABLE_SKILL_TOOL_GROUP_SET = new Set<SkillToolGroup>(CONFIGURABLE_SKILL_TOOL_GROUPS);
 const DEFAULT_CONFIGURED_SKILL_TOOL_GROUPS: readonly SkillToolGroup[] = ['skillResources'];
 const CUSTOM_SKILL_FILE_PREFIX = 'plugin-config/customSkills';
-const MAX_CUSTOM_SKILLS = 20;
-const MAX_CUSTOM_SKILL_CONTENT_LENGTH = 20_000;
-const MAX_CUSTOM_SKILL_RESOURCES = 20;
-const MAX_CUSTOM_SKILL_RESOURCE_LENGTH = 40_000;
-const MAX_RESOURCE_PATH_LENGTH = 256;
-const SKILL_NAME_PATTERN = /^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/;
 
 type ConfiguredSkillOptions = {
   reservedNames?: Iterable<string>;
@@ -35,7 +39,7 @@ export function getConfiguredGrafanaSkills(
   const seenNames = new Set<string>();
   const skills: GrafanaSkill[] = [];
 
-  for (const customSkill of customSkills.slice(0, MAX_CUSTOM_SKILLS)) {
+  for (const customSkill of customSkills.slice(0, CUSTOM_SKILL_CONFIG_LIMITS.maxSkills)) {
     const skill = normalizeConfiguredSkill(customSkill, reservedNames, seenNames);
 
     if (skill) {
@@ -93,7 +97,13 @@ function normalizeConfiguredSkill(
   const description = typeof customSkill.description === 'string' ? customSkill.description.trim() : '';
   const content = typeof customSkill.content === 'string' ? truncateCustomSkillContent(customSkill.content.trim()) : '';
 
-  if (!SKILL_NAME_PATTERN.test(name) || !description || !content || reservedNames.has(name) || seenNames.has(name)) {
+  if (
+    !CUSTOM_SKILL_NAME_PATTERN.test(name) ||
+    !description ||
+    !content ||
+    reservedNames.has(name) ||
+    seenNames.has(name)
+  ) {
     return undefined;
   }
 
@@ -154,7 +164,7 @@ function normalizeConfiguredSkillResources(value: unknown): Record<string, Bundl
 
   const resources: Record<string, BundledSkillResource> = {};
 
-  for (const resource of value.slice(0, MAX_CUSTOM_SKILL_RESOURCES)) {
+  for (const resource of value.slice(0, CUSTOM_SKILL_CONFIG_LIMITS.maxResources)) {
     if (!isRecord(resource)) {
       continue;
     }
@@ -184,8 +194,8 @@ function collectCustomSkillConfigErrors(value: unknown): string[] {
   const errors: string[] = [];
   const names = new Set<string>();
 
-  if (value.length > MAX_CUSTOM_SKILLS) {
-    errors.push(`Custom skills JSON can contain at most ${MAX_CUSTOM_SKILLS} skills.`);
+  if (value.length > CUSTOM_SKILL_CONFIG_LIMITS.maxSkills) {
+    errors.push(`Custom skills JSON can contain at most ${CUSTOM_SKILL_CONFIG_LIMITS.maxSkills} skills.`);
   }
 
   value.forEach((item, index) => {
@@ -205,7 +215,7 @@ function collectCustomSkillConfigErrors(value: unknown): string[] {
 function validateCustomSkillObject(item: Record<string, unknown>, label: string, names: Set<string>, errors: string[]) {
   const name = typeof item.name === 'string' ? item.name.trim().toLowerCase() : '';
 
-  if (!SKILL_NAME_PATTERN.test(name)) {
+  if (!CUSTOM_SKILL_NAME_PATTERN.test(name)) {
     errors.push(`${label}.name must be kebab-case and 2-64 characters.`);
   } else if (names.has(name)) {
     errors.push(`${label}.name duplicates another custom skill.`);
@@ -221,8 +231,8 @@ function validateCustomSkillObject(item: Record<string, unknown>, label: string,
 
   if (typeof item.content !== 'string' || item.content.trim().length === 0) {
     errors.push(`${label}.content is required.`);
-  } else if (item.content.length > MAX_CUSTOM_SKILL_CONTENT_LENGTH) {
-    errors.push(`${label}.content must be ${MAX_CUSTOM_SKILL_CONTENT_LENGTH} characters or fewer.`);
+  } else if (item.content.length > CUSTOM_SKILL_CONFIG_LIMITS.maxSkillContentLength) {
+    errors.push(`${label}.content must be ${CUSTOM_SKILL_CONFIG_LIMITS.maxSkillContentLength} characters or fewer.`);
   }
 
   validateCustomSkillActivation(item.activation, label, errors);
@@ -288,8 +298,8 @@ function validateCustomSkillResources(value: unknown, label: string, errors: str
     return;
   }
 
-  if (value.length > MAX_CUSTOM_SKILL_RESOURCES) {
-    errors.push(`${label}.resources can contain at most ${MAX_CUSTOM_SKILL_RESOURCES} resources.`);
+  if (value.length > CUSTOM_SKILL_CONFIG_LIMITS.maxResources) {
+    errors.push(`${label}.resources can contain at most ${CUSTOM_SKILL_CONFIG_LIMITS.maxResources} resources.`);
   }
 
   value.forEach((resource, index) => {
@@ -308,35 +318,50 @@ function validateCustomSkillResources(value: unknown, label: string, errors: str
 
     if (typeof resource.content !== 'string' || resource.content.length === 0) {
       errors.push(`${resourceLabel}.content is required.`);
-    } else if (resource.content.length > MAX_CUSTOM_SKILL_RESOURCE_LENGTH) {
-      errors.push(`${resourceLabel}.content must be ${MAX_CUSTOM_SKILL_RESOURCE_LENGTH} characters or fewer.`);
+    } else if (resource.content.length > CUSTOM_SKILL_CONFIG_LIMITS.maxResourceLength) {
+      errors.push(
+        `${resourceLabel}.content must be ${CUSTOM_SKILL_CONFIG_LIMITS.maxResourceLength} characters or fewer.`
+      );
     }
   });
 }
 
 function truncateCustomSkillContent(value: string) {
-  if (value.length <= MAX_CUSTOM_SKILL_CONTENT_LENGTH) {
+  if (value.length <= CUSTOM_SKILL_CONFIG_LIMITS.maxSkillContentLength) {
     return value;
   }
 
-  return value.slice(0, MAX_CUSTOM_SKILL_CONTENT_LENGTH);
+  return value.slice(0, CUSTOM_SKILL_CONFIG_LIMITS.maxSkillContentLength);
 }
 
-function isValidResourcePath(path: string) {
-  if (!path || path.length > MAX_RESOURCE_PATH_LENGTH || path.startsWith('/') || path.includes('\\')) {
+export function isValidCustomSkillResourcePath(path: string) {
+  if (
+    !path ||
+    path.length > CUSTOM_SKILL_CONFIG_LIMITS.maxResourcePathLength ||
+    path.startsWith('/') ||
+    path.includes('\\')
+  ) {
     return false;
   }
 
   return !path.split('/').some((segment) => segment === '' || segment === '.' || segment === '..');
 }
 
-function isValidRegex(pattern: string) {
+function isValidResourcePath(path: string) {
+  return isValidCustomSkillResourcePath(path);
+}
+
+export function isValidCustomSkillRegex(pattern: string) {
   try {
     new RegExp(pattern);
     return true;
   } catch {
     return false;
   }
+}
+
+function isValidRegex(pattern: string) {
+  return isValidCustomSkillRegex(pattern);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
