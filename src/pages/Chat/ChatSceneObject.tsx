@@ -74,6 +74,15 @@ import {
 } from './sidebarPageContext';
 import { createAssistantTelemetryReporter } from './telemetry';
 import {
+  createInitialRunStatus,
+  formatRunElapsed,
+  reduceChatRunStatus,
+  resolveChatRunStatusFromStreamingMessage,
+  runStatusBadgeText,
+  runStatusText,
+  type ChatRunStatus,
+} from './streamingStatus';
+import {
   clearDashboardSaveFolderOverride,
   getChatRun,
   getDashboardSaveFolderOverride,
@@ -149,6 +158,7 @@ const CHAT_SESSION_PARAM = 'session';
 const ASSISTANT_SIDEBAR_PLUGIN_ID = 'grafana-assistant-app';
 const GENERAL_FOLDER_TITLE = 'General';
 const GENERAL_FOLDER_OPTION: ComboboxOption<string> = { label: GENERAL_FOLDER_TITLE, value: '' };
+const STREAMING_REVISION_WATCHDOG_MS = 80;
 const sessionKey = (id: string) => `sessions:${id}`;
 
 type ChatSessionExport = {
@@ -328,6 +338,7 @@ export function ChatApp({
   const [currentTitle, setCurrentTitle] = useState('New chat');
   const [error, setError] = useState<string>();
   const [toolRuns, setToolRuns] = useState<ToolRunState>({});
+  const [runStatus, setRunStatus] = useState<ChatRunStatus>();
   const [dashboardFolderOptions, setDashboardFolderOptions] = useState<Array<ComboboxOption<string>>>([
     GENERAL_FOLDER_OPTION,
   ]);
@@ -337,6 +348,7 @@ export function ChatApp({
   const titleRef = useRef('New chat');
   const sessionsRef = useRef<SessionIndexItem[]>([]);
   const storageRef = useRef(storage);
+  const runStatusRef = useRef<ChatRunStatus>();
   const dashboardFoldersRequestedRef = useRef(false);
   const dashboardFoldersLoadedRef = useRef(false);
   const importSessionInputRef = useRef<HTMLInputElement | null>(null);
@@ -369,6 +381,19 @@ export function ChatApp({
     },
     []
   );
+
+  const setRunStatusSnapshot = useCallback((next: ChatRunStatus | undefined) => {
+    runStatusRef.current = next;
+    setRunStatus(next);
+  }, []);
+
+  const updateRunStatus = useCallback((event: AgentEvent) => {
+    setRunStatus((current) => {
+      const next = reduceChatRunStatus(current, event);
+      runStatusRef.current = next;
+      return next;
+    });
+  }, []);
 
   const settleToolConfirmation = useCallback(
     (approved: boolean) => {
@@ -595,6 +620,7 @@ export function ChatApp({
     (event: AgentEvent, eventAgent: Agent) => {
       emitBenchmarkEvent(event);
       assistantTelemetry.recordAgentEvent(event);
+      updateRunStatus(event);
       if (shouldBatchRevision(event)) {
         scheduleRevision();
       } else {
@@ -617,7 +643,7 @@ export function ChatApp({
         }
       }
     },
-    [assistantTelemetry, flushRevision, saveSession, scheduleRevision]
+    [assistantTelemetry, flushRevision, saveSession, scheduleRevision, updateRunStatus]
   );
 
   const stopCurrentAgentForSessionChange = useCallback(
@@ -685,6 +711,7 @@ export function ChatApp({
     virtualJsonnetFilesRef.current = {};
     virtualJsonnetHydratedRef.current = {};
     investigationReportRef.current = undefined;
+    setRunStatusSnapshot(undefined);
     clearArtifacts();
     autoScrollRef.current = true;
     setIsAutoScrollPaused(false);
@@ -696,7 +723,7 @@ export function ChatApp({
     setInvestigationReport(undefined);
     settleToolConfirmation(false);
     buildAgent([]);
-  }, [buildAgent, clearArtifacts, settleToolConfirmation, stopCurrentAgentForSessionChange]);
+  }, [buildAgent, clearArtifacts, setRunStatusSnapshot, settleToolConfirmation, stopCurrentAgentForSessionChange]);
 
   const startDashboardLaunchSession = useCallback(
     (launch: DashboardAssistantLaunch) => {
@@ -709,6 +736,7 @@ export function ChatApp({
       virtualJsonnetFilesRef.current = {};
       virtualJsonnetHydratedRef.current = {};
       investigationReportRef.current = undefined;
+      setRunStatusSnapshot(undefined);
       clearArtifacts();
       autoScrollRef.current = true;
       setIsAutoScrollPaused(false);
@@ -721,7 +749,7 @@ export function ChatApp({
       settleToolConfirmation(false);
       buildAgent([]);
     },
-    [buildAgent, clearArtifacts, settleToolConfirmation, stopCurrentAgentForSessionChange]
+    [buildAgent, clearArtifacts, setRunStatusSnapshot, settleToolConfirmation, stopCurrentAgentForSessionChange]
   );
 
   const preserveCurrentRunForHandoff = useCallback(() => {
@@ -742,6 +770,7 @@ export function ChatApp({
       artifacts: { ...artifactsRef.current },
       artifactCounter: artifactCounterRef.current,
       toolRuns,
+      runStatus: runStatusRef.current,
       requestToolConfirmation,
     });
     return true;
@@ -757,6 +786,7 @@ export function ChatApp({
       virtualJsonnetFilesRef.current = run.virtualJsonnetFiles;
       virtualJsonnetHydratedRef.current = run.virtualJsonnetHydrated;
       investigationReportRef.current = run.investigationReport;
+      setRunStatusSnapshot(run.runStatus ?? (run.agent.state.isStreaming ? createInitialRunStatus() : undefined));
       setArtifactSnapshots(run.artifacts, run.artifactCounter);
       autoScrollRef.current = true;
       setIsAutoScrollPaused(false);
@@ -784,6 +814,7 @@ export function ChatApp({
       requestToolConfirmation,
       saveSession,
       setArtifactSnapshots,
+      setRunStatusSnapshot,
       settleToolConfirmation,
       stopCurrentAgentForSessionChange,
     ]
@@ -1052,6 +1083,7 @@ export function ChatApp({
 
     setInput('');
     setError(undefined);
+    setRunStatusSnapshot(createInitialRunStatus());
     keepAutoScrollEnabled();
     try {
       const runtime = buildSkillRuntime(prompt);
@@ -1075,6 +1107,7 @@ export function ChatApp({
     } finally {
       if (agentRef.current === currentAgent && sessionIdRef.current === sessionId) {
         dashboardLaunchRef.current = undefined;
+        setRunStatusSnapshot(undefined);
         flushRevision();
       }
     }
@@ -1097,6 +1130,7 @@ export function ChatApp({
       virtualJsonnetFilesRef.current = stored.virtualJsonnetFiles ?? {};
       virtualJsonnetHydratedRef.current = {};
       investigationReportRef.current = stored.investigationReport;
+      setRunStatusSnapshot(undefined);
       setArtifactSnapshots(stored.artifacts ?? {}, stored.artifactCounter);
       keepAutoScrollEnabled();
       setCurrentSessionId(id);
@@ -1113,6 +1147,7 @@ export function ChatApp({
       buildAgent,
       keepAutoScrollEnabled,
       setArtifactSnapshots,
+      setRunStatusSnapshot,
       settleToolConfirmation,
       stopCurrentAgentForSessionChange,
       storage,
@@ -1431,6 +1466,7 @@ export function ChatApp({
         virtualJsonnetFilesRef.current = imported.virtualJsonnetFiles ?? {};
         virtualJsonnetHydratedRef.current = {};
         investigationReportRef.current = imported.investigationReport;
+        setRunStatusSnapshot(undefined);
         setArtifactSnapshots(imported.artifacts ?? {}, imported.artifactCounter);
         keepAutoScrollEnabled();
         setCurrentSessionId(id);
@@ -1452,6 +1488,7 @@ export function ChatApp({
       keepAutoScrollEnabled,
       saveSession,
       setArtifactSnapshots,
+      setRunStatusSnapshot,
       settleToolConfirmation,
       stopCurrentAgentForSessionChange,
     ]
@@ -1466,6 +1503,11 @@ export function ChatApp({
   const activeToolRuns = Object.values(toolRuns)
     .filter((run) => run.status === 'running')
     .sort((left, right) => left.updatedAt - right.updatedAt);
+  const pendingApprovalToolName = pendingToolConfirmation?.toolName;
+  const displayRunStatus = resolveChatRunStatusFromStreamingMessage(runStatus, agent?.state.streamingMessage);
+  const runElapsedMs = useRunElapsedMs(Boolean(isStreaming || pendingApprovalToolName), displayRunStatus?.startedAt);
+  const streamingStatusText = runStatusText(displayRunStatus, pendingApprovalToolName);
+  const streamingBadgeText = runStatusBadgeText(displayRunStatus, pendingApprovalToolName);
   const hasLLMConfig = Boolean(jsonData.isOpenAIAPIKeySet);
   const hasCurrentMessages = hasPersistableMessages(agent?.state.messages ?? []);
 
@@ -1536,7 +1578,7 @@ export function ChatApp({
         <div className={cx(styles.toolbar, isSidebarVariant && styles.toolbarSidebar)}>
           <div className={styles.titleGroup}>
             <h2 className={styles.title}>{currentTitle}</h2>
-            <Badge text={isStreaming ? 'Streaming' : 'Ready'} color={isStreaming ? 'blue' : 'green'} />
+            <Badge text={isStreaming ? streamingBadgeText : 'Ready'} color={isStreaming ? 'blue' : 'green'} />
           </div>
           <div className={styles.toolbarActions}>
             {isSidebarVariant && (
@@ -1663,7 +1705,9 @@ export function ChatApp({
             <ToolActivityPanel runs={activeToolRuns} />
             {isStreaming && (
               <div className={styles.streaming} role="status" aria-live="polite">
-                <Spinner /> Working
+                <Spinner />
+                <span className={styles.streamingLabel}>{streamingStatusText}</span>
+                <span className={styles.streamingElapsed}>{formatRunElapsed(runElapsedMs)}</span>
               </div>
             )}
           </section>
@@ -2414,7 +2458,21 @@ function reduceToolRuns(state: ToolRunState, event: AgentEvent): ToolRunState {
 }
 
 function shouldBatchRevision(event: AgentEvent) {
-  return event.type === 'message_update' || event.type === 'tool_execution_update';
+  if (event.type === 'tool_execution_update') {
+    return true;
+  }
+  if (event.type !== 'message_update') {
+    return false;
+  }
+  return !isStreamingMessageMilestone(event.assistantMessageEvent);
+}
+
+function isStreamingMessageMilestone(event: unknown) {
+  if (!event || typeof event !== 'object') {
+    return false;
+  }
+  const type = (event as Record<string, unknown>).type;
+  return type === 'thinking_start' || type === 'text_start' || type === 'toolcall_start' || type === 'toolcall_end';
 }
 
 function emitBenchmarkEvent(event: AgentEvent) {
@@ -2559,7 +2617,16 @@ function serializeBenchmarkEvent(event: AgentEvent): BenchmarkAgentEvent {
     };
   }
 
-  if (event.type === 'message_start' || event.type === 'message_update' || event.type === 'message_end') {
+  if (event.type === 'message_update') {
+    return {
+      type: event.type,
+      timestamp,
+      message: summarizeBenchmarkMessage(event.message),
+      assistantMessageEvent: sanitizeBenchmarkValue(event.assistantMessageEvent),
+    };
+  }
+
+  if (event.type === 'message_start' || event.type === 'message_end') {
     return {
       type: event.type,
       timestamp,
@@ -2725,10 +2792,31 @@ function truncateBenchmarkText(value: unknown) {
 }
 
 type ScheduledFrame = { kind: 'raf'; id: number } | { kind: 'timeout'; id: ReturnType<typeof setTimeout> };
+type ScheduledRevision = {
+  frame: ScheduledFrame;
+  watchdog: ReturnType<typeof setTimeout>;
+};
+
+function useRunElapsedMs(active: boolean, startedAt: number | undefined) {
+  const [now, setNow] = useState(() => Date.now());
+
+  useEffect(() => {
+    if (!active || startedAt === undefined) {
+      return undefined;
+    }
+
+    const interval = setInterval(() => setNow(Date.now()), 1000);
+    return () => {
+      clearInterval(interval);
+    };
+  }, [active, startedAt]);
+
+  return active && startedAt !== undefined ? now - startedAt : 0;
+}
 
 function useFrameRevision() {
   const [revision, setRevision] = useState(0);
-  const frameRef = useRef<ScheduledFrame>();
+  const frameRef = useRef<ScheduledRevision>();
 
   const bumpRevision = useCallback(() => {
     setRevision((value) => value + 1);
@@ -2738,15 +2826,24 @@ function useFrameRevision() {
     if (frameRef.current) {
       return;
     }
-    frameRef.current = scheduleFrame(() => {
+    const finish = () => {
+      const scheduled = frameRef.current;
+      if (!scheduled) {
+        return;
+      }
       frameRef.current = undefined;
+      cancelScheduledRevision(scheduled);
       bumpRevision();
-    });
+    };
+    frameRef.current = {
+      frame: scheduleFrame(finish),
+      watchdog: setTimeout(finish, STREAMING_REVISION_WATCHDOG_MS),
+    };
   }, [bumpRevision]);
 
   const flushRevision = useCallback(() => {
     if (frameRef.current) {
-      cancelFrame(frameRef.current);
+      cancelScheduledRevision(frameRef.current);
       frameRef.current = undefined;
     }
     bumpRevision();
@@ -2755,13 +2852,18 @@ function useFrameRevision() {
   useEffect(
     () => () => {
       if (frameRef.current) {
-        cancelFrame(frameRef.current);
+        cancelScheduledRevision(frameRef.current);
       }
     },
     []
   );
 
   return { revision, flushRevision, scheduleRevision };
+}
+
+function cancelScheduledRevision(scheduled: ScheduledRevision) {
+  cancelFrame(scheduled.frame);
+  clearTimeout(scheduled.watchdog);
 }
 
 function scheduleFrame(callback: () => void): ScheduledFrame {
@@ -3337,6 +3439,15 @@ const getStyles = (theme: GrafanaTheme2) => ({
     alignItems: 'center',
     gap: theme.spacing(1),
     color: theme.colors.text.secondary,
+  }),
+  streamingLabel: css({
+    color: theme.colors.text.primary,
+    fontWeight: theme.typography.fontWeightMedium,
+  }),
+  streamingElapsed: css({
+    color: theme.colors.text.secondary,
+    fontSize: theme.typography.bodySmall.fontSize,
+    fontVariantNumeric: 'tabular-nums',
   }),
   jumpToLatest: css({
     position: 'absolute',

@@ -39,6 +39,12 @@ describe('assistant telemetry reporter', () => {
     reporter.recordAgentEvent({ type: 'agent_start' } as any);
     now = 10_300;
     reporter.recordAgentEvent({ type: 'message_start', message: { role: 'assistant', content: [] } } as any);
+    now = 10_350;
+    reporter.recordAgentEvent({
+      type: 'message_update',
+      message: { role: 'assistant', content: [{ type: 'thinking', thinking: 'Considering tools' }] },
+      assistantMessageEvent: {} as any,
+    } as any);
     now = 10_450;
     reporter.recordAgentEvent({
       type: 'message_update',
@@ -112,7 +118,9 @@ describe('assistant telemetry reporter', () => {
     expect(sent).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ type: 'qol_timing', phase: 'first_assistant_message', durationMs: 300 }),
+        expect.objectContaining({ type: 'qol_timing', phase: 'first_assistant_thinking', durationMs: 350 }),
         expect.objectContaining({ type: 'qol_timing', phase: 'first_assistant_content', durationMs: 450 }),
+        expect.objectContaining({ type: 'qol_timing', phase: 'first_visible_assistant_content', durationMs: 450 }),
         expect.objectContaining({ type: 'qol_timing', phase: 'first_tool_call', durationMs: 600 }),
         expect.objectContaining({ type: 'qol_timing', phase: 'first_tool_result', durationMs: 1250 }),
         expect.objectContaining({ type: 'qol_timing', phase: 'run_complete', durationMs: 1350 }),

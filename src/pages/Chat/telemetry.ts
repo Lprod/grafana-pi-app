@@ -68,6 +68,7 @@ export function createAssistantTelemetryReporter(send: TelemetrySender = sendAss
   let promptStartedAt: number | undefined;
   let agentStartedAt: number | undefined;
   let firstAssistantMessageRecorded = false;
+  let firstAssistantThinkingRecorded = false;
   let firstAssistantContentRecorded = false;
   let firstToolCallRecorded = false;
   let firstToolResultRecorded = false;
@@ -100,6 +101,7 @@ export function createAssistantTelemetryReporter(send: TelemetrySender = sendAss
     promptStartedAt = timestamp;
     agentStartedAt = undefined;
     firstAssistantMessageRecorded = false;
+    firstAssistantThinkingRecorded = false;
     firstAssistantContentRecorded = false;
     firstToolCallRecorded = false;
     firstToolResultRecorded = false;
@@ -185,9 +187,16 @@ export function createAssistantTelemetryReporter(send: TelemetrySender = sendAss
 
       if (event.type === 'message_update') {
         const message = messageRecord(event.message);
-        if (message?.role === 'assistant' && !firstAssistantContentRecorded && hasVisibleAssistantContent(message)) {
-          firstAssistantContentRecorded = true;
-          recordWait('first_assistant_content', timestamp);
+        if (message?.role === 'assistant') {
+          if (!firstAssistantThinkingRecorded && hasAssistantThinkingContent(message)) {
+            firstAssistantThinkingRecorded = true;
+            recordWait('first_assistant_thinking', timestamp);
+          }
+          if (!firstAssistantContentRecorded && hasVisibleAssistantContent(message)) {
+            firstAssistantContentRecorded = true;
+            recordWait('first_assistant_content', timestamp);
+            recordWait('first_visible_assistant_content', timestamp);
+          }
         }
         return;
       }
@@ -447,10 +456,24 @@ function hasVisibleAssistantContent(message: Record<string, unknown>) {
   }
   return content.some((block) => {
     const record = recordValue(block);
-    return (
-      (record?.type === 'text' || record?.type === 'thinking' || record?.type === 'toolCall') &&
-      JSON.stringify(record).length > 2
-    );
+    if (record?.type === 'text') {
+      return stringField(record, 'text') !== undefined;
+    }
+    if (record?.type === 'toolCall') {
+      return stringField(record, 'name') !== undefined;
+    }
+    return false;
+  });
+}
+
+function hasAssistantThinkingContent(message: Record<string, unknown>) {
+  const content = message.content;
+  if (!Array.isArray(content)) {
+    return false;
+  }
+  return content.some((block) => {
+    const record = recordValue(block);
+    return record?.type === 'thinking' && stringField(record, 'thinking') !== undefined;
   });
 }
 

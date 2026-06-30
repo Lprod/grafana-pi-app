@@ -6,6 +6,7 @@ import type {
   InvestigationReport,
   VirtualJsonnetFileSnapshot,
 } from './grafanaTools';
+import type { ChatRunStatus } from './streamingStatus';
 import type { ToolRunView } from './ToolRenderer';
 
 export type ChatToolConfirmationHandler = (
@@ -26,6 +27,7 @@ export type ChatRunSnapshot = {
   artifacts: Record<string, Artifact>;
   artifactCounter: number;
   toolRuns: Record<string, ToolRunView>;
+  runStatus?: ChatRunStatus;
   requestToolConfirmation?: ChatToolConfirmationHandler;
   updatedAt: number;
 };
