@@ -1,3 +1,10 @@
+# [2.14.0](https://github.com/elohmeier/grafana-pi-app/compare/v2.13.0...v2.14.0) (2026-07-01)
+
+
+### Features
+
+* **alerting:** add panel alert troubleshooting ([0db71a4](https://github.com/elohmeier/grafana-pi-app/commit/0db71a45c520dd0fc75ab8e11660ce1b5e992013))
+
 # [2.13.0](https://github.com/elohmeier/grafana-pi-app/compare/v2.12.0...v2.13.0) (2026-07-01)
 
 
