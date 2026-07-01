@@ -616,6 +616,7 @@ function formatCustomSkillsJson(customSkills: readonly PiAppCustomSkill[]) {
 
 const toolGroupLabels: Record<string, string> = {
   metrics: 'Metrics',
+  alerts: 'Alerting',
   dashboardMetricContext: 'Dashboard metric context',
   dashboardRead: 'Dashboard read',
   jsonnetFiles: 'Jsonnet files',
@@ -627,6 +628,7 @@ const toolGroupLabels: Record<string, string> = {
 
 const toolGroupDescriptions: Record<string, string> = {
   metrics: 'Discover and query Prometheus metrics.',
+  alerts: 'Inspect Grafana-managed alert rules with read-only App Platform APIs.',
   dashboardMetricContext: 'Use metrics found in existing dashboards.',
   dashboardRead: 'Read dashboards and dashboard metadata.',
   jsonnetFiles: 'Read and edit the session Jsonnet dashboard file.',

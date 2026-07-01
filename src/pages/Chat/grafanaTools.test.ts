@@ -467,6 +467,220 @@ describe('grafana datasource tool policy', () => {
     });
   });
 
+  it('finds App Platform alert rules linked to a dashboard panel', async () => {
+    const alertRule = {
+      apiVersion: 'rules.alerting.grafana.app/v0alpha1',
+      kind: 'AlertRule',
+      metadata: {
+        name: 'high-error-rate',
+        annotations: { 'grafana.app/folder': 'service-folder' },
+      },
+      spec: {
+        title: 'High error rate',
+        trigger: { interval: '1m' },
+        for: '5m',
+        noDataState: 'NoData',
+        execErrState: 'Error',
+        labels: { severity: 'warning' },
+        annotations: { __dashboardUid__: 'service-dashboard', __panelId__: '2' },
+        panelRef: { dashboardUID: 'service-dashboard', panelID: 2 },
+        expressions: {
+          A: {
+            datasourceUID: 'prom-b',
+            relativeTimeRange: { from: '600s', to: '0s' },
+            model: {
+              refId: 'A',
+              expr: 'sum(rate(http_requests_total{status=~"5.."}[5m]))',
+              range: true,
+            },
+          },
+          B: {
+            model: {
+              refId: 'B',
+              type: 'reduce',
+              expression: 'A',
+              reducer: 'last',
+            },
+          },
+          C: {
+            source: true,
+            model: {
+              refId: 'C',
+              type: 'threshold',
+              expression: 'B',
+              conditions: [
+                {
+                  evaluator: { type: 'gt', params: [0.5] },
+                  reducer: { type: 'last' },
+                },
+              ],
+            },
+          },
+        },
+      },
+    };
+    const fetch = jest.fn((request: { url: string }) => {
+      if (request.url === '/apis/rules.alerting.grafana.app/v0alpha1/namespaces/default/alertrules') {
+        return of({ data: { items: [alertRule] } });
+      }
+      if (request.url === '/api/dashboards/uid/service-dashboard') {
+        return of({
+          data: {
+            dashboard: {
+              panels: [
+                {
+                  id: 2,
+                  title: '5xx rate',
+                  type: 'timeseries',
+                  datasource: { uid: 'prom-b', type: 'prometheus' },
+                  fieldConfig: {
+                    defaults: {
+                      thresholds: {
+                        mode: 'absolute',
+                        steps: [
+                          { color: 'green', value: null },
+                          { color: 'yellow', value: 0.1 },
+                        ],
+                      },
+                    },
+                  },
+                  targets: [
+                    {
+                      refId: 'A',
+                      datasource: { uid: 'prom-b', type: 'prometheus' },
+                      expr: 'sum(rate(http_requests_total{status=~"5.."}[$__rate_interval]))',
+                    },
+                  ],
+                },
+              ],
+            },
+          },
+        });
+      }
+      throw new Error(`Unexpected request: ${request.url}`);
+    });
+    (getBackendSrv as jest.Mock).mockReturnValue({ fetch });
+    const tool = getTool(createGrafanaTools({ allowedPrometheusDatasourceUids: ['prom-b'] }), 'find_panel_alert_rules');
+
+    const result = await tool.execute(
+      'call-alerts',
+      { namespace: 'default', dashboardUid: 'service-dashboard', panelId: 2 },
+      undefined
+    );
+    const body = JSON.parse(result.content[0].text);
+
+    expect(result.details).toMatchObject({
+      namespace: 'default',
+      dashboardUid: 'service-dashboard',
+      panelId: '2',
+      exactPanelMatchCount: 1,
+      matchCount: 1,
+    });
+    expect(body.dashboardPanel).toMatchObject({
+      id: '2',
+      title: '5xx rate',
+      thresholds: { mode: 'absolute' },
+    });
+    expect(body.matches[0]).toMatchObject({
+      reasons: expect.arrayContaining([
+        'panelRef+annotations dashboardUID match',
+        'panelRef+annotations panelID match',
+        'panel link exact match',
+      ]),
+      rule: {
+        name: 'high-error-rate',
+        title: 'High error rate',
+        folderUid: 'service-folder',
+        conditionRef: 'C',
+        panelRef: { dashboardUID: 'service-dashboard', panelID: 2 },
+        panelLink: { dashboardUID: 'service-dashboard', panelID: 2, source: 'panelRef+annotations' },
+        annotations: { __dashboardUid__: 'service-dashboard', __panelId__: '2' },
+        alertCondition: {
+          sourceRefId: 'C',
+          expression: 'B',
+          evaluator: { type: 'gt', params: [0.5] },
+          reducer: 'last',
+        },
+        prometheusChecks: [
+          {
+            refId: 'A',
+            datasourceUid: 'prom-b',
+            query: 'sum(rate(http_requests_total{status=~"5.."}[5m]))',
+            type: 'range',
+            start: 'now-600s',
+            end: 'now',
+          },
+        ],
+      },
+    });
+    expect(fetch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        url: '/apis/rules.alerting.grafana.app/v0alpha1/namespaces/default/alertrules',
+        method: 'GET',
+      })
+    );
+  });
+
+  it('finds App Platform alert rules linked through Grafana dashboard annotations', async () => {
+    const alertRule = {
+      apiVersion: 'rules.alerting.grafana.app/v0alpha1',
+      kind: 'AlertRule',
+      metadata: {
+        name: 'annotated-error-rate',
+        annotations: { 'grafana.app/folder': 'service-folder' },
+      },
+      spec: {
+        title: 'Annotated high error rate',
+        trigger: { interval: '1m' },
+        noDataState: 'NoData',
+        execErrState: 'Error',
+        annotations: { __dashboardUid__: 'service-dashboard', __panelId__: '2' },
+        expressions: {
+          A: {
+            datasourceUID: 'prom-b',
+            relativeTimeRange: { from: '600s', to: '0s' },
+            model: {
+              refId: 'A',
+              expr: 'sum(rate(http_requests_total{status=~"5.."}[5m]))',
+              range: true,
+            },
+          },
+        },
+      },
+    };
+    const fetch = jest.fn((request: { url: string }) => {
+      if (request.url === '/apis/rules.alerting.grafana.app/v0alpha1/namespaces/default/alertrules') {
+        return of({ data: { items: [alertRule] } });
+      }
+      if (request.url === '/api/dashboards/uid/service-dashboard') {
+        return of({ data: { dashboard: { panels: [{ id: 2, title: '5xx rate', targets: [] }] } } });
+      }
+      throw new Error(`Unexpected request: ${request.url}`);
+    });
+    (getBackendSrv as jest.Mock).mockReturnValue({ fetch });
+    const tool = getTool(createGrafanaTools({ allowedPrometheusDatasourceUids: ['prom-b'] }), 'find_panel_alert_rules');
+
+    const result = await tool.execute(
+      'call-alerts',
+      { namespace: 'default', dashboardUid: 'service-dashboard', panelId: 2 },
+      undefined
+    );
+    const body = JSON.parse(result.content[0].text);
+
+    expect(result.details).toMatchObject({ exactPanelMatchCount: 1, matchCount: 1 });
+    expect(body.matches[0]).toMatchObject({
+      reasons: expect.arrayContaining([
+        'annotations dashboardUID match',
+        'annotations panelID match',
+        'panel link exact match',
+      ]),
+      rule: {
+        name: 'annotated-error-rate',
+        panelLink: { dashboardUID: 'service-dashboard', panelID: 2, source: 'annotations' },
+      },
+    });
+  });
+
   it('summarizes persistent transient query failures after retries are exhausted', async () => {
     jest.useFakeTimers();
     try {
@@ -1110,6 +1324,7 @@ describe('grafana datasource tool policy', () => {
       'run_query_agent',
       'run_dashboard_agent',
       'run_investigation_agent',
+      'run_alert_agent',
       'run_support_agent',
       'run_navigation_agent',
     ]);
@@ -1132,6 +1347,7 @@ describe('grafana datasource tool policy', () => {
       'run_query_agent',
       'run_dashboard_agent',
       'run_investigation_agent',
+      'run_alert_agent',
       'run_support_agent',
       'run_navigation_agent',
     ]);
@@ -1205,6 +1421,8 @@ describe('grafana datasource tool policy', () => {
 
     const names = registry.all.map((tool) => tool.name);
     expect(names).toContain('query_prometheus');
+    expect(names).toContain('find_panel_alert_rules');
+    expect(names).toContain('get_alert_rule');
     expect(names).toContain('write_jsonnet');
     expect(names).toContain('edit_jsonnet');
     expect(names).toContain('fix_jsonnet');
@@ -1215,6 +1433,7 @@ describe('grafana datasource tool policy', () => {
     expect(names).toContain('run_query_agent');
     expect(names).toContain('run_dashboard_agent');
     expect(names).toContain('run_investigation_agent');
+    expect(names).toContain('run_alert_agent');
     expect(names).toContain('run_support_agent');
     expect(names).toContain('run_navigation_agent');
     expect(names).not.toContain('explore_metrics');
@@ -2127,6 +2346,53 @@ describe('grafana datasource tool policy', () => {
     expect(childToolNames).not.toContain('upload_dashboard');
     expect(childToolNames).not.toContain('delete_dashboard');
     expect(childToolNames).not.toContain('run_dashboard_agent');
+  });
+
+  it('runs the alert agent with read-only alert, dashboard, and Prometheus child tools', async () => {
+    const registry = createGrafanaToolRegistry({
+      skillTools: createSkillTools(GRAFANA_SKILLS),
+      runtime: {
+        model: {} as any,
+        streamFn: jest.fn() as any,
+        thinkingLevel: 'off',
+      },
+    });
+    const tool = getTool(registry.subagents, 'run_alert_agent');
+
+    const result = await tool.execute(
+      'call-1',
+      {
+        task: 'Troubleshoot why the linked alert is firing.',
+        datasourceUid: 'prom-b',
+        dashboardUid: 'service-dashboard',
+        panelId: '2',
+      },
+      undefined
+    );
+    const call = jest.mocked(runSpecialistAgent).mock.calls.at(-1)?.[0];
+    const childToolNames = call?.tools.map((childTool) => childTool.name) ?? [];
+
+    expect(call).toMatchObject({
+      kind: 'alerts',
+      task: expect.stringContaining('Troubleshoot why the linked alert is firing.'),
+    });
+    expect(call?.task).toContain('Prefer datasource UID: prom-b.');
+    expect(call?.task).toContain('Dashboard UID: service-dashboard.');
+    expect(call?.task).toContain('Panel ID: 2.');
+    expect(result.details).toMatchObject({ agent: 'alerts', status: 'completed' });
+    expect(childToolNames).toEqual(
+      expect.arrayContaining([
+        'find_panel_alert_rules',
+        'get_alert_rule',
+        'inspect_dashboard_context',
+        'search_dashboard_metric_usage',
+        'query_prometheus',
+        'read_skill_resource',
+      ])
+    );
+    expect(childToolNames).not.toContain('upload_dashboard');
+    expect(childToolNames).not.toContain('delete_dashboard');
+    expect(childToolNames).not.toContain('save_dashboard');
   });
 
   it('runs the navigation agent with only the safe navigation tool', async () => {

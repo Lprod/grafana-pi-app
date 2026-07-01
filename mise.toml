@@ -14,3 +14,21 @@ run = [
   "docker compose --profile assistant-variant up -d --build --remove-orphans grafana-assistant-variant",
   "docker compose restart grafana-assistant-variant",
 ]
+
+[tasks."dev:seed:samples"]
+description = "Seed stable local dashboards and alert rules for assistant manual testing."
+run = "npm run dev:seed:samples"
+
+[tasks."dev:reload:variant:seed"]
+description = "Reload the sidebar-capable variant on port 3001 and seed stable manual-test samples."
+run = [
+  "mise run dev:reload:variant",
+  "npm run dev:seed:samples",
+]
+
+[tasks."dev:reload:variant:fresh"]
+description = "Reset Compose volumes, reseed Prometheus history, reload the sidebar variant, and seed samples."
+run = [
+  "docker compose down -v --remove-orphans",
+  "HISTORY_FUTURE_SECONDS=${HISTORY_FUTURE_SECONDS:-3600} mise run dev:reload:variant:seed",
+]

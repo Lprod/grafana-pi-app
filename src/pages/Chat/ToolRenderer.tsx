@@ -524,6 +524,14 @@ function asSimpleToolCallSummary(
         { label: 'Datasource', key: 'datasourceUid' },
         { label: 'Time range', key: 'timeRange' },
       ]);
+    case 'run_alert_agent':
+      return specialistToolCallSummary('alert agent', record, [
+        { label: 'Task', key: 'task' },
+        { label: 'Datasource', key: 'datasourceUid' },
+        { label: 'Dashboard', key: 'dashboardUid' },
+        { label: 'Panel', key: 'panelId' },
+        { label: 'Time range', key: 'timeRange' },
+      ]);
     case 'run_support_agent':
       return specialistToolCallSummary('support agent', record, [
         { label: 'Task', key: 'task' },
@@ -576,6 +584,10 @@ function asSimpleToolCallSummary(
       return dashboardToolCallSummary('Inspect dashboard context', record);
     case 'inspect_dashboard_metric_usage':
       return dashboardToolCallSummary('Inspect dashboard metric usage', record);
+    case 'find_panel_alert_rules':
+      return findPanelAlertRulesToolCallSummary(record);
+    case 'get_alert_rule':
+      return getAlertRuleToolCallSummary(record);
     case 'search_dashboard_metric_usage':
       return dashboardMetricSearchToolCallSummary(record);
     case 'get_metric_neighborhood':
@@ -926,6 +938,45 @@ function dashboardMetricSearchToolCallSummary(record: Record<string, unknown>): 
       { label: 'Max dashboards', value: stringOrNumberField(record, 'maxDashboards') },
     ],
     code: seedCode,
+  };
+}
+
+function findPanelAlertRulesToolCallSummary(record: Record<string, unknown>): SimpleToolCallSummary {
+  const dashboardUid = stringField(record, 'dashboardUid');
+  const panelId = stringOrNumberField(record, 'panelId');
+  const panelTitle = stringField(record, 'panelTitle');
+  const ruleName = stringField(record, 'ruleName');
+  const query = stringField(record, 'query');
+  const namespace = stringField(record, 'namespace');
+
+  return {
+    summary: summaryLine([
+      'Find panel alert rules',
+      dashboardUid ? `dashboard ${dashboardUid}` : undefined,
+      panelId ? `panel ${panelId}` : panelTitle,
+      ruleName ? `rule ${ruleName}` : query,
+    ]),
+    items: [
+      { label: 'Dashboard', value: dashboardUid ? <code>{dashboardUid}</code> : undefined },
+      { label: 'Panel', value: panelId },
+      { label: 'Panel title', value: panelTitle },
+      { label: 'Rule', value: ruleName ? <code>{ruleName}</code> : undefined },
+      { label: 'Query', value: query },
+      { label: 'Namespace', value: namespace ? <code>{namespace}</code> : undefined },
+      { label: 'Max rules', value: stringOrNumberField(record, 'maxRules') },
+    ],
+  };
+}
+
+function getAlertRuleToolCallSummary(record: Record<string, unknown>): SimpleToolCallSummary {
+  const name = stringField(record, 'name');
+  const namespace = stringField(record, 'namespace');
+  return {
+    summary: summaryLine(['Get alert rule', name, namespace ? `namespace ${namespace}` : undefined]),
+    items: [
+      { label: 'Rule', value: name ? <code>{name}</code> : undefined },
+      { label: 'Namespace', value: namespace ? <code>{namespace}</code> : undefined },
+    ],
   };
 }
 
@@ -1420,6 +1471,7 @@ const TOOL_ICONS: Record<string, IconName> = {
   run_query_agent: 'database',
   run_dashboard_agent: 'apps',
   run_investigation_agent: 'search',
+  run_alert_agent: 'bell',
   run_support_agent: 'question-circle',
   run_navigation_agent: 'compass',
   navigate: 'compass',
@@ -1456,6 +1508,8 @@ const TOOL_ICONS: Record<string, IconName> = {
   grafana_get_dashboard: 'dashboard',
   inspect_dashboard_context: 'dashboard',
   inspect_dashboard_metric_usage: 'dashboard',
+  find_panel_alert_rules: 'bell',
+  get_alert_rule: 'bell',
   search_dashboard_metric_usage: 'search',
   get_metric_neighborhood: 'search',
   list_live_dashboard_panels: 'list-ul',
@@ -1545,7 +1599,7 @@ function SubagentDetailsView({
       )}
       <div className={styles.toolTimeline}>
         {details.toolCalls.map((call) => (
-          <SubagentToolCallRow call={call} key={call.id} onOpenDashboard={onOpenDashboard} />
+          <SubagentToolCallRow agent={details.agent} call={call} key={call.id} onOpenDashboard={onOpenDashboard} />
         ))}
       </div>
     </div>
@@ -1560,6 +1614,8 @@ function subagentLabel(agent: SubagentRunDetails['agent']) {
       return 'Dashboard agent';
     case 'investigation':
       return 'Investigation agent';
+    case 'alerts':
+      return 'Alert agent';
     case 'support':
       return 'Support agent';
     case 'navigation':
@@ -1570,14 +1626,16 @@ function subagentLabel(agent: SubagentRunDetails['agent']) {
 }
 
 function SubagentToolCallRow({
+  agent,
   call,
   onOpenDashboard,
 }: {
+  agent: SubagentRunDetails['agent'];
   call: SubagentToolCall;
   onOpenDashboard?: DashboardOpenHandler;
 }) {
   const styles = useStyles2(getToolStyles);
-  const shouldAutoOpen = shouldExpandSubagentToolCall(call);
+  const shouldAutoOpen = shouldExpandSubagentToolCall(call, agent);
   const [manualOpen, setManualOpen] = useState<boolean | undefined>(undefined);
   const isOpen = manualOpen ?? shouldAutoOpen;
   const toolResult = call.result ?? call.partialResult;
@@ -1634,13 +1692,21 @@ function SubagentToolCallRow({
   );
 }
 
-function shouldExpandSubagentToolCall(call: SubagentToolCall) {
+function shouldExpandSubagentToolCall(call: SubagentToolCall, agent: SubagentRunDetails['agent']) {
   return (
     call.status === 'failed' ||
     call.isError ||
+    (agent === 'alerts' && call.status === 'completed' && !call.isError && ALERT_EVIDENCE_TOOL_NAMES.has(call.name)) ||
     (call.status === 'completed' && !call.isError && call.name === 'save_dashboard')
   );
 }
+
+const ALERT_EVIDENCE_TOOL_NAMES = new Set([
+  'find_panel_alert_rules',
+  'get_alert_rule',
+  'query_prometheus',
+  'inspect_dashboard_context',
+]);
 
 function contentFromLegacyToolText(text: string | undefined) {
   return text ? [{ type: 'text', text }] : undefined;
@@ -1657,6 +1723,11 @@ function renderStructuredToolResult(
   const workspaceResult = asWorkspaceToolResult(toolName, details, content);
   if (workspaceResult) {
     return workspaceResult;
+  }
+
+  const artifactRead = asArtifactReadResult(toolName, details, content);
+  if (artifactRead) {
+    return <ArtifactReadResultView result={artifactRead} />;
   }
 
   const datasources = asDatasourceResult(toolName, details, content);
@@ -1706,6 +1777,16 @@ function renderStructuredToolResult(
   const rawPrometheusQuery = asRawPrometheusQuery(toolName, details);
   if (rawPrometheusQuery) {
     return <RawPrometheusQueryResultView content={artifactResult ? undefined : content} result={rawPrometheusQuery} />;
+  }
+
+  const alertRuleMatches = asAlertRuleMatchesResult(toolName, details, content);
+  if (alertRuleMatches) {
+    return <AlertRuleMatchesResultView result={alertRuleMatches} />;
+  }
+
+  const alertRule = asAlertRuleResult(toolName, details, content);
+  if (alertRule) {
+    return <AlertRuleResultView result={alertRule} />;
   }
 
   const screenshot = asScreenshotResult(toolName, details);
@@ -1764,6 +1845,1030 @@ function renderStructuredToolResult(
   }
 
   return undefined;
+}
+
+type ArtifactReadResult = {
+  artifact?: ArtifactRef;
+  mode?: string;
+  path?: string;
+  jq?: string;
+  exitCode?: number;
+  truncated?: boolean;
+  text?: string;
+  emptyKind?: 'null' | 'undefined';
+  json?: unknown;
+};
+
+function ArtifactReadResultView({ result }: { result: ArtifactReadResult }) {
+  const styles = useStyles2(getToolStyles);
+  const summary = summaryLine([
+    'Artifact read',
+    result.mode,
+    result.artifact?.title,
+    result.truncated ? 'truncated' : undefined,
+  ]);
+
+  return (
+    <div className={styles.structuredResult}>
+      <div className={styles.resultSummary}>{summary}</div>
+      <ResultMetaGrid
+        items={[
+          { label: 'Artifact', value: result.artifact ? <code>{result.artifact.id}</code> : undefined },
+          { label: 'Tool', value: result.artifact?.toolName },
+          { label: 'Mode', value: result.mode },
+          { label: 'Path', value: result.path ? <code>{result.path}</code> : undefined },
+          { label: 'jq', value: result.jq ? <code>{result.jq}</code> : undefined },
+          { label: 'Exit code', value: result.exitCode === undefined ? undefined : String(result.exitCode) },
+          { label: 'Truncated', value: formatBoolean(result.truncated) },
+        ]}
+      />
+      {result.emptyKind ? (
+        <div className={styles.emptyState}>{artifactReadEmptyMessage(result)}</div>
+      ) : result.json !== undefined ? (
+        <ArtifactReadJsonView result={result} />
+      ) : result.text ? (
+        <ContentBlocks content={[{ type: 'text', text: result.text }]} />
+      ) : (
+        <div className={styles.emptyState}>Artifact read returned no output.</div>
+      )}
+    </div>
+  );
+}
+
+function asArtifactReadResult(
+  toolName: string | undefined,
+  details: unknown,
+  content: unknown
+): ArtifactReadResult | undefined {
+  if (!isArtifactReadResult(toolName, details) || !isRecord(details)) {
+    return undefined;
+  }
+
+  const text = extractToolText(content);
+  const trimmed = text?.trim();
+  return {
+    artifact: asArtifactRef(recordField(details, 'artifactRef')),
+    mode: stringField(details, 'mode'),
+    path: stringField(details, 'path'),
+    jq: stringField(details, 'jq'),
+    exitCode: numberField(details, 'exitCode'),
+    truncated: booleanField(details, 'truncated'),
+    text,
+    emptyKind: trimmed === 'null' || trimmed === 'undefined' ? trimmed : undefined,
+    json: parseArtifactReadJson(trimmed),
+  };
+}
+
+function parseArtifactReadJson(text: string | undefined): unknown {
+  if (!text || text === 'null' || text === 'undefined') {
+    return undefined;
+  }
+  try {
+    return JSON.parse(text);
+  } catch {
+    return undefined;
+  }
+}
+
+function artifactReadEmptyMessage(result: ArtifactReadResult) {
+  const selected = result.mode === 'jq' ? 'jq result' : 'Selected artifact field';
+  return `${selected} is ${result.emptyKind}.`;
+}
+
+function ArtifactReadJsonView({ result }: { result: ArtifactReadResult }) {
+  const styles = useStyles2(getToolStyles);
+  const json = result.json;
+  const isFullRead = result.mode === 'full';
+
+  return (
+    <div className={styles.jsonSummary}>
+      {isRecord(json) && <ArtifactReadJsonSummary value={json} />}
+      <details className={styles.collapsible} open={!isFullRead}>
+        <summary>{isFullRead ? 'Full artifact JSON' : 'Artifact JSON'}</summary>
+        <pre className={styles.queryBlock}>{formatJson(json)}</pre>
+      </details>
+    </div>
+  );
+}
+
+function ArtifactReadJsonSummary({ value }: { value: Record<string, unknown> }) {
+  const panels = liveDashboardPanelsFromArtifact(value);
+  const command = stringField(value, 'command');
+  const success = booleanField(value, 'success');
+  const availableCommands = Array.isArray(value.availableCommands) ? value.availableCommands.length : undefined;
+
+  return (
+    <>
+      <ResultMetaGrid
+        items={[
+          { label: 'Command', value: command },
+          { label: 'Success', value: formatBoolean(success) },
+          { label: 'Panels', value: panels ? formatCount(panels.length) : undefined },
+          {
+            label: 'Available commands',
+            value: availableCommands === undefined ? undefined : formatCount(availableCommands),
+          },
+        ]}
+      />
+      {panels && panels.length > 0 && <ArtifactDashboardPanelsList panels={panels} />}
+    </>
+  );
+}
+
+type ArtifactDashboardPanelSummary = {
+  title?: string;
+  type?: string;
+  grid?: string;
+  queryCount?: number;
+};
+
+function ArtifactDashboardPanelsList({ panels }: { panels: ArtifactDashboardPanelSummary[] }) {
+  const styles = useStyles2(getToolStyles);
+  return (
+    <div className={styles.queryResultList}>
+      {panels.slice(0, 6).map((panel, index) => (
+        <div className={styles.compactResult} key={`${panel.title ?? 'panel'}:${index}`}>
+          <div className={styles.compactResultSummary}>
+            <span className={styles.queryResultIndex}>{index + 1}</span>
+            <span className={styles.compactResultText}>{panel.title ?? 'Untitled panel'}</span>
+          </div>
+          <div className={styles.compactResultBody}>
+            <ResultMetaGrid
+              items={[
+                { label: 'Type', value: panel.type },
+                { label: 'Grid', value: panel.grid },
+                { label: 'Queries', value: panel.queryCount === undefined ? undefined : formatCount(panel.queryCount) },
+              ]}
+            />
+          </div>
+        </div>
+      ))}
+      {panels.length > 6 && (
+        <div className={styles.emptyState}>{formatCount(panels.length - 6)} more panels hidden.</div>
+      )}
+    </div>
+  );
+}
+
+function liveDashboardPanelsFromArtifact(value: Record<string, unknown>): ArtifactDashboardPanelSummary[] | undefined {
+  const data = recordField(value, 'data');
+  const elements = data ? recordsField(data, 'elements') : [];
+  if (elements.length === 0) {
+    return undefined;
+  }
+
+  return elements.map((entry) => {
+    const element = recordField(entry, 'element');
+    const spec = recordField(element, 'spec');
+    const layoutItem = recordField(entry, 'layoutItem');
+    const layoutSpec = recordField(layoutItem, 'spec');
+    const queryGroup = recordField(recordField(spec, 'data'), 'spec');
+    const queries = queryGroup ? recordsField(queryGroup, 'queries') : [];
+    const vizConfig = recordField(spec, 'vizConfig');
+    return {
+      title: stringField(spec, 'title'),
+      type: stringField(vizConfig, 'group'),
+      grid: formatGridSummary(layoutSpec),
+      queryCount: queries.length,
+    };
+  });
+}
+
+function formatGridSummary(layoutSpec: Record<string, unknown> | undefined) {
+  if (!layoutSpec) {
+    return undefined;
+  }
+  const width = numberField(layoutSpec, 'width');
+  const height = numberField(layoutSpec, 'height');
+  const x = numberField(layoutSpec, 'x');
+  const y = numberField(layoutSpec, 'y');
+  const size = width !== undefined && height !== undefined ? `${width}x${height}` : undefined;
+  const position = x !== undefined && y !== undefined ? `at ${x},${y}` : undefined;
+  if (size && position) {
+    return `${size} ${position}`;
+  }
+  return size ?? position;
+}
+
+type AlertRuleMatchesResult = {
+  namespace?: string;
+  query?: AlertRuleSearchQuery;
+  dashboardPanel?: AlertDashboardPanelSummary;
+  ruleCount: number;
+  matchCount: number;
+  exactPanelMatchCount: number;
+  matches: AlertRuleMatchView[];
+  guidance: string[];
+  contentAvailable: boolean;
+};
+
+type AlertRuleSearchQuery = {
+  dashboardUid?: string;
+  panelId?: string;
+  panelTitle?: string;
+  ruleName?: string;
+  query?: string;
+};
+
+type AlertDashboardPanelSummary = {
+  id?: string;
+  title?: string;
+  type?: string;
+  datasourceUid?: string;
+  datasourceType?: string;
+  targets: AlertPanelTargetSummary[];
+  thresholds?: unknown;
+};
+
+type AlertPanelTargetSummary = {
+  refId?: string;
+  datasourceUid?: string;
+  datasourceType?: string;
+  query?: string;
+  legendFormat?: string;
+  hidden?: boolean;
+};
+
+type AlertRuleMatchView = {
+  score: number;
+  reasons: string[];
+  rule: AlertRuleView;
+};
+
+type AlertRuleResult = {
+  namespace?: string;
+  rule?: AlertRuleView;
+  rawStatus?: unknown;
+  guidance: string[];
+  name?: string;
+  title?: string;
+  prometheusChecks?: number;
+  contentAvailable: boolean;
+};
+
+type AlertRuleView = {
+  name: string;
+  title: string;
+  viewUrl?: string;
+  apiPath?: string;
+  folderUid?: string;
+  panelLink?: AlertRulePanelLinkView;
+  for?: string;
+  keepFiringFor?: string;
+  noDataState?: string;
+  execErrState?: string;
+  paused?: boolean;
+  labels: Record<string, string>;
+  annotations: Record<string, string>;
+  conditionRef?: string;
+  expressions: AlertExpressionView[];
+  alertCondition?: AlertConditionView;
+  prometheusChecks: AlertPrometheusCheckView[];
+};
+
+type AlertRulePanelLinkView = {
+  dashboardUID: string;
+  panelID: string;
+  source?: string;
+};
+
+type AlertExpressionView = {
+  refId: string;
+  source?: boolean;
+  queryType?: string;
+  datasourceUid?: string;
+  expressionType?: string;
+  expression?: string;
+  reducer?: string;
+  evaluator?: AlertEvaluatorView;
+  relativeTimeRange?: AlertRelativeTimeRangeView;
+};
+
+type AlertConditionView = {
+  sourceRefId?: string;
+  expression?: string;
+  evaluator?: AlertEvaluatorView;
+  reducer?: string;
+};
+
+type AlertEvaluatorView = {
+  type?: string;
+  params?: unknown[];
+};
+
+type AlertRelativeTimeRangeView = {
+  from?: number;
+  to?: number;
+};
+
+type AlertPrometheusCheckView = {
+  refId: string;
+  datasourceUid: string;
+  query: string;
+  type?: string;
+  start?: string;
+  end?: string;
+  relativeTimeRange?: AlertRelativeTimeRangeView;
+};
+
+function AlertRuleMatchesResultView({ result }: { result: AlertRuleMatchesResult }) {
+  const styles = useStyles2(getToolStyles);
+  const summaryParts = [
+    formatLabeledCount(result.matchCount, 'matched alert rule', 'matched alert rules'),
+    formatLabeledCount(result.exactPanelMatchCount, 'exact panel link', 'exact panel links'),
+    `${formatCount(result.ruleCount)} scanned`,
+  ];
+
+  return (
+    <div className={styles.structuredResult}>
+      <div className={styles.resultSummary}>{summaryParts.join(' | ')}</div>
+      <ResultMetaGrid
+        items={[
+          { label: 'Namespace', value: result.namespace ? <code>{result.namespace}</code> : undefined },
+          {
+            label: 'Dashboard',
+            value: result.query?.dashboardUid ? <code>{result.query.dashboardUid}</code> : undefined,
+          },
+          { label: 'Panel', value: result.query?.panelId },
+          { label: 'Panel title', value: result.query?.panelTitle ?? result.dashboardPanel?.title },
+          { label: 'Rules scanned', value: formatCount(result.ruleCount) },
+          { label: 'Matches', value: formatCount(result.matchCount) },
+          { label: 'Exact links', value: formatCount(result.exactPanelMatchCount) },
+        ]}
+      />
+      {!result.contentAvailable && (
+        <div className={styles.emptyState}>
+          The alert rule search completed, but the detailed result text was unavailable.
+        </div>
+      )}
+      {result.dashboardPanel && <AlertPanelEvidenceView panel={result.dashboardPanel} />}
+      {result.matches.length > 0 ? (
+        <AlertRuleMatchesList matches={result.matches} />
+      ) : (
+        result.contentAvailable && <div className={styles.emptyState}>No alert rules matched this panel context.</div>
+      )}
+    </div>
+  );
+}
+
+function AlertPanelEvidenceView({ panel }: { panel: AlertDashboardPanelSummary }) {
+  const styles = useStyles2(getToolStyles);
+  return (
+    <details className={styles.collapsible} open>
+      <summary>Panel evidence</summary>
+      <ResultMetaGrid
+        items={[
+          { label: 'Panel', value: panel.id },
+          { label: 'Title', value: panel.title },
+          { label: 'Type', value: panel.type },
+          { label: 'Datasource', value: panel.datasourceUid ?? panel.datasourceType },
+          { label: 'Targets', value: formatCount(panel.targets.length) },
+        ]}
+      />
+      {panel.targets.length > 0 && <AlertPanelTargetsList targets={panel.targets} />}
+      {panel.thresholds !== undefined && (
+        <details className={styles.collapsible}>
+          <summary>Panel thresholds</summary>
+          <pre className={styles.queryBlock}>{formatJson(panel.thresholds)}</pre>
+        </details>
+      )}
+    </details>
+  );
+}
+
+function AlertPanelTargetsList({ targets }: { targets: AlertPanelTargetSummary[] }) {
+  const styles = useStyles2(getToolStyles);
+  return (
+    <div className={styles.queryResultList}>
+      {targets.map((target, index) => (
+        <AlertPanelTargetItem
+          defaultOpen={index === 0}
+          index={index}
+          key={`${target.refId ?? index}:${target.query ?? ''}`}
+          target={target}
+        />
+      ))}
+    </div>
+  );
+}
+
+function AlertPanelTargetItem({
+  defaultOpen,
+  index,
+  target,
+}: {
+  defaultOpen: boolean;
+  index: number;
+  target: AlertPanelTargetSummary;
+}) {
+  const styles = useStyles2(getToolStyles);
+  const [open, setOpen] = useState(defaultOpen);
+  const title = target.legendFormat ?? target.query ?? 'Panel query';
+  const visibility = target.hidden ? 'hidden' : 'visible';
+
+  return (
+    <details className={styles.queryResultItem} onToggle={(event) => setOpen(event.currentTarget.open)} open={open}>
+      <summary className={styles.queryResultSummary}>
+        <Icon className={styles.queryResultChevron} name={open ? 'angle-down' : 'angle-right'} />
+        <span className={styles.queryResultIndex}>{target.refId ?? index + 1}</span>
+        <span className={target.query ? styles.queryResultExpression : styles.queryResultTitle} title={title}>
+          {title}
+        </span>
+        <span className={styles.queryResultMeta}>{visibility}</span>
+      </summary>
+      <ResultMetaGrid
+        items={[
+          { label: 'Datasource', value: target.datasourceUid ?? target.datasourceType },
+          { label: 'Legend', value: target.legendFormat },
+          { label: 'Hidden', value: formatBoolean(target.hidden) },
+        ]}
+      />
+      {target.query && <pre className={styles.queryBlock}>{target.query}</pre>}
+    </details>
+  );
+}
+
+function AlertRuleMatchesList({ matches }: { matches: AlertRuleMatchView[] }) {
+  const styles = useStyles2(getToolStyles);
+  return (
+    <div className={styles.queryResultList}>
+      {matches.map((match, index) => (
+        <AlertRuleMatchItem defaultOpen={index === 0} index={index} key={match.rule.name} match={match} />
+      ))}
+    </div>
+  );
+}
+
+function AlertRuleMatchItem({
+  defaultOpen,
+  index,
+  match,
+}: {
+  defaultOpen: boolean;
+  index: number;
+  match: AlertRuleMatchView;
+}) {
+  const styles = useStyles2(getToolStyles);
+  const [open, setOpen] = useState(defaultOpen);
+  const rule = match.rule;
+  const query = firstAlertPrometheusQuery(rule);
+  const condition = formatAlertCondition(rule.alertCondition);
+
+  return (
+    <details className={styles.queryResultItem} onToggle={(event) => setOpen(event.currentTarget.open)} open={open}>
+      <summary className={styles.queryResultSummary}>
+        <Icon className={styles.queryResultChevron} name={open ? 'angle-down' : 'angle-right'} />
+        <span className={styles.queryResultIndex}>{index + 1}</span>
+        <span className={styles.queryResultTitle} title={rule.title}>
+          {rule.title}
+        </span>
+        <span className={styles.queryResultMeta}>
+          {match.score > 0 ? `score ${match.score}` : (condition ?? 'match')}
+        </span>
+      </summary>
+      <ResultMetaGrid
+        items={[
+          { label: 'Rule', value: <code>{rule.name}</code> },
+          { label: 'Score', value: match.score > 0 ? String(match.score) : undefined },
+          { label: 'Link', value: <AlertPanelLinkHealth link={rule.panelLink} /> },
+          { label: 'Condition', value: condition },
+          { label: 'For', value: rule.for },
+          { label: 'No data', value: rule.noDataState },
+          { label: 'Exec error', value: rule.execErrState },
+          { label: 'Folder', value: rule.folderUid ? <code>{rule.folderUid}</code> : undefined },
+          {
+            label: 'View',
+            value: rule.viewUrl ? <ExternalLink href={rule.viewUrl}>Open rule</ExternalLink> : undefined,
+          },
+        ]}
+      />
+      {query && <pre className={styles.queryBlock}>{query}</pre>}
+      {match.reasons.length > 0 && <StringChips values={match.reasons} />}
+      {Object.keys(rule.labels).length > 0 && (
+        <details className={styles.collapsible}>
+          <summary>Labels</summary>
+          <LabelPills labels={rule.labels} />
+        </details>
+      )}
+      {Object.keys(rule.annotations).length > 0 && (
+        <details className={styles.collapsible}>
+          <summary>Annotations</summary>
+          <LabelPills labels={rule.annotations} />
+        </details>
+      )}
+    </details>
+  );
+}
+
+function AlertRuleResultView({ result }: { result: AlertRuleResult }) {
+  const styles = useStyles2(getToolStyles);
+  const rule = result.rule;
+  if (!rule) {
+    return (
+      <div className={styles.structuredResult}>
+        <div className={styles.resultSummary}>Alert rule loaded</div>
+        <ResultMetaGrid
+          items={[
+            { label: 'Namespace', value: result.namespace ? <code>{result.namespace}</code> : undefined },
+            { label: 'Rule', value: result.name ? <code>{result.name}</code> : undefined },
+            { label: 'Title', value: result.title },
+            { label: 'Prometheus checks', value: result.prometheusChecks },
+          ]}
+        />
+        <div className={styles.emptyState}>The alert rule completed, but the detailed result text was unavailable.</div>
+      </div>
+    );
+  }
+
+  return (
+    <div className={styles.structuredResult}>
+      <div className={styles.resultSummary}>{summaryLine(['Alert rule', rule.title, rule.name])}</div>
+      <ResultMetaGrid
+        items={[
+          { label: 'Namespace', value: result.namespace ? <code>{result.namespace}</code> : undefined },
+          { label: 'Rule', value: <code>{rule.name}</code> },
+          { label: 'Folder', value: rule.folderUid ? <code>{rule.folderUid}</code> : undefined },
+          { label: 'Condition', value: formatAlertCondition(rule.alertCondition) },
+          { label: 'For', value: rule.for },
+          { label: 'Keep firing', value: rule.keepFiringFor },
+          { label: 'No data', value: rule.noDataState },
+          { label: 'Exec error', value: rule.execErrState },
+          { label: 'Paused', value: formatBoolean(rule.paused) },
+          { label: 'Panel link', value: <AlertPanelLinkHealth link={rule.panelLink} /> },
+        ]}
+      />
+      {rule.viewUrl && (
+        <div>
+          <LinkButton href={rule.viewUrl} icon="bell" rel="noreferrer" size="sm" target="_blank" variant="secondary">
+            View alert rule
+          </LinkButton>
+        </div>
+      )}
+      {(Object.keys(rule.labels).length > 0 || Object.keys(rule.annotations).length > 0) && (
+        <details className={styles.collapsible}>
+          <summary>Labels and annotations</summary>
+          {Object.keys(rule.labels).length > 0 && (
+            <>
+              <div className={styles.resultSummary}>Labels</div>
+              <LabelPills labels={rule.labels} />
+            </>
+          )}
+          {Object.keys(rule.annotations).length > 0 && (
+            <>
+              <div className={styles.resultSummary}>Annotations</div>
+              <LabelPills labels={rule.annotations} />
+            </>
+          )}
+        </details>
+      )}
+      <AlertExpressionChainView expressions={rule.expressions} />
+      <AlertPrometheusChecksView checks={rule.prometheusChecks} />
+      {result.rawStatus !== undefined && (
+        <details className={styles.collapsible}>
+          <summary>Raw status</summary>
+          <pre className={styles.queryBlock}>{formatJson(result.rawStatus)}</pre>
+        </details>
+      )}
+    </div>
+  );
+}
+
+function AlertExpressionChainView({ expressions }: { expressions: AlertExpressionView[] }) {
+  const styles = useStyles2(getToolStyles);
+  if (expressions.length === 0) {
+    return <div className={styles.emptyState}>No alert expressions were returned for this rule.</div>;
+  }
+
+  return (
+    <details className={styles.collapsible} open>
+      <summary>Expression chain</summary>
+      <div className={styles.tableWrap}>
+        <table className={cx(styles.dataTable, styles.wideTable)}>
+          <thead>
+            <tr>
+              <th>Ref</th>
+              <th>Kind</th>
+              <th>Datasource</th>
+              <th>Reducer</th>
+              <th>Evaluator</th>
+              <th>Window</th>
+              <th>Expression</th>
+            </tr>
+          </thead>
+          <tbody>
+            {expressions.map((expression) => (
+              <tr key={expression.refId}>
+                <td>
+                  <strong>{expression.refId}</strong>
+                  {expression.source && <div className={styles.muted}>condition</div>}
+                </td>
+                <td>{expression.expressionType ?? expression.queryType ?? <span className={styles.muted}>-</span>}</td>
+                <td>{expression.datasourceUid ?? <span className={styles.muted}>-</span>}</td>
+                <td>{expression.reducer ?? <span className={styles.muted}>-</span>}</td>
+                <td>{formatAlertEvaluator(expression.evaluator) ?? <span className={styles.muted}>-</span>}</td>
+                <td>
+                  {formatAlertRelativeTimeRange(expression.relativeTimeRange) ?? (
+                    <span className={styles.muted}>-</span>
+                  )}
+                </td>
+                <td className={styles.codeTextCell}>
+                  {expression.expression ? (
+                    truncateInline(expression.expression, 180)
+                  ) : (
+                    <span className={styles.muted}>-</span>
+                  )}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </details>
+  );
+}
+
+function AlertPrometheusChecksView({ checks }: { checks: AlertPrometheusCheckView[] }) {
+  const styles = useStyles2(getToolStyles);
+  if (checks.length === 0) {
+    return <div className={styles.emptyState}>No Prometheus checks are available for this alert rule.</div>;
+  }
+
+  return (
+    <details className={styles.collapsible} open>
+      <summary>Prometheus checks</summary>
+      <div className={styles.prometheusQueryPlanList}>
+        {checks.map((check, index) => (
+          <div className={styles.prometheusQueryPlanRow} key={`${check.refId}:${check.query}`}>
+            <span className={styles.prometheusQueryPlanIndex}>{check.refId || `Query ${index + 1}`}</span>
+            <span className={styles.prometheusQueryPlanMeta}>
+              {[check.type ?? 'range', check.datasourceUid, formatAlertCheckRange(check)].filter(Boolean).join(' | ')}
+            </span>
+            <code className={styles.prometheusQueryPlanExpression} title={check.query}>
+              {check.query}
+            </code>
+          </div>
+        ))}
+      </div>
+    </details>
+  );
+}
+
+function AlertPanelLinkHealth({ link }: { link?: AlertRulePanelLinkView }) {
+  const styles = useStyles2(getToolStyles);
+  const health = alertPanelLinkHealth(link);
+  return (
+    <div className={styles.chipList}>
+      <Badge text={health.text} color={health.color} />
+      {link && (
+        <span className={styles.muted}>
+          {link.dashboardUID}/{link.panelID}
+        </span>
+      )}
+      {health.hint && <span className={styles.muted}>{health.hint}</span>}
+    </div>
+  );
+}
+
+function asAlertRuleMatchesResult(
+  toolName: string | undefined,
+  details: unknown,
+  content: unknown
+): AlertRuleMatchesResult | undefined {
+  if (toolName !== 'find_panel_alert_rules') {
+    return undefined;
+  }
+
+  const detailRecord = isRecord(details) ? details : {};
+  const record = parseToolJsonRecord(content, details);
+  if (record) {
+    return alertRuleMatchesResultFromRecord(record, detailRecord, true);
+  }
+
+  const ruleCount = numberField(detailRecord, 'ruleCount');
+  const matchCount = numberField(detailRecord, 'matchCount');
+  if (ruleCount === undefined && matchCount === undefined) {
+    return undefined;
+  }
+
+  return {
+    namespace: stringField(detailRecord, 'namespace'),
+    query: {
+      dashboardUid: stringField(detailRecord, 'dashboardUid'),
+      panelId: stringOrNumberField(detailRecord, 'panelId'),
+    },
+    ruleCount: ruleCount ?? 0,
+    matchCount: matchCount ?? 0,
+    exactPanelMatchCount: numberField(detailRecord, 'exactPanelMatchCount') ?? 0,
+    matches: [],
+    guidance: [],
+    contentAvailable: false,
+  };
+}
+
+function alertRuleMatchesResultFromRecord(
+  record: Record<string, unknown>,
+  details: Record<string, unknown>,
+  contentAvailable: boolean
+): AlertRuleMatchesResult {
+  const matches = recordsField(record, 'matches')
+    .map(alertRuleMatchFromRecord)
+    .filter((match): match is AlertRuleMatchView => Boolean(match));
+
+  return {
+    namespace: stringField(record, 'namespace') ?? stringField(details, 'namespace'),
+    query: alertRuleSearchQueryFromRecord(recordField(record, 'query')),
+    dashboardPanel: alertDashboardPanelFromRecord(recordField(record, 'dashboardPanel')),
+    ruleCount: numberField(record, 'ruleCount') ?? numberField(details, 'ruleCount') ?? 0,
+    matchCount: numberField(record, 'matchCount') ?? numberField(details, 'matchCount') ?? matches.length,
+    exactPanelMatchCount:
+      numberField(record, 'exactPanelMatchCount') ?? numberField(details, 'exactPanelMatchCount') ?? 0,
+    matches,
+    guidance: stringArrayField(record, 'guidance') ?? [],
+    contentAvailable,
+  };
+}
+
+function asAlertRuleResult(
+  toolName: string | undefined,
+  details: unknown,
+  content: unknown
+): AlertRuleResult | undefined {
+  if (toolName !== 'get_alert_rule') {
+    return undefined;
+  }
+
+  const detailRecord = isRecord(details) ? details : {};
+  const record = parseToolJsonRecord(content, details);
+  if (record) {
+    const rule = alertRuleFromRecord(recordField(record, 'rule'));
+    return {
+      namespace: stringField(record, 'namespace') ?? stringField(detailRecord, 'namespace'),
+      rule,
+      rawStatus: record.rawStatus,
+      guidance: stringArrayField(record, 'guidance') ?? [],
+      name: stringField(detailRecord, 'name'),
+      title: stringField(detailRecord, 'title'),
+      prometheusChecks: numberField(detailRecord, 'prometheusChecks'),
+      contentAvailable: true,
+    };
+  }
+
+  if (!booleanField(detailRecord, 'summarized')) {
+    return undefined;
+  }
+
+  return {
+    namespace: stringField(detailRecord, 'namespace'),
+    name: stringField(detailRecord, 'name'),
+    title: stringField(detailRecord, 'title'),
+    prometheusChecks: numberField(detailRecord, 'prometheusChecks'),
+    guidance: [],
+    contentAvailable: false,
+  };
+}
+
+function alertRuleSearchQueryFromRecord(record: Record<string, unknown> | undefined): AlertRuleSearchQuery | undefined {
+  if (!record) {
+    return undefined;
+  }
+
+  return {
+    dashboardUid: stringField(record, 'dashboardUid'),
+    panelId: stringOrNumberField(record, 'panelId'),
+    panelTitle: stringField(record, 'panelTitle'),
+    ruleName: stringField(record, 'ruleName'),
+    query: stringField(record, 'query'),
+  };
+}
+
+function alertDashboardPanelFromRecord(
+  record: Record<string, unknown> | undefined
+): AlertDashboardPanelSummary | undefined {
+  if (!record) {
+    return undefined;
+  }
+
+  return {
+    id: stringOrNumberField(record, 'id'),
+    title: stringField(record, 'title'),
+    type: stringField(record, 'type'),
+    datasourceUid: stringField(record, 'datasourceUid'),
+    datasourceType: stringField(record, 'datasourceType'),
+    targets: recordsField(record, 'targets').map(alertPanelTargetFromRecord),
+    thresholds: record.thresholds,
+  };
+}
+
+function alertPanelTargetFromRecord(record: Record<string, unknown>): AlertPanelTargetSummary {
+  return {
+    refId: stringField(record, 'refId'),
+    datasourceUid: stringField(record, 'datasourceUid'),
+    datasourceType: stringField(record, 'datasourceType'),
+    query: stringField(record, 'query'),
+    legendFormat: stringField(record, 'legendFormat'),
+    hidden: booleanField(record, 'hidden'),
+  };
+}
+
+function alertRuleMatchFromRecord(record: Record<string, unknown>): AlertRuleMatchView | undefined {
+  const rule = alertRuleFromRecord(recordField(record, 'rule'));
+  if (!rule) {
+    return undefined;
+  }
+
+  return {
+    score: numberField(record, 'score') ?? 0,
+    reasons: stringArrayField(record, 'reasons') ?? [],
+    rule,
+  };
+}
+
+function alertRuleFromRecord(record: Record<string, unknown> | undefined): AlertRuleView | undefined {
+  if (!record) {
+    return undefined;
+  }
+
+  const name = stringField(record, 'name') ?? stringField(record, 'title');
+  const title = stringField(record, 'title') ?? name;
+  if (!name || !title) {
+    return undefined;
+  }
+
+  return {
+    name,
+    title,
+    viewUrl: stringField(record, 'viewUrl'),
+    apiPath: stringField(record, 'apiPath'),
+    folderUid: stringField(record, 'folderUid'),
+    panelLink: alertPanelLinkFromRecord(recordField(record, 'panelLink')),
+    for: stringField(record, 'for'),
+    keepFiringFor: stringField(record, 'keepFiringFor'),
+    noDataState: stringField(record, 'noDataState'),
+    execErrState: stringField(record, 'execErrState'),
+    paused: booleanField(record, 'paused'),
+    labels: stringRecord(recordField(record, 'labels')),
+    annotations: stringRecord(recordField(record, 'annotations')),
+    conditionRef: stringField(record, 'conditionRef'),
+    expressions: recordsField(record, 'expressions')
+      .map(alertExpressionFromRecord)
+      .filter((expression): expression is AlertExpressionView => Boolean(expression)),
+    alertCondition: alertConditionFromRecord(recordField(record, 'alertCondition')),
+    prometheusChecks: recordsField(record, 'prometheusChecks')
+      .map(alertPrometheusCheckFromRecord)
+      .filter((check): check is AlertPrometheusCheckView => Boolean(check)),
+  };
+}
+
+function alertPanelLinkFromRecord(record: Record<string, unknown> | undefined): AlertRulePanelLinkView | undefined {
+  const dashboardUID = stringField(record, 'dashboardUID');
+  const panelID = record ? stringOrNumberField(record, 'panelID') : undefined;
+  if (!dashboardUID || !panelID) {
+    return undefined;
+  }
+
+  return {
+    dashboardUID,
+    panelID,
+    source: stringField(record, 'source'),
+  };
+}
+
+function alertExpressionFromRecord(record: Record<string, unknown>): AlertExpressionView | undefined {
+  const refId = stringField(record, 'refId');
+  if (!refId) {
+    return undefined;
+  }
+
+  return {
+    refId,
+    source: booleanField(record, 'source'),
+    queryType: stringField(record, 'queryType'),
+    datasourceUid: stringField(record, 'datasourceUid'),
+    expressionType: stringField(record, 'expressionType'),
+    expression: stringField(record, 'expression'),
+    reducer: stringField(record, 'reducer'),
+    evaluator: alertEvaluatorFromRecord(recordField(record, 'evaluator')),
+    relativeTimeRange: alertRelativeTimeRangeFromRecord(recordField(record, 'relativeTimeRange')),
+  };
+}
+
+function alertConditionFromRecord(record: Record<string, unknown> | undefined): AlertConditionView | undefined {
+  if (!record) {
+    return undefined;
+  }
+
+  return {
+    sourceRefId: stringField(record, 'sourceRefId'),
+    expression: stringField(record, 'expression'),
+    evaluator: alertEvaluatorFromRecord(recordField(record, 'evaluator')),
+    reducer: stringField(record, 'reducer'),
+  };
+}
+
+function alertEvaluatorFromRecord(record: Record<string, unknown> | undefined): AlertEvaluatorView | undefined {
+  if (!record) {
+    return undefined;
+  }
+
+  const params = record.params;
+  return {
+    type: stringField(record, 'type'),
+    params: Array.isArray(params) ? params : undefined,
+  };
+}
+
+function alertRelativeTimeRangeFromRecord(
+  record: Record<string, unknown> | undefined
+): AlertRelativeTimeRangeView | undefined {
+  if (!record) {
+    return undefined;
+  }
+
+  return {
+    from: numberField(record, 'from'),
+    to: numberField(record, 'to'),
+  };
+}
+
+function alertPrometheusCheckFromRecord(record: Record<string, unknown>): AlertPrometheusCheckView | undefined {
+  const refId = stringField(record, 'refId');
+  const datasourceUid = stringField(record, 'datasourceUid');
+  const query = stringField(record, 'query');
+  if (!refId || !datasourceUid || !query) {
+    return undefined;
+  }
+
+  return {
+    refId,
+    datasourceUid,
+    query,
+    type: stringField(record, 'type'),
+    start: stringField(record, 'start'),
+    end: stringField(record, 'end'),
+    relativeTimeRange: alertRelativeTimeRangeFromRecord(recordField(record, 'relativeTimeRange')),
+  };
+}
+
+function alertPanelLinkHealth(link: AlertRulePanelLinkView | undefined): {
+  text: string;
+  color: BadgeColor;
+  hint?: string;
+} {
+  switch (link?.source) {
+    case 'panelRef+annotations':
+      return { text: 'properly linked', color: 'green', hint: 'panel indicator should appear' };
+    case 'panelRef':
+      return { text: 'panelRef only', color: 'orange', hint: 'panel indicator annotations missing' };
+    case 'annotations':
+      return { text: 'annotations only', color: 'blue', hint: 'panel indicator metadata present' };
+    default:
+      return { text: 'not linked', color: 'red' };
+  }
+}
+
+function firstAlertPrometheusQuery(rule: AlertRuleView) {
+  return rule.prometheusChecks[0]?.query ?? rule.expressions.find((expression) => expression.expression)?.expression;
+}
+
+function formatAlertCondition(condition: AlertConditionView | undefined) {
+  if (!condition) {
+    return undefined;
+  }
+
+  return [condition.sourceRefId, condition.reducer, formatAlertEvaluator(condition.evaluator)]
+    .filter(Boolean)
+    .join(' ');
+}
+
+function formatAlertEvaluator(evaluator: AlertEvaluatorView | undefined) {
+  if (!evaluator?.type) {
+    return undefined;
+  }
+  const params = evaluator.params?.map(formatShortValue).join(', ');
+  return params ? `${evaluator.type} ${params}` : evaluator.type;
+}
+
+function formatAlertRelativeTimeRange(range: AlertRelativeTimeRangeView | undefined) {
+  if (!range || (range.from === undefined && range.to === undefined)) {
+    return undefined;
+  }
+  if (range.from !== undefined && range.to !== undefined) {
+    return `${range.from}s to ${range.to}s`;
+  }
+  return range.from !== undefined ? `from ${range.from}s` : `to ${range.to}s`;
+}
+
+function formatAlertCheckRange(check: AlertPrometheusCheckView) {
+  if (check.start && check.end) {
+    return `${check.start} -> ${check.end}`;
+  }
+  if (check.start) {
+    return `from ${check.start}`;
+  }
+  if (check.end) {
+    return `to ${check.end}`;
+  }
+  return formatAlertRelativeTimeRange(check.relativeTimeRange);
 }
 
 type DatasourceResult = {
@@ -5518,8 +6623,12 @@ const getToolStyles = (theme: GrafanaTheme2) => ({
     '& table': {
       display: 'block',
       maxWidth: '100%',
+      margin: `${theme.spacing(0.5)} 0 ${theme.spacing(1)}`,
       overflowX: 'auto',
       borderCollapse: 'collapse',
+    },
+    '& table + p, & table + ul, & table + ol': {
+      marginTop: theme.spacing(1),
     },
     '& th, & td': {
       padding: theme.spacing(0.5, 1),
@@ -5703,6 +6812,11 @@ const getToolStyles = (theme: GrafanaTheme2) => ({
   resultSummary: css({
     color: theme.colors.text.secondary,
     fontSize: theme.typography.bodySmall.fontSize,
+  }),
+  jsonSummary: css({
+    display: 'grid',
+    gap: theme.spacing(1),
+    minWidth: 0,
   }),
   compactResult: css({
     display: 'grid',
@@ -5947,6 +7061,14 @@ const getToolStyles = (theme: GrafanaTheme2) => ({
     color: theme.colors.text.primary,
     fontFamily: theme.typography.fontFamilyMonospace,
     fontSize: theme.typography.bodySmall.fontSize,
+  }),
+  queryResultTitle: css({
+    minWidth: 0,
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
+    color: theme.colors.text.primary,
+    fontWeight: theme.typography.fontWeightMedium,
   }),
   queryResultMeta: css({
     color: theme.colors.text.secondary,

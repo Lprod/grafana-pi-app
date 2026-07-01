@@ -85,6 +85,102 @@ jest.mock('@grafana/scenes', () => {
   };
 });
 
+const alertQuery = 'sum(rate(http_requests_total{status=~"5.."}[5m]))';
+
+function alertRuleFixture(source = 'panelRef+annotations') {
+  return {
+    name: 'service-5xx-rate',
+    title: 'Service 5xx rate',
+    viewUrl: '/alerting/grafana/service-5xx-rate/view',
+    apiPath: '/apis/rules.alerting.grafana.app/v0alpha1/namespaces/default/alertrules/service-5xx-rate',
+    folderUid: 'service-folder',
+    panelLink: { dashboardUID: 'service-dashboard', panelID: 2, source },
+    for: '1m',
+    noDataState: 'NoData',
+    execErrState: 'Error',
+    labels: { severity: 'warning' },
+    annotations: { __dashboardUid__: 'service-dashboard', __panelId__: '2' },
+    conditionRef: 'B',
+    expressions: [
+      {
+        refId: 'A',
+        datasourceUid: 'prom-b',
+        queryType: 'range',
+        expressionType: 'prometheus',
+        expression: alertQuery,
+        relativeTimeRange: { from: 300, to: 0 },
+      },
+      {
+        refId: 'B',
+        source: true,
+        datasourceUid: '__expr__',
+        expressionType: 'threshold',
+        expression: 'A',
+        reducer: 'last',
+        evaluator: { type: 'gt', params: [0] },
+      },
+    ],
+    alertCondition: {
+      sourceRefId: 'B',
+      reducer: 'last',
+      evaluator: { type: 'gt', params: [0] },
+    },
+    prometheusChecks: [
+      {
+        refId: 'A',
+        datasourceUid: 'prom-b',
+        query: alertQuery,
+        type: 'range',
+        start: 'now-5m',
+        end: 'now',
+        relativeTimeRange: { from: 300, to: 0 },
+      },
+    ],
+  };
+}
+
+function alertSearchResultFixture(source = 'panelRef+annotations') {
+  return {
+    namespace: 'default',
+    query: {
+      dashboardUid: 'service-dashboard',
+      panelId: '2',
+      panelTitle: '5xx rate panel',
+    },
+    dashboardPanel: {
+      id: '2',
+      title: '5xx rate panel',
+      type: 'timeseries',
+      datasourceUid: 'prom-b',
+      datasourceType: 'prometheus',
+      targets: [
+        {
+          refId: 'A',
+          datasourceUid: 'prom-b',
+          datasourceType: 'prometheus',
+          query: alertQuery,
+          legendFormat: '5xx',
+        },
+      ],
+      thresholds: {
+        mode: 'absolute',
+        steps: [{ value: 0, color: 'green' }],
+      },
+    },
+    ruleCount: 3,
+    matchCount: 1,
+    exactPanelMatchCount: 1,
+    matches: [
+      {
+        score: 160,
+        reasons: ['panel link exact match', `${source} panelID match`],
+        rule: alertRuleFixture(source),
+      },
+    ],
+    guidance: ['Compare alert prometheusChecks against the panel query.'],
+  };
+}
+
 describe('ToolRenderer', () => {
   it('renders write_jsonnet arguments as a virtual Jsonnet file', () => {
     const source = "local dashboard = {\n  title: 'CPU',\n};";
@@ -1058,6 +1154,186 @@ describe('ToolRenderer', () => {
     expect(container.textContent).not.toContain('"metricPrefix"');
   });
 
+  it('renders alert tool calls as troubleshooting summaries', () => {
+    const { container } = render(
+      <ContentBlocks
+        content={[
+          {
+            type: 'toolCall',
+            name: 'run_alert_agent',
+            arguments: {
+              task: 'Explain why this panel-linked alert is firing.',
+              datasourceUid: 'prom-b',
+              dashboardUid: 'service-dashboard',
+              panelId: '2',
+              timeRange: 'now-1h to now',
+            },
+          },
+          {
+            type: 'toolCall',
+            name: 'find_panel_alert_rules',
+            arguments: {
+              dashboardUid: 'service-dashboard',
+              panelId: 2,
+              panelTitle: '5xx rate panel',
+            },
+          },
+          {
+            type: 'toolCall',
+            name: 'get_alert_rule',
+            arguments: {
+              name: 'service-5xx-rate',
+              namespace: 'default',
+            },
+          },
+        ]}
+      />
+    );
+
+    expect(container.textContent).toContain('Run alert agent | datasource prom-b');
+    expect(container.textContent).toContain('Find panel alert rules | dashboard service-dashboard | panel 2');
+    expect(container.textContent).toContain('Get alert rule | service-5xx-rate | namespace default');
+    expect(container.textContent).not.toContain('"dashboardUid"');
+    expect(screen.getAllByTestId('bell').length).toBeGreaterThan(0);
+  });
+
+  it('renders panel alert rule matches with link health', () => {
+    const content = [{ type: 'text', text: JSON.stringify(alertSearchResultFixture()) }];
+
+    const { container } = render(
+      <ToolResultMessageBody
+        toolName="find_panel_alert_rules"
+        content={content}
+        details={{
+          namespace: 'default',
+          dashboardUid: 'service-dashboard',
+          panelId: '2',
+          ruleCount: 3,
+          matchCount: 1,
+          exactPanelMatchCount: 1,
+          summarized: true,
+        }}
+      />
+    );
+
+    expect(container.textContent).toContain('1 matched alert rule | 1 exact panel link | 3 scanned');
+    expect(container.textContent).toContain('5xx rate panel');
+    expect(container.textContent).toContain('Service 5xx rate');
+    expect(container.textContent).toContain('properly linked');
+    expect(container.textContent).toContain('panel indicator should appear');
+    expect(container.textContent).toContain(alertQuery);
+    expect(container.textContent).not.toContain('"matches"');
+    expect(container.textContent).not.toContain('Compare alert prometheusChecks against the panel query.');
+    expect(container.querySelector('table')).not.toBeInTheDocument();
+  });
+
+  it('warns when an alert match only has panelRef linkage', () => {
+    const content = [{ type: 'text', text: JSON.stringify(alertSearchResultFixture('panelRef')) }];
+
+    const { container } = render(
+      <ToolResultMessageBody
+        toolName="find_panel_alert_rules"
+        content={content}
+        details={{
+          namespace: 'default',
+          ruleCount: 3,
+          matchCount: 1,
+          exactPanelMatchCount: 1,
+          summarized: true,
+        }}
+      />
+    );
+
+    expect(container.textContent).toContain('panelRef only');
+    expect(container.textContent).toContain('panel indicator annotations missing');
+  });
+
+  it('renders alert rule expression chains and Prometheus checks', () => {
+    const content = [
+      {
+        type: 'text',
+        text: JSON.stringify({
+          namespace: 'default',
+          rule: alertRuleFixture('panelRef'),
+          rawStatus: { state: 'firing' },
+          guidance: ['Run prometheusChecks with query_prometheus for current evidence.'],
+        }),
+      },
+    ];
+
+    const { container } = render(
+      <ToolResultMessageBody
+        toolName="get_alert_rule"
+        content={content}
+        details={{ namespace: 'default', name: 'service-5xx-rate', prometheusChecks: 1, summarized: true }}
+      />
+    );
+
+    expect(container.textContent).toContain('Alert rule | Service 5xx rate | service-5xx-rate');
+    expect(container.textContent).toContain('B last gt 0');
+    expect(container.textContent).toContain('Expression chain');
+    expect(container.textContent).toContain('Prometheus checks');
+    expect(container.textContent).toContain('panel indicator annotations missing');
+    expect(container.textContent).toContain(alertQuery);
+    expect(container.textContent).not.toContain('"rawStatus"');
+  });
+
+  it('labels alert subagents and expands completed alert evidence calls', () => {
+    const details = {
+      type: 'subagent',
+      agent: 'alerts',
+      status: 'completed',
+      task: 'Troubleshoot the panel-linked alert.',
+      toolNames: ['find_panel_alert_rules'],
+      toolCalls: [
+        {
+          id: 'tool-1',
+          name: 'find_panel_alert_rules',
+          args: {
+            dashboardUid: 'service-dashboard',
+            panelId: 2,
+          },
+          status: 'completed',
+          result: {
+            content: [{ type: 'text', text: JSON.stringify(alertSearchResultFixture()) }],
+            details: {
+              namespace: 'default',
+              ruleCount: 3,
+              matchCount: 1,
+              exactPanelMatchCount: 1,
+              summarized: true,
+            },
+          },
+        },
+      ],
+      usage: {
+        turns: 1,
+        input: 10,
+        output: 4,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 14,
+        cost: 0,
+      },
+      finalOutput: 'The rule is linked.',
+    };
+
+    render(
+      <ToolResultMessageBody
+        toolName="run_alert_agent"
+        content={[{ type: 'text', text: 'The rule is linked.' }]}
+        details={details}
+      />
+    );
+
+    const row = screen.getByText('find_panel_alert_rules').closest('details') as HTMLDetailsElement | null;
+
+    expect(screen.getByText('Alert agent result')).toBeInTheDocument();
+    expect(screen.getByText('Alert agent')).toBeInTheDocument();
+    expect(row?.open).toBe(true);
+    expect(screen.getByText('properly linked')).toBeInTheDocument();
+  });
+
   it('renders nested failed subagent tool calls with normalized errors', () => {
     const details = {
       type: 'subagent',
@@ -1475,8 +1751,123 @@ describe('ToolRenderer', () => {
     );
 
     expect(screen.queryByTestId('artifact-result')).not.toBeInTheDocument();
+    expect(container.textContent).toContain('Artifact read | field | query_prometheus');
     expect(container.textContent).toContain('selected artifact value');
     expect(container.textContent).not.toContain('read_artifact {"id":"artifact_1"}');
+  });
+
+  it('renders jq null artifact reads without raw null fallback details', () => {
+    const { container } = render(
+      <ToolResultMessageBody
+        toolName="read_artifact"
+        content={[{ type: 'text', text: 'null' }]}
+        details={{
+          artifactRead: true,
+          mode: 'jq',
+          jq: '.elements[0].element.vizConfig.spec.fieldConfig.defaults.thresholds',
+          exitCode: 0,
+          truncated: false,
+          artifactRef: {
+            id: 'artifact_1',
+            kind: 'dashboard',
+            title: 'list_live_dashboard_panels',
+            toolName: 'list_live_dashboard_panels',
+            createdAt: '2026-07-01T08:44:20.964Z',
+            bytes: 5573,
+            summary: 'list_live_dashboard_panels returned 1 panel.',
+          },
+        }}
+      />
+    );
+
+    expect(container.textContent).toContain('Artifact read | jq | list_live_dashboard_panels');
+    expect(container.textContent).toContain('jq result is null.');
+    expect(container.textContent).toContain('.elements[0].element.vizConfig.spec.fieldConfig.defaults.thresholds');
+    expect(container.textContent).not.toContain('"artifactRead"');
+    expect(container.textContent).not.toContain('Details');
+  });
+
+  it('renders undefined artifact fields as an empty state', () => {
+    const { container } = render(
+      <ToolResultMessageBody
+        toolName="read_artifact"
+        content={[{ type: 'text', text: 'undefined' }]}
+        details={{
+          artifactRead: true,
+          mode: 'field',
+          path: 'data.elements.0.element.vizConfig.spec.fieldConfig.defaults',
+          artifactRef: {
+            id: 'artifact_1',
+            kind: 'dashboard',
+            title: 'list_live_dashboard_panels',
+            toolName: 'list_live_dashboard_panels',
+            createdAt: '2026-07-01T08:44:20.964Z',
+            bytes: 5573,
+            summary: 'list_live_dashboard_panels returned 1 panel.',
+          },
+        }}
+      />
+    );
+
+    expect(container.textContent).toContain('Artifact read | field | list_live_dashboard_panels');
+    expect(container.textContent).toContain('Selected artifact field is undefined.');
+    expect(container.textContent).toContain('data.elements.0.element.vizConfig.spec.fieldConfig.defaults');
+    expect(container.textContent).not.toContain('Details');
+  });
+
+  it('collapses full JSON artifact reads behind a dashboard summary', () => {
+    const { container } = render(
+      <ToolResultMessageBody
+        toolName="read_artifact"
+        content={[
+          {
+            type: 'text',
+            text: JSON.stringify({
+              command: 'LIST_PANELS',
+              success: true,
+              data: {
+                elements: [
+                  {
+                    element: {
+                      kind: 'Panel',
+                      spec: {
+                        title: '5xx rate panel',
+                        data: { kind: 'QueryGroup', spec: { queries: [{ kind: 'PanelQuery' }] } },
+                        vizConfig: { kind: 'VizConfig', group: 'timeseries' },
+                      },
+                    },
+                    layoutItem: { kind: 'GridLayoutItem', spec: { x: 0, y: 0, width: 24, height: 8 } },
+                  },
+                ],
+              },
+              availableCommands: ['LIST_PANELS'],
+            }),
+          },
+        ]}
+        details={{
+          artifactRead: true,
+          mode: 'full',
+          truncated: false,
+          artifactRef: {
+            id: 'artifact_1',
+            kind: 'dashboard',
+            title: 'list_live_dashboard_panels',
+            toolName: 'list_live_dashboard_panels',
+            createdAt: '2026-07-01T08:44:20.964Z',
+            bytes: 5573,
+            summary: 'list_live_dashboard_panels returned 1 panel.',
+          },
+        }}
+      />
+    );
+
+    const details = screen.getByText('Full artifact JSON').closest('details') as HTMLDetailsElement | null;
+
+    expect(container.textContent).toContain('Artifact read | full | list_live_dashboard_panels');
+    expect(container.textContent).toContain('LIST_PANELS');
+    expect(container.textContent).toContain('5xx rate panel');
+    expect(container.textContent).toContain('24x8 at 0,0');
+    expect(details?.open).toBe(false);
   });
 
   it('renders artifactized dashboard summaries from preview data', () => {

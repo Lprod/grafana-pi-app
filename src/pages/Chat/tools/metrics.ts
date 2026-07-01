@@ -774,10 +774,19 @@ function parseTime(raw: string) {
     return dateTime();
   }
 
-  const relative = /^now-(\d+)(m|h|d)$/.exec(trimmed);
+  const relative = /^now-(\d+)(ms|s|m|h|d)$/.exec(trimmed);
   if (relative) {
     const amount = Number(relative[1]);
-    const unit = relative[2] === 'm' ? 'minute' : relative[2] === 'h' ? 'hour' : 'day';
+    const unit =
+      relative[2] === 'ms'
+        ? 'millisecond'
+        : relative[2] === 's'
+          ? 'second'
+          : relative[2] === 'm'
+            ? 'minute'
+            : relative[2] === 'h'
+              ? 'hour'
+              : 'day';
     return dateTime().subtract(amount, unit);
   }
 

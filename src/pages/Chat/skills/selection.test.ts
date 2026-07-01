@@ -31,6 +31,19 @@ describe('Grafana skill selection', () => {
     );
   });
 
+  it('activates the alerting skill for panel-linked alert troubleshooting', () => {
+    const selection = selectGrafanaSkills('Why is the alert linked to this panel firing?', GRAFANA_SKILLS, {
+      pageType: 'dashboard',
+      hasDashboardContext: true,
+      hasPanelContext: true,
+    });
+
+    expect(selection.activeSkillNames).toEqual(expect.arrayContaining(['grafana-alerting']));
+    expect(selection.toolGroups).toEqual(
+      expect.arrayContaining(['alerts', 'dashboardRead', 'dashboardMetricContext', 'metrics', 'subagents'])
+    );
+  });
+
   it('activates the dashboard skill for dashboard artifact requests', () => {
     const selection = selectGrafanaSkills('build a dashboard for node health panels', GRAFANA_SKILLS);
 
@@ -86,6 +99,7 @@ describe('Grafana skill selection', () => {
     expect(prompt).toContain('### grafana-dashboard');
     expect(prompt).toContain('run_dashboard_agent');
     expect(prompt).toContain('references/dashboard-jsonnet-workflow.md');
+    expect(prompt).not.toContain('### grafana-alerting');
     expect(prompt).not.toContain('### grafana-metrics');
     expect(prompt).not.toContain('references/promql-patterns.md');
   });

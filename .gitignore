@@ -38,6 +38,9 @@ dist/
 artifacts/
 work/
 ci/
+research/
+/*.zip
+/*.zip.sha1
 
 # e2e test directories
 /test-results/

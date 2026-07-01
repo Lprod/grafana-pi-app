@@ -8,7 +8,7 @@ import {
 import { textResult, truncateText, type TextToolResult } from './result';
 import type { GrafanaToolRuntime } from './types';
 
-export type AgentSpecialistKind = 'query' | 'dashboard' | 'investigation' | 'support' | 'navigation';
+export type AgentSpecialistKind = 'query' | 'dashboard' | 'investigation' | 'alerts' | 'support' | 'navigation';
 export type SubagentKind = AgentSpecialistKind;
 export type SubagentRunStatus = 'running' | 'completed' | 'failed';
 
@@ -64,6 +64,7 @@ const CHILD_TOOL_CALL_LIMITS: Record<SubagentKind, number> = {
   query: 14,
   dashboard: 24,
   investigation: 20,
+  alerts: 18,
   support: 6,
   navigation: 4,
 };
@@ -315,6 +316,8 @@ export function specialistLabel(kind: SubagentKind) {
       return 'Dashboard agent';
     case 'investigation':
       return 'Investigation agent';
+    case 'alerts':
+      return 'Alert agent';
     case 'support':
       return 'Support agent';
     case 'navigation':

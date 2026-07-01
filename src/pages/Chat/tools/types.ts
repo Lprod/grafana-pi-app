@@ -255,6 +255,7 @@ export type JsonnetLibToolSet = {
 
 export type GrafanaToolRegistry = {
   metrics: AgentTool[];
+  alerts: AgentTool[];
   dashboardMetricContext: AgentTool[];
   dashboards: AgentTool[];
   liveDashboardEditing: AgentTool[];

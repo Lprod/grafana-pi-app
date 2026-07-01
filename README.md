@@ -164,6 +164,20 @@ mise run dev:reload:variant
 
 This runs `npm run package:variant`, mounts `dist` as `grafana-assistant-app`, starts the `assistant-variant` Compose profile, and reloads the `grafana-assistant-variant` service. Open the variant at http://localhost:3001.
 
+To reload the sidebar-capable variant and seed stable manual-test samples:
+
+```bash
+mise run dev:reload:variant:seed
+```
+
+This also runs `npm run dev:seed:samples`, which upserts an `Assistant Dev Samples` folder with dashboards for alert troubleshooting, live dashboard editing, stale dashboard-context repair, and dashboard metric discovery. The alert sample includes a Grafana-managed AlertRule linked to the panel through both `panelRef` and the dashboard/panel annotations used by Grafana's panel alert indicator. To seed only the Grafana resources against an already-running stack, run:
+
+```bash
+npm run dev:seed:samples
+```
+
+The seed script defaults to `GRAFANA_URL=http://localhost:3001`; set `GRAFANA_URL=http://localhost:3000` if you intentionally want to seed the default plugin stack.
+
 To create only the alternate plugin ID zip and checksum:
 
 ```bash
@@ -177,6 +191,14 @@ The local Compose stack also seeds Prometheus with six hours of synthetic RED/US
 ```bash
 docker compose down -v
 ```
+
+For a full demo reset that also reseeds Prometheus history with one hour of future overlap for short-window `now` queries, run:
+
+```bash
+mise run dev:reload:variant:fresh
+```
+
+This task deletes Compose volumes with `docker compose down -v --remove-orphans`, rebuilds/reloads the assistant variant, regenerates the Prometheus history, and then seeds the Grafana dashboard and alert samples.
 
 For the default local LLM config, run an OpenAI-compatible llama-server on the host:
 
@@ -227,6 +249,14 @@ npm run benchmark:dashboard-editing
 
 This benchmark starts the `grafana-assistant-app` variant on http://localhost:3001 and validates three flows: typed multi-step live edits from a dashboard sidebar, recovery after an intentionally failed typed live edit, and graceful fallback when Assistant is open without an active dashboard mutation client. It writes reports to `test-results/dashboard-editing-benchmark/latest-report.txt`, `latest-answer.md`, and `latest-events.json`.
 If you already have a compatible OpenAI-compatible model server running, set `BENCH_MANAGE_LLAMA=0` so the benchmark reuses it instead of starting `llama-server`.
+
+To benchmark read-only panel-linked alert troubleshooting in the sidebar-capable variant, run:
+
+```bash
+npm run benchmark:alert-troubleshooting
+```
+
+This benchmark seeds a dashboard panel and a Grafana-managed AlertRule linked through the App Platform AlertRule API, then validates that Assistant uses the alert specialist to find the linked rule, inspect the panel, run PromQL evidence, and explain an alert-vs-panel threshold mismatch without editing alerts or dashboards. It writes reports to `test-results/alert-troubleshooting-benchmark/latest-report.txt`, `latest-answer.md`, and `latest-events.json`.
 
 To benchmark dashboard-derived metric discovery, run:
 

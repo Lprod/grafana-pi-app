@@ -8,6 +8,8 @@ type SpecialistToolParams = {
   datasourceUid?: string;
   metricPrefix?: string;
   existingDashboardUid?: string;
+  dashboardUid?: string;
+  panelId?: string;
   intent?: 'create' | 'update' | 'review';
   timeRange?: string;
   destinationHint?: string;
@@ -17,6 +19,7 @@ type SpecialistToolParams = {
 type SpecialistToolOptions = {
   runtime: GrafanaToolRuntime;
   metricsTools: AgentTool[];
+  alertTools?: AgentTool[];
   dashboardMetricContextTools?: AgentTool[];
   dashboardReadTools?: AgentTool[];
   liveDashboardTools?: AgentTool[];
@@ -83,6 +86,25 @@ export function createSubagentTools(options: SpecialistToolOptions): AgentTool[]
       systemPrompt: INVESTIGATION_AGENT_PROMPT,
       params: investigationAgentParameters(),
       taskPrefix: investigationTaskPrefix,
+    }),
+    makeSpecialistTool({
+      name: 'run_alert_agent',
+      label: 'Run alert agent',
+      description:
+        'Delegate read-only Grafana Alerting and panel-linked alert troubleshooting to a focused specialist.',
+      kind: 'alerts',
+      runtime: options.runtime,
+      tools: dedupeTools([
+        ...(options.alertTools ?? []),
+        ...(options.dashboardReadTools ?? []),
+        ...(options.dashboardMetricContextTools ?? []),
+        ...(options.metricsTools ?? []),
+        ...(options.artifactTools ?? []),
+        ...(options.skillTools ?? []),
+      ]),
+      systemPrompt: ALERT_AGENT_PROMPT,
+      params: alertAgentParameters(),
+      taskPrefix: alertTaskPrefix,
     }),
     makeSpecialistTool({
       name: 'run_support_agent',
@@ -183,6 +205,16 @@ function investigationAgentParameters() {
   });
 }
 
+function alertAgentParameters() {
+  return Type.Object({
+    task: Type.String({ description: 'Specific alert troubleshooting task and expected output.' }),
+    datasourceUid: Type.Optional(Type.String({ description: 'Optional Prometheus datasource UID to prefer.' })),
+    dashboardUid: Type.Optional(Type.String({ description: 'Dashboard UID when troubleshooting a linked panel.' })),
+    panelId: Type.Optional(Type.String({ description: 'Panel ID when troubleshooting a linked panel.' })),
+    timeRange: Type.Optional(Type.String({ description: 'Optional comparison range such as now-1h to now.' })),
+  });
+}
+
 function supportAgentParameters() {
   return Type.Object({
     task: Type.String({ description: 'Specific Grafana or observability support question.' }),
@@ -220,6 +252,15 @@ function investigationTaskPrefix(args: SpecialistToolParams) {
   return [
     args.datasourceUid ? `Prefer datasource UID: ${args.datasourceUid}.` : '',
     args.timeRange ? `Incident time range: ${args.timeRange}.` : '',
+  ];
+}
+
+function alertTaskPrefix(args: SpecialistToolParams) {
+  return [
+    args.datasourceUid ? `Prefer datasource UID: ${args.datasourceUid}.` : '',
+    args.dashboardUid ? `Dashboard UID: ${args.dashboardUid}.` : '',
+    args.panelId ? `Panel ID: ${args.panelId}.` : '',
+    args.timeRange ? `Comparison time range: ${args.timeRange}.` : '',
   ];
 }
 
@@ -358,6 +399,25 @@ Output:
 - Remaining gaps.
 - Next checks or remediation.
 - Keep the final response concise. If the task requests bullets or a short summary, follow that exact shape; do not write a full report, tables, or long prose. The structured report is maintained with update_report and does not need to be repeated in chat.
+${TOOL_EXECUTION_PROTOCOL}`;
+
+const ALERT_AGENT_PROMPT = `You are the alert-agent for a Grafana observability assistant.
+
+Scope:
+- Troubleshoot Grafana-managed alert rules and their relationship to dashboard panels.
+- Use only read-only tools. Never create, update, pause, silence, delete, or persist alerting or dashboard resources.
+- Use find_panel_alert_rules and get_alert_rule for Grafana AlertRule resources. These tools use the App Platform AlertRule API only.
+- Use inspect_dashboard_context when a dashboard UID is known to compare panel queries, field thresholds, transformations, and time range with the alert rule.
+- Run the alert rule's prometheusChecks with query_prometheus before explaining whether the current data appears above or below the alert condition.
+- If the panel and alert disagree, compare query text, datasource UID, label grouping, reducer, threshold evaluator, alert relativeTimeRange, noDataState, execErrState, pending period, and panel thresholds.
+
+Output:
+- The linked or related alert rule name/title and dashboard panel evidence.
+- The alert query, reducer, threshold, evaluation interval, pending period, and no-data/error behavior.
+- The Prometheus evidence you ran and what it implies.
+- A concise explanation of likely mismatch causes and what the user should manually edit in Grafana if the rule is wrong.
+
+Keep the final answer compact and evidence-based.
 ${TOOL_EXECUTION_PROTOCOL}`;
 
 const SUPPORT_AGENT_PROMPT = `You are the support-agent for a Grafana observability assistant.

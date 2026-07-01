@@ -1,4 +1,5 @@
 import type { AgentTool } from '@earendil-works/pi-agent-core';
+import { createAlertTools } from './alerts';
 import { createArtifactTools } from './artifacts';
 import { createDashboardTools } from './dashboards';
 import { createDashboardMetricContextTools } from './dashboardMetricContext';
@@ -14,6 +15,7 @@ import type { CreateGrafanaToolsOptions, GrafanaToolRegistry, SkillToolGroup } f
 
 export { artifactByteSize, artifactizeToolResult, createArtifactTools, readArtifact } from './artifacts';
 export type { Artifact, ArtifactPreview, ArtifactRef, ArtifactRuntime } from './artifacts';
+export { createAlertTools } from './alerts';
 export { createDashboardMetricContextTools, extractDashboardMetricUsage } from './dashboardMetricContext';
 export { getUnavailableDashboardDatasourceUids } from './dashboardPolicy';
 export { createLiveDashboardMutationTools, LIVE_DASHBOARD_WRITE_TOOLS } from './dashboardMutation';
@@ -38,6 +40,7 @@ export type { SubagentRunDetails, SubagentToolCall, SubagentUsage } from './suba
 
 export function createGrafanaToolRegistry(options: CreateGrafanaToolsOptions = {}): GrafanaToolRegistry {
   const metrics = createMetricTools(options);
+  const alerts = createAlertTools(options);
   const dashboardMetricContext = createDashboardMetricContextTools(options);
   const dashboards = createDashboardTools(options, options.includeAdHocDashboardTools);
   const dashboardReadTools = createDashboardTools(options, false);
@@ -54,6 +57,7 @@ export function createGrafanaToolRegistry(options: CreateGrafanaToolsOptions = {
     ? createSubagentTools({
         runtime: options.runtime,
         metricsTools: metrics,
+        alertTools: alerts,
         dashboardMetricContextTools: dashboardMetricContext,
         dashboardReadTools,
         liveDashboardTools: liveDashboardEditing,
@@ -68,6 +72,7 @@ export function createGrafanaToolRegistry(options: CreateGrafanaToolsOptions = {
 
   return {
     metrics,
+    alerts,
     dashboardMetricContext,
     dashboards,
     liveDashboardEditing,
@@ -80,6 +85,7 @@ export function createGrafanaToolRegistry(options: CreateGrafanaToolsOptions = {
     skills,
     all: [
       ...metrics,
+      ...alerts,
       ...dashboardMetricContext,
       ...liveDashboardEditing,
       ...jsonnetFiles.all,
@@ -117,6 +123,10 @@ export function createGrafanaToolsForSkillGroups(
 
   if (groupSet.has('metrics')) {
     selected.push(...registry.metrics);
+  }
+
+  if (groupSet.has('alerts')) {
+    selected.push(...registry.alerts);
   }
 
   if (groupSet.has('dashboardMetricContext')) {

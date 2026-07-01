@@ -10,6 +10,8 @@ const CONTEXTUAL_DASHBOARD_INTENT =
   /\b(this|current|here|visible|page|view|screen|it|panel|dashboard|query|empty|broken|noisy|misleading|rename|fix|change|update|edit|move|add|improve|troubleshoot|explain|summari[sz]e|why|what)\b/i;
 const INVESTIGATION_INTENT =
   /\b(investigat(?:e|ion)|analy[sz](?:e|ing|is)|diagnos(?:e|is|tic)|root cause|why (?:is|are|did)|incident|outage|failure|failing|error spike|latency spike|degradation|regression|what'?s (?:wrong|causing))\b/i;
+const ALERT_INTENT =
+  /\b(alert(?:ing|s)?|alert rule|grafana-managed rule|firing|pending|normal state|warning state|no data|nodata|evaluation|silence|contact point|notification policy)\b/i;
 const SKILL_REFERENCE = /\$([a-z0-9][a-z0-9-]{0,62}[a-z0-9])/gi;
 
 export function selectGrafanaSkills(
@@ -34,6 +36,10 @@ export function selectGrafanaSkills(
 
   if (INVESTIGATION_INTENT.test(prompt) && skillByName.has('investigation')) {
     activeNames.add('investigation');
+  }
+
+  if (shouldActivateAlertingSkill(prompt, context) && skillByName.has('grafana-alerting')) {
+    activeNames.add('grafana-alerting');
   }
 
   for (const skill of skills) {
@@ -74,6 +80,10 @@ function shouldActivateDashboardSkillFromContext(prompt: string, context: Grafan
     context.pageType === 'dashboard' &&
     CONTEXTUAL_DASHBOARD_INTENT.test(prompt)
   );
+}
+
+function shouldActivateAlertingSkill(prompt: string, context: GrafanaSkillContext | undefined) {
+  return ALERT_INTENT.test(prompt) || Boolean(context?.hasPanelContext && /\b(firing|warning|alert)\b/i.test(prompt));
 }
 
 function shouldActivateConfiguredSkill(prompt: string, skill: GrafanaSkill) {

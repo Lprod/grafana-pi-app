@@ -1,5 +1,6 @@
 export type SkillToolGroup =
   | 'metrics'
+  | 'alerts'
   | 'dashboardMetricContext'
   | 'dashboardRead'
   | 'liveDashboardEditing'
