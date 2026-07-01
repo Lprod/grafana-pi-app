@@ -681,6 +681,75 @@ describe('grafana datasource tool policy', () => {
     });
   });
 
+  it('handles unrelated alert rules without Prometheus checks while scanning panel matches', async () => {
+    const unrelatedRule = {
+      apiVersion: 'rules.alerting.grafana.app/v0alpha1',
+      kind: 'AlertRule',
+      metadata: { name: 'log-alert' },
+      spec: {
+        title: 'Log alert',
+        expressions: {
+          A: {
+            datasourceUID: 'loki',
+            model: { refId: 'A', expr: '{job="server"} |= "down"' },
+          },
+        },
+      },
+    };
+    const linkedRule = {
+      apiVersion: 'rules.alerting.grafana.app/v0alpha1',
+      kind: 'AlertRule',
+      metadata: { name: 'availability-alert' },
+      spec: {
+        title: 'Availability alert',
+        annotations: { __dashboardUid__: 'sample-dashboard', __panelId__: '12' },
+        panelRef: { dashboardUID: 'sample-dashboard', panelID: 12 },
+        expressions: {
+          A: {
+            datasourceUID: 'prom-b',
+            relativeTimeRange: { from: '300s', to: '0s' },
+            model: { refId: 'A', expr: 'avg(sample_availability_state{service="app"})', range: true },
+          },
+        },
+      },
+    };
+    const fetch = jest.fn((request: { url: string }) => {
+      if (request.url === '/apis/rules.alerting.grafana.app/v0alpha1/namespaces/default/alertrules') {
+        return of({ data: { items: [unrelatedRule, linkedRule] } });
+      }
+      if (request.url === '/api/dashboards/uid/sample-dashboard') {
+        return of({
+          data: {
+            dashboard: {
+              panels: [
+                {
+                  id: 12,
+                  title: 'Availability',
+                  type: 'stat',
+                  datasource: { uid: 'prom-b', type: 'prometheus' },
+                  targets: [{ refId: 'A', expr: 'avg(sample_availability_state{service="app"})' }],
+                },
+              ],
+            },
+          },
+        });
+      }
+      throw new Error(`Unexpected request: ${request.url}`);
+    });
+    (getBackendSrv as jest.Mock).mockReturnValue({ fetch });
+    const tool = getTool(createGrafanaTools({ allowedPrometheusDatasourceUids: ['prom-b'] }), 'find_panel_alert_rules');
+
+    const result = await tool.execute(
+      'call-alerts',
+      { namespace: 'default', dashboardUid: 'sample-dashboard', panelTitle: 'Availability' },
+      undefined
+    );
+    const body = JSON.parse(result.content[0].text);
+
+    expect(result.details).toMatchObject({ matchCount: 1, exactPanelMatchCount: 1 });
+    expect(body.matches[0].rule.name).toBe('availability-alert');
+  });
+
   it('summarizes persistent transient query failures after retries are exhausted', async () => {
     jest.useFakeTimers();
     try {
@@ -1929,6 +1998,200 @@ describe('grafana datasource tool policy', () => {
       },
       summarized: true,
     });
+  });
+
+  it('handles dashboard panels without targets during context validation', async () => {
+    const fetch = jest.fn().mockReturnValue(
+      of({
+        data: {
+          dashboard: {
+            uid: 'sample-dashboard',
+            title: 'Application Dashboard',
+            panels: [
+              {
+                id: 12,
+                title: 'Availability',
+                type: 'stat',
+                datasource: { uid: 'prom-b', type: 'prometheus' },
+              },
+            ],
+          },
+          meta: {
+            folderTitle: 'Operations',
+            url: '/d/sample-dashboard/application-dashboard',
+          },
+        },
+      })
+    );
+    (getBackendSrv as jest.Mock).mockReturnValue({ fetch });
+    const tool = getTool(
+      createGrafanaTools({ allowedPrometheusDatasourceUids: ['prom-b'] }),
+      'inspect_dashboard_context'
+    );
+
+    const result = await tool.execute('call-1', { uid: 'sample-dashboard', validateQueries: true }, undefined);
+    const body = JSON.parse(result.content[0].text);
+
+    expect(body.panels[0]).toMatchObject({
+      id: '12',
+      title: 'Availability',
+      targets: [],
+    });
+    expect(body.validation).toMatchObject({
+      queryCount: 0,
+      failedQueries: 0,
+      zeroSeriesQueries: 0,
+    });
+    expect(result.details).toMatchObject({
+      uid: 'sample-dashboard',
+      panelCount: 1,
+      queryCount: 0,
+    });
+  });
+
+  it('inspects dashboard.grafana.app v2 panel specs from the dashboard response', async () => {
+    const fetch = jest.fn().mockReturnValue(
+      of({
+        data: {
+          dashboard: {
+            title: 'Application_Overview',
+            tags: ['ops'],
+            timeSettings: { from: 'now-6h', to: 'now', autoRefresh: '1m' },
+            variables: [
+              {
+                kind: 'QueryVariable',
+                spec: {
+                  name: 'service',
+                  label: 'Service',
+                  current: { text: 'app-a', value: 'app-a' },
+                  query: { kind: 'DataQuery', spec: { query: 'label_values(service)' } },
+                },
+              },
+            ],
+            elements: {
+              'panel-12': {
+                kind: 'Panel',
+                spec: {
+                  id: 12,
+                  title: 'Availability',
+                  description: 'Values above zero indicate an availability issue.',
+                  data: {
+                    kind: 'QueryGroup',
+                    spec: {
+                      queries: [
+                        {
+                          kind: 'PanelQuery',
+                          spec: {
+                            refId: 'A',
+                            hidden: false,
+                            query: {
+                              kind: 'DataQuery',
+                              group: 'prometheus',
+                              datasource: { name: 'prom-main' },
+                              spec: {
+                                expr: 'avg by (service, endpoint) (sample_availability_state{service=~"$service"})',
+                              },
+                            },
+                          },
+                        },
+                      ],
+                      transformations: [],
+                      queryOptions: {},
+                    },
+                  },
+                  vizConfig: {
+                    kind: 'VizConfig',
+                    group: 'timeseries',
+                    spec: {
+                      fieldConfig: {
+                        defaults: {
+                          unit: 'short',
+                          thresholds: {
+                            mode: 'absolute',
+                            steps: [
+                              { color: 'green', value: 0 },
+                              { color: 'red', value: 80 },
+                            ],
+                          },
+                        },
+                        overrides: [],
+                      },
+                    },
+                  },
+                },
+              },
+            },
+            layout: {
+              kind: 'RowsLayout',
+              spec: {
+                rows: [
+                  {
+                    kind: 'RowsLayoutRow',
+                    spec: {
+                      title: 'Overview',
+                      layout: {
+                        kind: 'GridLayout',
+                        spec: {
+                          items: [
+                            {
+                              kind: 'GridLayoutItem',
+                              spec: {
+                                x: 0,
+                                y: 0,
+                                width: 12,
+                                height: 8,
+                                element: { kind: 'ElementReference', name: 'panel-12' },
+                              },
+                            },
+                          ],
+                        },
+                      },
+                    },
+                  },
+                ],
+              },
+            },
+          },
+          meta: {
+            folderTitle: 'Operations',
+            url: '/d/sample-dashboard/application-overview',
+          },
+        },
+      })
+    );
+    (getBackendSrv as jest.Mock).mockReturnValue({ fetch });
+    const tool = getTool(
+      createGrafanaTools({ allowedPrometheusDatasourceUids: ['prom-main'] }),
+      'inspect_dashboard_context'
+    );
+
+    const result = await tool.execute('call-1', { uid: 'sample-dashboard', validateQueries: false }, undefined);
+    const body = JSON.parse(result.content[0].text);
+
+    expect(body.dashboard).toMatchObject({
+      uid: 'sample-dashboard',
+      title: 'Application_Overview',
+      refresh: '1m',
+    });
+    expect(body.variables[0]).toMatchObject({ name: 'service', current: 'app-a' });
+    expect(body.panels[0]).toMatchObject({
+      id: '12',
+      title: 'Availability',
+      type: 'timeseries',
+      rowPath: ['Overview'],
+      gridPos: { x: 0, y: 0, w: 12, h: 8 },
+      fieldConfig: {
+        unit: 'short',
+        thresholds: { mode: 'absolute' },
+      },
+    });
+    expect(body.panels[0].targets[0]).toMatchObject({
+      refId: 'A',
+      datasourceUid: 'prom-main',
+      datasourceType: 'prometheus',
+      queryKind: 'expr',
+    });
+    expect(body.panels[0].targets[0].query).toContain('sample_availability_state');
   });
 
   it('extracts dashboard metric usage with PromQL parser-backed labels and relations', () => {

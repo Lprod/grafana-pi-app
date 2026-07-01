@@ -83,6 +83,7 @@ type AlertExpression = {
 type DashboardResponse = {
   dashboard?: Record<string, any>;
   meta?: Record<string, any>;
+  spec?: Record<string, any>;
 };
 
 type PanelSummary = {
@@ -352,8 +353,29 @@ async function fetchDashboardPanel(params: PanelAlertRuleSearchParams): Promise<
   const response = await backendFetch<DashboardResponse>(
     `/api/dashboards/uid/${encodeURIComponent(params.dashboardUid)}`
   );
-  const panel = findDashboardPanel(response.dashboard ?? {}, params.panelId, params.panelTitle);
+  const panel = findDashboardPanel(dashboardSpecFromResponse(response), params.panelId, params.panelTitle);
   return panel ? summarizePanel(panel) : undefined;
+}
+
+function dashboardSpecFromResponse(response: DashboardResponse): Record<string, any> {
+  if (isDashboardV2Spec(response.dashboard) || isLegacyDashboardSpec(response.dashboard)) {
+    return response.dashboard;
+  }
+  if (isDashboardV2Spec(response.spec) || isLegacyDashboardSpec(response.spec)) {
+    return response.spec;
+  }
+  if (isDashboardV2Spec(response) || isLegacyDashboardSpec(response)) {
+    return response;
+  }
+  return {};
+}
+
+function isDashboardV2Spec(value: unknown): value is Record<string, any> {
+  return isRecord(value) && isRecord(value.elements);
+}
+
+function isLegacyDashboardSpec(value: unknown): value is Record<string, any> {
+  return isRecord(value) && Array.isArray(value.panels);
 }
 
 function findDashboardPanel(dashboard: Record<string, any>, panelId?: number | string, panelTitle?: string) {
@@ -375,6 +397,10 @@ function findDashboardPanel(dashboard: Record<string, any>, panelId?: number | s
 }
 
 function collectPanels(dashboard: Record<string, any>) {
+  if (isDashboardV2Spec(dashboard)) {
+    return collectV2Panels(dashboard);
+  }
+
   const panels: Array<Record<string, any>> = [];
   const visit = (panel: Record<string, any>) => {
     const nested = arrayField(panel, 'panels').filter(isRecord);
@@ -392,6 +418,109 @@ function collectPanels(dashboard: Record<string, any>) {
   }
 
   return panels;
+}
+
+function collectV2Panels(dashboard: Record<string, any>) {
+  const panels: Array<Record<string, any>> = [];
+  const elements = recordField(dashboard, 'elements') ?? {};
+  const seen = new Set<string>();
+
+  const pushElement = (name: string | undefined) => {
+    if (!name || seen.has(name)) {
+      return;
+    }
+    const element = recordField(elements, name);
+    if (!element || stringField(element, 'kind') !== 'Panel') {
+      return;
+    }
+    const panel = v2PanelToLegacyPanel(element);
+    if (panel) {
+      seen.add(name);
+      panels.push(panel);
+    }
+  };
+
+  const visitLayout = (layout: Record<string, any> | undefined) => {
+    const kind = stringField(layout, 'kind');
+    const spec = recordField(layout, 'spec');
+    if (!kind || !spec) {
+      return;
+    }
+
+    if (kind === 'GridLayout' || kind === 'AutoGridLayout') {
+      for (const item of arrayField(spec, 'items').filter(isRecord)) {
+        pushElement(stringField(recordField(recordField(item, 'spec'), 'element'), 'name'));
+      }
+      return;
+    }
+
+    if (kind === 'RowsLayout') {
+      for (const row of arrayField(spec, 'rows').filter(isRecord)) {
+        visitLayout(recordField(recordField(row, 'spec'), 'layout'));
+      }
+      return;
+    }
+
+    if (kind === 'TabsLayout') {
+      for (const tab of arrayField(spec, 'tabs').filter(isRecord)) {
+        visitLayout(recordField(recordField(tab, 'spec'), 'layout'));
+      }
+    }
+  };
+
+  visitLayout(recordField(dashboard, 'layout'));
+
+  for (const [name, element] of Object.entries(elements)) {
+    if (isRecord(element) && stringField(element, 'kind') === 'Panel') {
+      pushElement(name);
+    }
+  }
+
+  return panels;
+}
+
+function v2PanelToLegacyPanel(element: Record<string, any>) {
+  const spec = recordField(element, 'spec');
+  if (!spec) {
+    return undefined;
+  }
+  const dataSpec = recordField(recordField(spec, 'data'), 'spec');
+  const vizConfig = recordField(spec, 'vizConfig');
+  const vizSpec = recordField(vizConfig, 'spec');
+  const targets = arrayField(dataSpec, 'queries').filter(isRecord).map(v2PanelQueryToLegacyTarget).filter(isRecord);
+  const datasource = recordField(targets[0], 'datasource');
+
+  return compactRecord({
+    id: numberField(spec, 'id'),
+    title: stringField(spec, 'title'),
+    type: stringField(vizConfig, 'group'),
+    datasource,
+    fieldConfig: recordField(vizSpec, 'fieldConfig'),
+    targets,
+  });
+}
+
+function v2PanelQueryToLegacyTarget(query: Record<string, any>) {
+  const spec = recordField(query, 'spec');
+  const dataQuery = recordField(spec, 'query');
+  const querySpec = recordField(dataQuery, 'spec');
+  const datasource = recordField(dataQuery, 'datasource');
+  const group = stringField(dataQuery, 'group');
+
+  return compactRecord({
+    refId: stringField(spec, 'refId'),
+    hide: spec?.hidden === true ? true : undefined,
+    datasource: compactRecord({
+      uid: stringField(datasource, 'uid') ?? stringField(datasource, 'name'),
+      name: stringField(datasource, 'name'),
+      type: group,
+    }),
+    expr: stringField(querySpec, 'expr'),
+    query: stringField(querySpec, 'query'),
+    rawSql: stringField(querySpec, 'rawSql'),
+    rawQuery: stringField(querySpec, 'rawQuery'),
+    legendFormat: stringField(querySpec, 'legendFormat'),
+  });
 }
 
 function summarizePanel(panel: Record<string, any>): PanelSummary {
@@ -412,7 +541,7 @@ function summarizePanel(panel: Record<string, any>): PanelSummary {
     })
     .filter((target) => target.query);
 
-  return compactRecord({
+  const summary = compactRecord({
     id: stringOrNumberField(panel, 'id'),
     title: stringField(panel, 'title'),
     type: stringField(panel, 'type'),
@@ -421,6 +550,8 @@ function summarizePanel(panel: Record<string, any>): PanelSummary {
     targets,
     thresholds: compactValue(recordField(recordField(recordField(panel, 'fieldConfig'), 'defaults'), 'thresholds'), 3),
   }) as PanelSummary;
+  summary.targets = targets;
+  return summary;
 }
 
 function scoreAlertRule(
@@ -432,7 +563,7 @@ function scoreAlertRule(
   const summary = summarizeAlertRule(rule, namespace, toolConfig);
   const reasons: string[] = [];
   let score = 0;
-  const wantedPanelId = normalizedPanelId(context.panelId);
+  const wantedPanelId = normalizedPanelId(context.panelId) ?? context.panel?.id;
   const panelLink = summary.panelLink;
 
   if (context.ruleName && summary.name === context.ruleName) {
@@ -458,7 +589,7 @@ function scoreAlertRule(
   }
 
   const panelQueries = (context.panel?.targets ?? []).map((target) => target.query).filter(isString);
-  const ruleQueries = summary.prometheusChecks.map((check) => check.query);
+  const ruleQueries = (summary.prometheusChecks ?? []).map((check) => check.query);
   const queryScore = scoreQueryOverlap(panelQueries, ruleQueries);
   if (queryScore > 0) {
     score += queryScore;
@@ -493,8 +624,9 @@ function summarizeAlertRule(
   const expressions = summarizeExpressions(spec.expressions ?? {});
   const conditionRef = expressions.find((expression) => expression.source)?.refId;
   const alertCondition = summarizeAlertCondition(expressions, conditionRef);
+  const checks = prometheusChecks(expressions, toolConfig);
 
-  return compactRecord({
+  const summary = compactRecord({
     name,
     title: spec.title || name,
     viewUrl: `/alerting/grafana/${encodeURIComponent(name)}/view`,
@@ -513,8 +645,11 @@ function summarizeAlertRule(
     conditionRef,
     expressions,
     alertCondition,
-    prometheusChecks: prometheusChecks(expressions, toolConfig),
+    prometheusChecks: checks,
   }) as AlertRuleSummary;
+  summary.expressions = expressions;
+  summary.prometheusChecks = checks;
+  return summary;
 }
 
 function alertRulePanelLink(spec: AlertRuleSpec): AlertRulePanelLink | undefined {
@@ -787,7 +922,10 @@ function datasourceUid(value: unknown): string | undefined {
   if (typeof value === 'string') {
     return value.trim() || undefined;
   }
-  return stringField(isRecord(value) ? value : undefined, 'uid');
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  return stringField(value, 'uid') ?? stringField(value, 'name');
 }
 
 function datasourceType(value: unknown): string | undefined {

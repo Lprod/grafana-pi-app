@@ -26,6 +26,7 @@ type DashboardContextParams = DashboardUidParams & {
 type DashboardResponse = {
   dashboard?: Record<string, any>;
   meta?: Record<string, any>;
+  spec?: Record<string, any>;
 };
 
 type DashboardVariableContext = {
@@ -109,6 +110,7 @@ type DashboardContextResult = {
 type PanelWithPath = {
   panel: Record<string, any>;
   rowPath: string[];
+  gridPos?: Record<string, unknown>;
 };
 
 export function createDashboardContextTools(toolConfig: GrafanaToolConfig): AgentTool[] {
@@ -176,7 +178,7 @@ async function buildDashboardContext({
   signal?: AbortSignal;
 }): Promise<DashboardContextResult> {
   const result = await backendFetch<DashboardResponse>(`/api/dashboards/uid/${encodeURIComponent(params.uid)}`);
-  const dashboard = result.dashboard ?? {};
+  const dashboard = dashboardSpecFromResponse(result);
   const meta = result.meta ?? {};
   const title = stringField(dashboard, 'title') ?? stringField(meta, 'slug') ?? params.uid;
   const variables = summarizeVariables(dashboard);
@@ -185,7 +187,7 @@ async function buildDashboardContext({
   const maxPanels = clampInt(params.maxPanels ?? MAX_CONTEXT_PANELS, 1, MAX_CONTEXT_PANELS);
   const panels = rawPanels
     .slice(0, maxPanels)
-    .map(({ panel, rowPath }) => summarizePanel(panel, rowPath, variableValues));
+    .map(({ panel, rowPath, gridPos }) => summarizePanel(panel, rowPath, variableValues, gridPos));
   const range = dashboardRange(dashboard, params);
   const context: DashboardContextResult = {
     dashboard: {
@@ -195,7 +197,7 @@ async function buildDashboardContext({
       url: stringField(meta, 'url'),
       tags: stringArrayField(dashboard, 'tags'),
       time: range,
-      refresh: stringField(dashboard, 'refresh'),
+      refresh: dashboardRefresh(dashboard),
     },
     variables,
     panels,
@@ -215,7 +217,33 @@ async function buildDashboardContext({
   return context;
 }
 
+function dashboardSpecFromResponse(response: DashboardResponse): Record<string, any> {
+  if (isDashboardV2Spec(response.dashboard) || isLegacyDashboardSpec(response.dashboard)) {
+    return response.dashboard;
+  }
+  if (isDashboardV2Spec(response.spec) || isLegacyDashboardSpec(response.spec)) {
+    return response.spec;
+  }
+  if (isDashboardV2Spec(response) || isLegacyDashboardSpec(response)) {
+    return response;
+  }
+  return {};
+}
+
+function isDashboardV2Spec(value: unknown): value is Record<string, any> {
+  return isRecord(value) && isRecord(value.elements);
+}
+
+function isLegacyDashboardSpec(value: unknown): value is Record<string, any> {
+  return isRecord(value) && Array.isArray(value.panels);
+}
+
 function summarizeVariables(dashboard: Record<string, any>): DashboardVariableContext[] {
+  const v2Variables = arrayField(dashboard, 'variables');
+  if (v2Variables.length > 0) {
+    return v2Variables.filter(isRecord).map(summarizeV2Variable);
+  }
+
   return arrayField(recordField(dashboard, 'templating'), 'list')
     .filter(isRecord)
     .map((variable) => {
@@ -232,7 +260,25 @@ function summarizeVariables(dashboard: Record<string, any>): DashboardVariableCo
     });
 }
 
+function summarizeV2Variable(variable: Record<string, any>): DashboardVariableContext {
+  const spec = recordField(variable, 'spec') ?? variable;
+  const values = variableValues(spec);
+  return compactRecord({
+    name: stringField(spec, 'name') ?? 'unnamed',
+    type: stringField(variable, 'kind') ?? stringField(spec, 'type') ?? 'unknown',
+    label: stringField(spec, 'label'),
+    datasourceUid: datasourceUid(recordField(spec, 'datasource')),
+    query: variableQueryText(spec),
+    current: variableCurrentText(spec) ?? values[0],
+    values: values.length > 0 ? values.slice(0, 20) : undefined,
+  }) as DashboardVariableContext;
+}
+
 function collectPanels(dashboard: Record<string, any>) {
+  if (isDashboardV2Spec(dashboard)) {
+    return collectV2Panels(dashboard);
+  }
+
   const panels: PanelWithPath[] = [];
   const visit = (panel: Record<string, any>, rowPath: string[]) => {
     const nested = arrayField(panel, 'panels').filter(isRecord);
@@ -256,10 +302,148 @@ function collectPanels(dashboard: Record<string, any>) {
   return panels;
 }
 
+function collectV2Panels(dashboard: Record<string, any>) {
+  const panels: PanelWithPath[] = [];
+  const elements = recordField(dashboard, 'elements') ?? {};
+  const seen = new Set<string>();
+
+  const pushElement = (name: string | undefined, rowPath: string[], gridPos?: Record<string, unknown>) => {
+    if (!name || seen.has(name)) {
+      return;
+    }
+    const element = recordField(elements, name);
+    if (!element || stringField(element, 'kind') !== 'Panel') {
+      return;
+    }
+    const panel = v2PanelToLegacyPanel(element, gridPos);
+    if (panel) {
+      seen.add(name);
+      panels.push({ panel, rowPath, gridPos });
+    }
+  };
+
+  const visitLayout = (layout: Record<string, any> | undefined, rowPath: string[]) => {
+    const kind = stringField(layout, 'kind');
+    const spec = recordField(layout, 'spec');
+    if (!kind || !spec) {
+      return;
+    }
+
+    if (kind === 'GridLayout') {
+      for (const item of arrayField(spec, 'items').filter(isRecord)) {
+        const itemSpec = recordField(item, 'spec');
+        pushElement(stringField(recordField(itemSpec, 'element'), 'name'), rowPath, v2GridPos(itemSpec));
+      }
+      return;
+    }
+
+    if (kind === 'RowsLayout') {
+      for (const row of arrayField(spec, 'rows').filter(isRecord)) {
+        const rowSpec = recordField(row, 'spec');
+        const title = stringField(rowSpec, 'title');
+        visitLayout(recordField(rowSpec, 'layout'), title ? [...rowPath, title] : rowPath);
+      }
+      return;
+    }
+
+    if (kind === 'TabsLayout') {
+      for (const tab of arrayField(spec, 'tabs').filter(isRecord)) {
+        const tabSpec = recordField(tab, 'spec');
+        const title = stringField(tabSpec, 'title');
+        visitLayout(recordField(tabSpec, 'layout'), title ? [...rowPath, title] : rowPath);
+      }
+      return;
+    }
+
+    if (kind === 'AutoGridLayout') {
+      for (const item of arrayField(spec, 'items').filter(isRecord)) {
+        const itemSpec = recordField(item, 'spec');
+        pushElement(stringField(recordField(itemSpec, 'element'), 'name'), rowPath);
+      }
+    }
+  };
+
+  visitLayout(recordField(dashboard, 'layout'), []);
+
+  for (const [name, element] of Object.entries(elements)) {
+    if (isRecord(element) && stringField(element, 'kind') === 'Panel') {
+      pushElement(name, [], undefined);
+    }
+  }
+
+  return panels;
+}
+
+function v2PanelToLegacyPanel(element: Record<string, any>, gridPos: Record<string, unknown> | undefined) {
+  const spec = recordField(element, 'spec');
+  if (!spec) {
+    return undefined;
+  }
+  const dataSpec = recordField(recordField(spec, 'data'), 'spec');
+  const vizConfig = recordField(spec, 'vizConfig');
+  const vizSpec = recordField(vizConfig, 'spec');
+  const queries = arrayField(dataSpec, 'queries').filter(isRecord).map(v2PanelQueryToLegacyTarget).filter(isRecord);
+  const datasource = recordField(queries[0], 'datasource');
+  return compactRecord({
+    id: numberField(spec, 'id'),
+    title: stringField(spec, 'title'),
+    description: stringField(spec, 'description'),
+    type: stringField(vizConfig, 'group'),
+    datasource,
+    gridPos,
+    fieldConfig: recordField(vizSpec, 'fieldConfig'),
+    options: recordField(vizSpec, 'options'),
+    links: arrayField(spec, 'links'),
+    targets: queries,
+    transformations: arrayField(dataSpec, 'transformations').map(v2TransformationToLegacyTransformation),
+  });
+}
+
+function v2PanelQueryToLegacyTarget(query: Record<string, any>) {
+  const spec = recordField(query, 'spec');
+  const dataQuery = recordField(spec, 'query');
+  const querySpec = recordField(dataQuery, 'spec');
+  const datasource = recordField(dataQuery, 'datasource');
+  const group = stringField(dataQuery, 'group');
+  return compactRecord({
+    refId: stringField(spec, 'refId'),
+    hide: spec?.hidden === true ? true : undefined,
+    datasource: compactRecord({
+      uid: stringField(datasource, 'uid') ?? stringField(datasource, 'name'),
+      name: stringField(datasource, 'name'),
+      type: group,
+    }),
+    expr: stringField(querySpec, 'expr'),
+    query: stringField(querySpec, 'query'),
+    rawSql: stringField(querySpec, 'rawSql'),
+    rawQuery: stringField(querySpec, 'rawQuery'),
+    legendFormat: stringField(querySpec, 'legendFormat'),
+  });
+}
+
+function v2TransformationToLegacyTransformation(transformation: unknown) {
+  if (!isRecord(transformation)) {
+    return transformation;
+  }
+  return compactRecord({
+    id: stringField(transformation, 'kind') ?? stringField(recordField(transformation, 'spec'), 'id'),
+  });
+}
+
+function v2GridPos(itemSpec: Record<string, any> | undefined) {
+  return compactRecord({
+    x: numberField(itemSpec, 'x'),
+    y: numberField(itemSpec, 'y'),
+    w: numberField(itemSpec, 'width'),
+    h: numberField(itemSpec, 'height'),
+  });
+}
+
 function summarizePanel(
   panel: Record<string, any>,
   rowPath: string[],
-  variableValues: Record<string, string>
+  variableValues: Record<string, string>,
+  gridPos?: Record<string, unknown>
 ): DashboardPanelContext {
   const panelDatasourceUid = datasourceUid(panel.datasource);
   const panelDatasourceType = datasourceType(panel.datasource);
@@ -276,7 +460,7 @@ function summarizePanel(
     .map((link) => [stringField(link, 'title'), stringField(link, 'url')].filter(Boolean).join(' -> '))
     .filter(Boolean);
 
-  return compactRecord({
+  const summary = compactRecord({
     id: stringOrNumberField(panel, 'id'),
     title: stringField(panel, 'title') ?? '<No title>',
     type: stringField(panel, 'type') ?? 'unknown',
@@ -285,13 +469,15 @@ function summarizePanel(
     datasourceUid: panelDatasourceUid,
     datasourceType: panelDatasourceType,
     repeat: stringField(panel, 'repeat'),
-    gridPos: compactRecord(recordField(panel, 'gridPos')),
+    gridPos: gridPos ?? compactRecord(recordField(panel, 'gridPos')),
     targets,
     transformations: transformations.length > 0 ? transformations : undefined,
     fieldConfig: compactFieldConfig(recordField(panel, 'fieldConfig')),
     options: compactPanelOptions(recordField(panel, 'options')),
     links: links.length > 0 ? links.slice(0, 8) : undefined,
   }) as DashboardPanelContext;
+  summary.targets = targets;
+  return summary;
 }
 
 function summarizeTarget(
@@ -425,11 +611,16 @@ function failedDashboardQuerySummary(
 }
 
 function dashboardRange(dashboard: Record<string, any>, params: DashboardContextParams) {
+  const timeSettings = recordField(dashboard, 'timeSettings');
   const time = recordField(dashboard, 'time');
   return {
-    from: params.from ?? stringField(time, 'from') ?? 'now-6h',
-    to: params.to ?? stringField(time, 'to') ?? 'now',
+    from: params.from ?? stringField(timeSettings, 'from') ?? stringField(time, 'from') ?? 'now-6h',
+    to: params.to ?? stringField(timeSettings, 'to') ?? stringField(time, 'to') ?? 'now',
   };
+}
+
+function dashboardRefresh(dashboard: Record<string, any>) {
+  return stringField(dashboard, 'refresh') ?? stringField(recordField(dashboard, 'timeSettings'), 'autoRefresh');
 }
 
 function isPrometheusTarget(target: DashboardTargetContext) {
