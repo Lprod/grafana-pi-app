@@ -1,3 +1,10 @@
+# [2.12.0](https://github.com/elohmeier/grafana-pi-app/compare/v2.11.1...v2.12.0) (2026-07-01)
+
+
+### Features
+
+* add coding agent workspace sample ([f155f8a](https://github.com/elohmeier/grafana-pi-app/commit/f155f8a4d9dc1f2d971787aa7683283656085a58))
+
 ## [2.11.1](https://github.com/elohmeier/grafana-pi-app/compare/v2.11.0...v2.11.1) (2026-06-30)
 
 
