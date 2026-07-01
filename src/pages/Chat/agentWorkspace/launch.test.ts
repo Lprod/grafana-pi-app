@@ -1,5 +1,7 @@
 import {
   agentWorkspaceLaunchFromSearch,
+  encodeAgentWorkspaceLaunchParam,
+  parseAgentWorkspaceLaunchPayload,
   renderAgentWorkspaceContextBlock,
   renderAgentWorkspaceSystemPrompt,
 } from './launch';
@@ -16,6 +18,37 @@ describe('agent workspace launch', () => {
     });
     expect(launch?.initialPrompt).toContain('bash');
     expect(launch?.initialPrompt).toContain('/workspace');
+  });
+
+  it('parses a generic provider launch from a URL parameter', () => {
+    const encoded = encodeAgentWorkspaceLaunchParam({
+      contractVersion: '1',
+      sourcePluginId: 'example-provider-app',
+      workspaceKind: 'resource-workspace',
+      workspaceRef: {
+        repository: 'platform/services',
+        path: 'applications/shop/prod',
+        resourceId: 'vm/web-01',
+      },
+      intent: 'edit-resource',
+      initialPrompt: 'Increase memory for web-01.',
+      capabilitiesPath: '/agent/capabilities',
+      returnPath: '/a/example-provider-app/resources',
+    });
+
+    expect(agentWorkspaceLaunchFromSearch(`?agentWorkspaceLaunch=${encoded}`)).toMatchObject({
+      sourcePluginId: 'example-provider-app',
+      workspaceKind: 'resource-workspace',
+      workspaceRef: {
+        resourceId: 'vm/web-01',
+      },
+      capabilitiesPath: '/agent/capabilities',
+    });
+  });
+
+  it('rejects malformed generic launch payloads', () => {
+    expect(parseAgentWorkspaceLaunchPayload({ contractVersion: '2' })).toBeUndefined();
+    expect(agentWorkspaceLaunchFromSearch('?agentWorkspaceLaunch=not-json')).toBeUndefined();
   });
 
   it('renders available workspace tools including optional bash', () => {

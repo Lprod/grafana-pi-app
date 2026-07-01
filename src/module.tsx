@@ -17,6 +17,7 @@ import {
   storeDashboardAssistantContext,
   type DashboardAssistantAction,
 } from './pages/Chat/dashboardLaunch';
+import type { AgentWorkspaceLaunchPayload } from './pages/Chat/agentWorkspace/types';
 import {
   consumeAssistantSidebarDockRequest,
   rememberAssistantDockRoute,
@@ -64,6 +65,7 @@ const AppConfig = (props: AppConfigProps) => (
 
 const AssistantSidebar = (props: {
   action?: DashboardAssistantAction;
+  agentWorkspaceLaunch?: AgentWorkspaceLaunchPayload;
   contextId?: string;
   path?: string;
   sessionId?: string;

@@ -118,6 +118,38 @@ Fields:
 - `capabilitiesPath`: Provider resource path for the capability manifest.
 - `returnPath`: Optional Grafana route to return to after docking or review.
 
+### Opening Assistant With A Workspace
+
+The preferred in-app launch path is the Grafana extension sidebar. Provider
+apps open the `grafana-assistant-app` sidebar component and pass the launch
+payload as `agentWorkspaceLaunch`. The sidebar props may also include `path`,
+which Assistant uses as the current route context and as a sensible dock or
+return target.
+
+```ts
+getAppEvents().publish(
+  new OpenExtensionSidebarEvent({
+    pluginId: 'grafana-assistant-app',
+    componentTitle: 'Assistant',
+    props: {
+      agentWorkspaceLaunch: launch,
+      path: launch.returnPath,
+    },
+  })
+);
+```
+
+If a provider needs to open the full Assistant route instead of the sidebar, it
+can base64url-encode the JSON launch payload and append it as
+`agentWorkspaceLaunch`:
+
+```text
+/a/grafana-assistant-app/chat?orgId=1&agentWorkspaceLaunch=<base64url-json>
+```
+
+`agentSample=vm-memory` is only the local sample fallback. Provider apps should
+use the `agentWorkspaceLaunch` sidebar prop or URL parameter.
+
 Large or sensitive launch context should not be encoded directly into URLs.
 Provider apps should pass a small `contextId` and let Assistant retrieve the
 full context from a provider backend endpoint, browser session storage owned by
@@ -712,6 +744,8 @@ http://localhost:3001/a/grafana-assistant-app/chat?orgId=1&agentSample=vm-memory
 
 `agentSample=vm-memory` is consumed after workspace initialization.
 `piAgentBenchmark=1` remains in the URL so benchmark event capture stays active.
+This sample URL is a local development fallback; provider apps should launch
+Assistant with `agentWorkspaceLaunch` through the sidebar prop or URL parameter.
 
 ### Benchmark
 

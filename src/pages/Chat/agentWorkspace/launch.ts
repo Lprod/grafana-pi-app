@@ -2,10 +2,16 @@ import { PLUGIN_ID } from '../../../constants';
 import type { AgentWorkspaceLaunchPayload, AgentWorkspaceState } from './types';
 
 export const AGENT_WORKSPACE_SAMPLE_PARAM = 'agentSample';
+export const AGENT_WORKSPACE_LAUNCH_PARAM = 'agentWorkspaceLaunch';
 export const PI_AGENT_BENCHMARK_PARAM = 'piAgentBenchmark';
 
 export function agentWorkspaceLaunchFromSearch(search: string): AgentWorkspaceLaunchPayload | undefined {
   const params = new URLSearchParams(search);
+  const genericLaunch = agentWorkspaceLaunchFromEncodedValue(params.get(AGENT_WORKSPACE_LAUNCH_PARAM));
+  if (genericLaunch) {
+    return genericLaunch;
+  }
+
   const sample = params.get(AGENT_WORKSPACE_SAMPLE_PARAM);
   if (sample !== 'vm-memory') {
     return undefined;
@@ -31,9 +37,14 @@ export function agentWorkspaceLaunchFromSearch(search: string): AgentWorkspaceLa
   };
 }
 
+export function encodeAgentWorkspaceLaunchParam(launch: AgentWorkspaceLaunchPayload) {
+  return base64UrlEncode(JSON.stringify(launch));
+}
+
 export function removeAgentWorkspaceLaunchParams() {
   return {
     [AGENT_WORKSPACE_SAMPLE_PARAM]: null,
+    [AGENT_WORKSPACE_LAUNCH_PARAM]: null,
   };
 }
 
@@ -97,4 +108,70 @@ function workspaceToolNames(state: AgentWorkspaceState) {
     ...(state.kind.optionalTools ?? []),
     ...(state.kind.semanticTools?.map((tool) => tool.name) ?? []),
   ];
+}
+
+function agentWorkspaceLaunchFromEncodedValue(value: string | null): AgentWorkspaceLaunchPayload | undefined {
+  if (!value?.trim()) {
+    return undefined;
+  }
+
+  try {
+    return parseAgentWorkspaceLaunchPayload(JSON.parse(base64UrlDecode(value)));
+  } catch {
+    return undefined;
+  }
+}
+
+export function parseAgentWorkspaceLaunchPayload(value: unknown): AgentWorkspaceLaunchPayload | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+
+  const contractVersion = stringValue(value.contractVersion);
+  const sourcePluginId = stringValue(value.sourcePluginId);
+  const workspaceKind = stringValue(value.workspaceKind);
+  const capabilitiesPath = stringValue(value.capabilitiesPath);
+  if (contractVersion !== '1' || !sourcePluginId || !workspaceKind || !capabilitiesPath) {
+    return undefined;
+  }
+
+  return {
+    contractVersion,
+    sourcePluginId,
+    workspaceKind,
+    workspaceRef: isRecord(value.workspaceRef) ? value.workspaceRef : undefined,
+    contextId: stringValue(value.contextId),
+    intent: stringValue(value.intent),
+    initialPrompt: stringValue(value.initialPrompt),
+    capabilitiesPath,
+    returnPath: stringValue(value.returnPath),
+  };
+}
+
+function base64UrlEncode(value: string) {
+  const encoded =
+    typeof btoa === 'function' ? btoa(utf8ToBinary(value)) : Buffer.from(value, 'utf8').toString('base64');
+  return encoded.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
+}
+
+function base64UrlDecode(value: string) {
+  const normalized = value.replace(/-/g, '+').replace(/_/g, '/');
+  const padded = normalized.padEnd(Math.ceil(normalized.length / 4) * 4, '=');
+  return typeof atob === 'function' ? binaryToUtf8(atob(padded)) : Buffer.from(padded, 'base64').toString('utf8');
+}
+
+function utf8ToBinary(value: string) {
+  return Array.from(new TextEncoder().encode(value), (byte) => String.fromCharCode(byte)).join('');
+}
+
+function binaryToUtf8(value: string) {
+  return new TextDecoder().decode(Uint8Array.from(value, (char) => char.charCodeAt(0)));
+}
+
+function stringValue(value: unknown) {
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 }

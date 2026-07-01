@@ -104,7 +104,7 @@ import {
 } from './agentWorkspace/launch';
 import { createAgentWorkspaceState } from './agentWorkspace/providerClient';
 import { createAgentWorkspaceTools } from './agentWorkspace/tools';
-import type { AgentWorkspaceRuntime, AgentWorkspaceState } from './agentWorkspace/types';
+import type { AgentWorkspaceLaunchPayload, AgentWorkspaceRuntime, AgentWorkspaceState } from './agentWorkspace/types';
 
 type ChatSceneObjectState = SceneObjectState;
 
@@ -206,11 +206,13 @@ function ChatSceneRenderer({ model }: SceneComponentProps<ChatSceneObject>) {
 }
 
 export function ChatApp({
+  agentWorkspaceLaunch,
   variant = 'page',
   launchContextId,
   sidebarRoute,
   sessionId,
 }: {
+  agentWorkspaceLaunch?: AgentWorkspaceLaunchPayload;
   variant?: ChatAppVariant;
   launchContextId?: string;
   sidebarRoute?: string;
@@ -1264,7 +1266,7 @@ export function ChatApp({
     startNewSession,
     stopCurrentAgentForSessionChange,
   });
-  const initialLaunchPropsRef = useRef({ launchContextId, sessionId });
+  const initialLaunchPropsRef = useRef({ agentWorkspaceLaunch, launchContextId, sessionId });
   const initialConfigPending = !pluginMetaJsonData.isOpenAIAPIKeySet && settingsJsonData === undefined;
 
   useLayoutEffect(() => {
@@ -1276,8 +1278,9 @@ export function ChatApp({
       startNewSession,
       stopCurrentAgentForSessionChange,
     };
-    initialLaunchPropsRef.current = { launchContextId, sessionId };
+    initialLaunchPropsRef.current = { agentWorkspaceLaunch, launchContextId, sessionId };
   }, [
+    agentWorkspaceLaunch,
     attachLiveRun,
     launchContextId,
     loadSession,
@@ -1309,18 +1312,25 @@ export function ChatApp({
       setSessions(parsed);
 
       const location = locationService.getLocation();
-      const agentWorkspaceLaunch = agentWorkspaceLaunchFromSearch(location.search);
-      if (agentWorkspaceLaunch) {
-        const state = await createAgentWorkspaceState(agentWorkspaceLaunch);
+      const {
+        agentWorkspaceLaunch: initialAgentWorkspaceLaunch,
+        launchContextId: initialLaunchContextId,
+        sessionId: initialSessionProp,
+      } = initialLaunchPropsRef.current;
+      const launchFromSearch = agentWorkspaceLaunchFromSearch(location.search);
+      const workspaceLaunch = initialAgentWorkspaceLaunch ?? launchFromSearch;
+      if (workspaceLaunch) {
+        const state = await createAgentWorkspaceState(workspaceLaunch);
         if (!mounted) {
           return;
         }
         initialLoadHandlersRef.current.startAgentWorkspaceLaunchSession(state);
-        locationService.partial(removeAgentWorkspaceLaunchParams(), true);
+        if (launchFromSearch) {
+          locationService.partial(removeAgentWorkspaceLaunchParams(), true);
+        }
         return;
       }
 
-      const { launchContextId: initialLaunchContextId, sessionId: initialSessionProp } = initialLaunchPropsRef.current;
       const launch = initialLaunchContextId
         ? consumeDashboardAssistantStoredLaunch(initialLaunchContextId)
         : consumeDashboardAssistantLaunch(location.search);
