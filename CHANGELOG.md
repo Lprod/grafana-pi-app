@@ -1,3 +1,10 @@
+## [2.14.1](https://github.com/elohmeier/grafana-pi-app/compare/v2.14.0...v2.14.1) (2026-07-01)
+
+
+### Bug Fixes
+
+* **alerting:** support v2 dashboard panels ([7bd72ca](https://github.com/elohmeier/grafana-pi-app/commit/7bd72ca2120b959145e776847de71fb9b895f2f6))
+
 # [2.14.0](https://github.com/elohmeier/grafana-pi-app/compare/v2.13.0...v2.14.0) (2026-07-01)
 
 
