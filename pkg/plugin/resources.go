@@ -675,4 +675,9 @@ func (a *App) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/jsonnet-libs/search", a.withAppAccess(a.handleJsonnetLibSearch))
 	mux.HandleFunc("/jsonnet-libs/read", a.withAppAccess(a.handleJsonnetLibRead))
 	mux.HandleFunc("/jsonnet-libs/list", a.withAppAccess(a.handleJsonnetLibList))
+	if a.agentSample != nil {
+		mux.HandleFunc("/agent/capabilities", a.withAppAccess(a.handleAgentContractSampleCapabilities))
+		mux.HandleFunc("/agent/workspaces", a.withAppAccess(a.handleAgentContractSampleWorkspaces))
+		mux.HandleFunc("/agent/workspaces/", a.withAppAccess(a.handleAgentContractSampleWorkspaceResource))
+	}
 }

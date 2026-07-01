@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -30,6 +31,7 @@ type App struct {
 	settings     appSettings
 	httpClient   *http.Client
 	jsonnetFiles *virtualJsonnetFileStore
+	agentSample  *agentContractSampleStore
 	authzMu      sync.Mutex
 	authzToken   string
 	authzClient  authz.EnforcementClient
@@ -45,6 +47,8 @@ type appSettings struct {
 	AllowedPrometheusDatasourceUIDs []string `json:"allowedPrometheusDatasourceUids"`
 	SystemPromptAddendum            string   `json:"systemPromptAddendum"`
 	OpenAIAPIKey                    string
+	PluginID                        string `json:"pluginId"`
+	EnableAgentContractSample       bool   `json:"enableAgentContractSample"`
 }
 
 const (
@@ -64,6 +68,9 @@ func NewApp(_ context.Context, settings backend.AppInstanceSettings) (instancemg
 		settings:     loadSettings(settings),
 		httpClient:   &http.Client{Timeout: 10 * time.Minute},
 		jsonnetFiles: newVirtualJsonnetFileStore(),
+	}
+	if app.settings.EnableAgentContractSample {
+		app.agentSample = newAgentContractSampleStore(app.settings.PluginID)
 	}
 
 	// Use a httpadapter (provided by the SDK) for resource calls. This allows us
@@ -119,6 +126,19 @@ func loadSettings(settings backend.AppInstanceSettings) appSettings {
 	loaded.AccessMode = normalizeAccessMode(loaded.AccessMode)
 	loaded.AllowedUsers = normalizeAllowedUsers(loaded.AllowedUsers)
 	loaded.OpenAIAPIKey = settings.DecryptedSecureJSONData["openAIAPIKey"]
+	loaded.PluginID = strings.TrimSpace(loaded.PluginID)
+	if envPluginID := strings.TrimSpace(os.Getenv("PI_PLUGIN_ID")); envPluginID != "" {
+		loaded.PluginID = envPluginID
+	}
+	if loaded.PluginID == "" {
+		loaded.PluginID = ID()
+	}
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("PI_AGENT_CONTRACT_SAMPLE"))) {
+	case "1", "true", "yes":
+		loaded.EnableAgentContractSample = true
+	case "0", "false", "no":
+		loaded.EnableAgentContractSample = false
+	}
 
 	return loaded
 }

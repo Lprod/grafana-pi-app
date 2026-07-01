@@ -10,7 +10,8 @@ import {
   SceneQueryRunner,
   SceneTimeRange,
 } from '@grafana/scenes';
-import { Badge, Button, Icon, LinkButton, Spinner, useStyles2 } from '@grafana/ui';
+import { Badge, Button, Icon, LinkButton, Spinner, type BadgeColor, useStyles2 } from '@grafana/ui';
+import { structuredPatch } from 'diff';
 import type { ArtifactPreview, ArtifactRef, SubagentRunDetails, SubagentToolCall } from './tools';
 import {
   highlightJsonnetLines,
@@ -223,6 +224,27 @@ function ToolCallBlock({
   const styles = useStyles2(getToolStyles);
   const structuredToolCall = renderStructuredToolCall(name, args, partialJson, Boolean(isStreaming));
   const icon = toolIconName(name);
+  const shouldCollapse = shouldCollapseToolCallBlock(name, Boolean(isStreaming));
+  const collapsedSummary = toolCallCollapsedSummary(name, args, partialJson, Boolean(isStreaming));
+
+  if (shouldCollapse) {
+    return (
+      <details className={styles.toolCallCollapsed}>
+        <summary className={styles.toolCallCollapsedSummary}>
+          <Badge text="tool call" color="blue" />
+          {icon && <Icon aria-hidden className={styles.toolTypeIcon} name={icon} />}
+          <strong>{name}</strong>
+          {collapsedSummary && <span className={styles.toolCallSummaryText}>{collapsedSummary}</span>}
+        </summary>
+        <div className={styles.toolCallCollapsedBody}>
+          {structuredToolCall ?? (
+            <pre className={styles.toolCallJson}>{partialJson && isStreaming ? partialJson : formatJson(args)}</pre>
+          )}
+        </div>
+      </details>
+    );
+  }
+
   return (
     <div className={styles.toolCall}>
       <div className={styles.toolCallHeader}>
@@ -235,6 +257,15 @@ function ToolCallBlock({
       )}
     </div>
   );
+}
+
+function shouldCollapseToolCallBlock(name: string, isStreaming: boolean) {
+  return !isStreaming && WORKSPACE_TOOL_NAMES.has(name);
+}
+
+function toolCallCollapsedSummary(name: string, args: unknown, partialJson: string | undefined, isStreaming: boolean) {
+  const simpleCall = asSimpleToolCallSummary(name, args, partialJson, isStreaming);
+  return simpleCall?.summary;
 }
 
 function renderStructuredToolCall(
@@ -509,6 +540,32 @@ function asSimpleToolCallSummary(
       return updateReportToolCallSummary(record);
     case 'read_artifact':
       return readArtifactToolCallSummary(record);
+    case 'workspace_info':
+      return { summary: 'Inspect workspace' };
+    case 'ls':
+      return workspacePathToolCallSummary('List workspace files', record);
+    case 'find':
+      return workspacePathToolCallSummary('Find workspace files', record, 'pattern');
+    case 'grep':
+      return workspaceGrepToolCallSummary(record);
+    case 'read':
+      return workspaceReadToolCallSummary(record);
+    case 'edit':
+      return workspaceEditToolCallSummary(record);
+    case 'write':
+      return workspaceWriteToolCallSummary(record);
+    case 'get_schema':
+      return workspaceSchemaToolCallSummary(record);
+    case 'validate_workspace':
+      return { summary: 'Validate workspace overlay' };
+    case 'preview_diff':
+      return { summary: 'Preview workspace diff' };
+    case 'save_changes':
+      return { summary: 'Save workspace changes' };
+    case 'bash':
+      return workspaceBashToolCallSummary(record);
+    case 'upsert_resource':
+      return workspaceSemanticToolCallSummary('Create or update resource', record);
     case 'list_dashboards':
     case 'grafana_list_dashboards':
       return { summary: 'List dashboards' };
@@ -711,6 +768,115 @@ function readArtifactToolCallSummary(record: Record<string, unknown>): SimpleToo
       { label: 'jq', value: jq ? <code>{jq}</code> : undefined },
     ],
     code: jq,
+  };
+}
+
+function workspacePathToolCallSummary(
+  action: string,
+  record: Record<string, unknown>,
+  selectorKey = 'path'
+): SimpleToolCallSummary {
+  const selector = stringField(record, selectorKey);
+  const path = stringField(record, 'path');
+  return {
+    summary: action,
+    items: [
+      { label: selectorKey === 'pattern' ? 'Pattern' : 'Path', value: selector ? <code>{selector}</code> : undefined },
+      { label: 'Path', value: selectorKey !== 'path' && path ? <code>{path}</code> : undefined },
+    ],
+  };
+}
+
+function workspaceGrepToolCallSummary(record: Record<string, unknown>): SimpleToolCallSummary {
+  const pattern = stringField(record, 'pattern');
+  const path = stringField(record, 'path');
+  return {
+    summary: 'Search workspace files',
+    items: [
+      { label: 'Pattern', value: pattern ? <code>{pattern}</code> : undefined },
+      { label: 'Path', value: path ? <code>{path}</code> : undefined },
+      { label: 'Case sensitive', value: booleanLabel(record, 'caseSensitive') },
+    ],
+  };
+}
+
+function workspaceReadToolCallSummary(record: Record<string, unknown>): SimpleToolCallSummary {
+  const path = stringField(record, 'path');
+  const offset = numberField(record, 'offset');
+  const limit = numberField(record, 'limit');
+  return {
+    summary: 'Read workspace file',
+    items: [
+      { label: 'Path', value: path ? <code>{path}</code> : undefined },
+      {
+        label: 'Lines',
+        value: offset !== undefined || limit !== undefined ? `${offset ?? 1}:${limit ?? ''}` : undefined,
+      },
+    ],
+  };
+}
+
+function workspaceEditToolCallSummary(record: Record<string, unknown>): SimpleToolCallSummary {
+  const path = stringField(record, 'path');
+  const edits = recordsField(record, 'edits');
+  return {
+    summary: summaryLine(['Edit workspace file', edits.length ? formatPatchCount(edits.length) : undefined]),
+    items: [
+      { label: 'Path', value: path ? <code>{path}</code> : undefined },
+      { label: 'Base version', value: formatSummaryFieldValue(record, 'baseVersion') },
+      { label: 'Edits', value: edits.length ? formatCount(edits.length) : undefined },
+    ],
+  };
+}
+
+function workspaceWriteToolCallSummary(record: Record<string, unknown>): SimpleToolCallSummary {
+  const path = stringField(record, 'path');
+  const content = stringField(record, 'content');
+  return {
+    summary: summaryLine(['Write workspace file', content ? formatBytes(utf8ByteLength(content)) : undefined]),
+    items: [
+      { label: 'Path', value: path ? <code>{path}</code> : undefined },
+      { label: 'Base version', value: formatSummaryFieldValue(record, 'baseVersion') },
+      { label: 'Content', value: content ? formatBytes(utf8ByteLength(content)) : undefined },
+    ],
+  };
+}
+
+function workspaceSchemaToolCallSummary(record: Record<string, unknown>): SimpleToolCallSummary {
+  const schemaId = stringField(record, 'schemaId');
+  const path = stringField(record, 'path');
+  return {
+    summary: 'Read workspace schema',
+    items: [
+      { label: 'Schema', value: schemaId ? <code>{schemaId}</code> : undefined },
+      { label: 'Path', value: path ? <code>{path}</code> : undefined },
+    ],
+  };
+}
+
+function workspaceBashToolCallSummary(record: Record<string, unknown>): SimpleToolCallSummary {
+  const command = stringField(record, 'command');
+  return {
+    summary: 'Run workspace bash',
+    items: [
+      { label: 'Timeout', value: stringOrNumberField(record, 'timeoutMs') },
+      { label: 'Stdin', value: stringField(record, 'stdin') ? 'provided' : undefined },
+    ],
+    code: command,
+  };
+}
+
+function workspaceSemanticToolCallSummary(action: string, record: Record<string, unknown>): SimpleToolCallSummary {
+  const schemaId = stringField(record, 'schemaId');
+  const resourceName = stringField(record, 'resourceName') ?? stringField(record, 'name');
+  return {
+    summary: action,
+    items: [
+      { label: 'Schema', value: schemaId ? <code>{schemaId}</code> : undefined },
+      { label: 'Resource', value: resourceName ? <code>{resourceName}</code> : undefined },
+      { label: 'Document', value: record.document !== undefined ? formatShortValue(record.document) : undefined },
+    ],
+    code: record.document !== undefined ? formatJson(record.document) : undefined,
   };
 }
 
@@ -1258,6 +1424,19 @@ const TOOL_ICONS: Record<string, IconName> = {
   run_navigation_agent: 'compass',
   navigate: 'compass',
   read_artifact: 'file-alt',
+  workspace_info: 'folder-open',
+  ls: 'list-ul',
+  find: 'search',
+  grep: 'search',
+  read: 'file-alt',
+  edit: 'file-edit-alt',
+  write: 'file-edit-alt',
+  get_schema: 'book',
+  validate_workspace: 'check-circle',
+  preview_diff: 'file-alt',
+  save_changes: 'save',
+  bash: 'brackets-curly',
+  upsert_resource: 'upload',
   write_jsonnet: 'brackets-curly',
   grafana_write_jsonnet_file: 'brackets-curly',
   edit_jsonnet: 'file-edit-alt',
@@ -1475,6 +1654,11 @@ function renderStructuredToolResult(
   onOpenDashboard?: DashboardOpenHandler
 ): React.ReactNode | undefined {
   const artifactResult = asArtifactResult(details);
+  const workspaceResult = asWorkspaceToolResult(toolName, details, content);
+  if (workspaceResult) {
+    return workspaceResult;
+  }
+
   const datasources = asDatasourceResult(toolName, details, content);
   if (datasources) {
     return <DatasourceResultView datasources={datasources} />;
@@ -2590,6 +2774,846 @@ function DashboardTable({ dashboards }: { dashboards: DashboardListItem[] }) {
   );
 }
 
+function asWorkspaceToolResult(
+  toolName: string | undefined,
+  details: unknown,
+  content: unknown
+): React.ReactNode | undefined {
+  if (!toolName || !WORKSPACE_TOOL_NAMES.has(toolName)) {
+    return undefined;
+  }
+
+  const record = isRecord(details) ? details : parseToolJsonRecord(content, details);
+  if (!record) {
+    return undefined;
+  }
+
+  switch (toolName) {
+    case 'workspace_info':
+      return <WorkspaceInfoResultView result={workspaceInfoResultFromRecord(record)} />;
+    case 'ls':
+      return <WorkspaceDirectoryResultView result={workspaceDirectoryResultFromRecord(record)} />;
+    case 'find':
+      return <WorkspaceFindResultView result={workspaceFindResultFromRecord(record)} />;
+    case 'grep':
+      return <WorkspaceGrepResultView result={workspaceGrepResultFromRecord(record)} />;
+    case 'read':
+      return <WorkspaceReadResultView result={workspaceReadResultFromRecord(record)} />;
+    case 'get_schema':
+      return <WorkspaceReadResultView result={workspaceSchemaResultFromRecord(record)} />;
+    case 'edit':
+    case 'write':
+    case 'upsert_resource':
+      return <WorkspaceMutationResultView result={workspaceMutationResultFromRecord(toolName, record)} />;
+    case 'validate_workspace':
+      return <WorkspaceValidationResultView result={workspaceValidationResultFromRecord(record)} />;
+    case 'preview_diff':
+      return <WorkspaceDiffResultView result={workspaceDiffResultFromRecord(record)} />;
+    case 'save_changes':
+      return <WorkspaceSaveResultView result={workspaceDiffResultFromRecord(record)} />;
+    case 'bash':
+      return <WorkspaceBashResultView result={workspaceBashResultFromRecord(record)} />;
+    default:
+      return undefined;
+  }
+}
+
+const WORKSPACE_TOOL_NAMES = new Set([
+  'workspace_info',
+  'ls',
+  'find',
+  'grep',
+  'read',
+  'edit',
+  'write',
+  'get_schema',
+  'validate_workspace',
+  'preview_diff',
+  'save_changes',
+  'bash',
+  'upsert_resource',
+]);
+
+type WorkspaceFileRef = {
+  name?: string;
+  path: string;
+  type?: string;
+  layer?: string;
+  language?: string;
+  version?: string;
+  checksum?: string;
+  readOnly?: boolean;
+};
+
+type WorkspaceInfoResult = {
+  title: string;
+  provider?: string;
+  workspaceId?: string;
+  workspaceKind?: string;
+  rootPath?: string;
+  baseVersion?: string;
+  files: WorkspaceFileRef[];
+  schemas: WorkspaceFileRef[];
+  pendingChanges: WorkspacePendingChange[];
+  limits?: Record<string, unknown>;
+};
+
+type WorkspacePendingChange = {
+  path: string;
+  baseVersion?: string;
+  checksum?: string;
+  previousBytes?: number;
+  currentBytes?: number;
+};
+
+function WorkspaceInfoResultView({ result }: { result: WorkspaceInfoResult }) {
+  const styles = useStyles2(getToolStyles);
+  return (
+    <div className={styles.structuredResult}>
+      <ResultMetaGrid
+        items={[
+          { label: 'Workspace', value: result.title },
+          { label: 'ID', value: result.workspaceId ? <code>{result.workspaceId}</code> : undefined },
+          { label: 'Kind', value: result.workspaceKind ? <code>{result.workspaceKind}</code> : undefined },
+          { label: 'Provider', value: result.provider ? <code>{result.provider}</code> : undefined },
+          { label: 'Root', value: result.rootPath ? <code>{result.rootPath}</code> : undefined },
+          { label: 'Base', value: result.baseVersion ? <code>{shortChecksum(result.baseVersion)}</code> : undefined },
+          { label: 'Files', value: formatCount(result.files.length) },
+          { label: 'Pending', value: formatCount(result.pendingChanges.length) },
+        ]}
+      />
+      <WorkspaceFileTable files={result.files} />
+      {result.pendingChanges.length > 0 && <WorkspacePendingChangesView changes={result.pendingChanges} />}
+      {(result.schemas.length > 0 || result.limits) && (
+        <details className={styles.collapsible}>
+          <summary>Workspace metadata</summary>
+          {result.schemas.length > 0 && <WorkspaceFileTable files={result.schemas} title="Schemas" />}
+          {result.limits && <pre className={styles.queryBlock}>{formatJson(result.limits)}</pre>}
+        </details>
+      )}
+    </div>
+  );
+}
+
+function workspaceInfoResultFromRecord(record: Record<string, unknown>): WorkspaceInfoResult {
+  const provider = recordField(record, 'provider');
+  return {
+    title: stringField(record, 'displayName') ?? 'Workspace',
+    provider: stringField(provider, 'pluginId') ?? stringField(provider, 'displayName'),
+    workspaceId: stringField(record, 'workspaceId'),
+    workspaceKind: stringField(record, 'workspaceKind'),
+    rootPath: stringField(record, 'rootPath'),
+    baseVersion: stringField(record, 'baseVersion'),
+    files: recordsField(record, 'files').map(workspaceFileRefFromRecord),
+    schemas: recordsField(record, 'schemas').map(workspaceSchemaRefFromRecord),
+    pendingChanges: recordsField(record, 'pendingChanges').map(workspacePendingChangeFromRecord),
+    limits: recordField(record, 'limits'),
+  };
+}
+
+type WorkspaceDirectoryResult = {
+  path?: string;
+  entries: WorkspaceFileRef[];
+};
+
+function WorkspaceDirectoryResultView({ result }: { result: WorkspaceDirectoryResult }) {
+  const styles = useStyles2(getToolStyles);
+  return (
+    <div className={styles.structuredResult}>
+      <div className={styles.resultSummary}>
+        {formatCount(result.entries.length)} entries{result.path ? ` | ${result.path}` : ''}
+      </div>
+      <WorkspaceFileTable files={result.entries} />
+    </div>
+  );
+}
+
+function workspaceDirectoryResultFromRecord(record: Record<string, unknown>): WorkspaceDirectoryResult {
+  return {
+    path: stringField(record, 'path'),
+    entries: recordsField(record, 'entries').map(workspaceFileRefFromRecord),
+  };
+}
+
+type WorkspaceFindResult = {
+  paths: string[];
+};
+
+function WorkspaceFindResultView({ result }: { result: WorkspaceFindResult }) {
+  const styles = useStyles2(getToolStyles);
+  return (
+    <div className={styles.structuredResult}>
+      <div className={styles.resultSummary}>{formatCount(result.paths.length)} paths</div>
+      <div className={styles.scrollList}>
+        {result.paths.length === 0 ? (
+          <span className={styles.muted}>No matching files</span>
+        ) : (
+          result.paths.map((path) => (
+            <div className={styles.listItem} key={path}>
+              {path}
+            </div>
+          ))
+        )}
+      </div>
+    </div>
+  );
+}
+
+function workspaceFindResultFromRecord(record: Record<string, unknown>): WorkspaceFindResult {
+  return {
+    paths: stringArrayField(record, 'paths') ?? [],
+  };
+}
+
+type WorkspaceGrepResult = {
+  matchCount: number;
+  matches: WorkspaceGrepMatch[];
+};
+
+type WorkspaceGrepMatch = {
+  path: string;
+  line?: number;
+  text: string;
+};
+
+function WorkspaceGrepResultView({ result }: { result: WorkspaceGrepResult }) {
+  const styles = useStyles2(getToolStyles);
+  return (
+    <div className={styles.structuredResult}>
+      <div className={styles.resultSummary}>{formatCount(result.matchCount)} matches</div>
+      <div className={styles.tableWrap}>
+        <table className={cx(styles.dataTable, styles.wideTable)}>
+          <thead>
+            <tr>
+              <th>File</th>
+              <th>Line</th>
+              <th>Text</th>
+            </tr>
+          </thead>
+          <tbody>
+            {result.matches.map((match, index) => (
+              <tr key={`${match.path}:${match.line ?? index}`}>
+                <td className={styles.monospace}>{match.path}</td>
+                <td>{match.line ?? <span className={styles.muted}>-</span>}</td>
+                <td className={styles.codeTextCell}>{match.text}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+function workspaceGrepResultFromRecord(record: Record<string, unknown>): WorkspaceGrepResult {
+  return {
+    matchCount: numberField(record, 'matchCount') ?? recordsField(record, 'matches').length,
+    matches: recordsField(record, 'matches').map((match) => ({
+      path: stringField(match, 'path') ?? '-',
+      line: numberField(match, 'line'),
+      text: stringField(match, 'text') ?? '',
+    })),
+  };
+}
+
+type WorkspaceReadResult = {
+  path: string;
+  version?: string;
+  checksum?: string;
+  language?: string;
+  readOnly?: boolean;
+  totalLines?: number;
+  lines: CodeLine[];
+};
+
+function WorkspaceReadResultView({ result }: { result: WorkspaceReadResult }) {
+  const styles = useStyles2(getToolStyles);
+  const lineSummary = workspaceReadLineSummary(result);
+  const summary = summaryLine([result.path, result.language, lineSummary]);
+  const hasMetadata = result.readOnly !== undefined || Boolean(result.version) || Boolean(result.checksum);
+  return (
+    <details className={styles.compactResult}>
+      <summary className={styles.compactResultSummary}>
+        <Icon aria-hidden className={styles.toolTypeIcon} name="file-alt" />
+        <span className={styles.compactResultText}>{summary}</span>
+      </summary>
+      <div className={styles.compactResultBody}>
+        {result.lines.length > 0 ? <CodeViewer lines={result.lines} language="plain" /> : null}
+        {hasMetadata && (
+          <details className={styles.collapsible}>
+            <summary>File metadata</summary>
+            <ResultMetaGrid
+              items={[
+                {
+                  label: 'Read only',
+                  value: result.readOnly === undefined ? undefined : result.readOnly ? 'yes' : 'no',
+                },
+                { label: 'Version', value: result.version ? <code>{shortChecksum(result.version)}</code> : undefined },
+                {
+                  label: 'Checksum',
+                  value: result.checksum ? <code>{shortChecksum(result.checksum)}</code> : undefined,
+                },
+              ]}
+            />
+          </details>
+        )}
+      </div>
+    </details>
+  );
+}
+
+function workspaceReadLineSummary(result: WorkspaceReadResult) {
+  if (result.lines.length === 0) {
+    return `${formatCount(result.totalLines ?? 0)} lines`;
+  }
+
+  return `lines ${result.lines[0].line}-${result.lines[result.lines.length - 1].line} of ${
+    result.totalLines ?? result.lines.length
+  }`;
+}
+
+function workspaceReadResultFromRecord(record: Record<string, unknown>): WorkspaceReadResult {
+  return {
+    path: stringField(record, 'path') ?? '-',
+    version: stringField(record, 'version'),
+    checksum: stringField(record, 'checksum'),
+    language: stringField(record, 'language'),
+    readOnly: booleanField(record, 'readOnly'),
+    totalLines: numberField(record, 'totalLines'),
+    lines: recordsField(record, 'lines')
+      .map(asCodeLine)
+      .filter((line): line is CodeLine => Boolean(line)),
+  };
+}
+
+function workspaceSchemaResultFromRecord(record: Record<string, unknown>): WorkspaceReadResult {
+  const content = stringField(record, 'content') ?? '';
+  return {
+    path: stringField(record, 'path') ?? stringField(record, 'schemaId') ?? '-',
+    version: stringField(record, 'version'),
+    checksum: stringField(record, 'checksum'),
+    language: 'json',
+    totalLines: content ? textToCodeLines(content).length : undefined,
+    lines: content ? textToCodeLines(content) : [],
+  };
+}
+
+type WorkspaceMutationResult = {
+  title: string;
+  summary?: string;
+  status?: string;
+  path?: string;
+  version?: string;
+  checksum?: string;
+  changedRanges: Array<{ startLine: number; endLine: number; newLines: number }>;
+  firstChangedLine?: number;
+  changedFiles: WorkspaceChangedFile[];
+  pendingChanges: WorkspacePendingChange[];
+  operation?: Record<string, unknown>;
+  validation?: WorkspaceValidationResult;
+  diff?: string;
+};
+
+type WorkspaceChangedFile = WorkspacePendingChange & {
+  addedLines?: number;
+  removedLines?: number;
+  firstChangedLine?: number;
+};
+
+function WorkspaceMutationResultView({ result }: { result: WorkspaceMutationResult }) {
+  const styles = useStyles2(getToolStyles);
+  const hasDiff = Boolean(result.diff);
+  return (
+    <div className={styles.structuredResult}>
+      {hasDiff ? (
+        result.diff && <DiffViewer defaultOpen diff={result.diff} />
+      ) : (
+        <>
+          <div className={styles.resultSummary}>{result.summary ?? result.title}</div>
+          <ResultMetaGrid
+            items={[
+              { label: 'Status', value: result.status ? <WorkspaceStatusBadge status={result.status} /> : undefined },
+              { label: 'Changed', value: formatWorkspaceChangedRanges(result.changedRanges) },
+            ]}
+          />
+          {result.changedFiles.length > 0 && <WorkspaceChangedFilesView files={result.changedFiles} />}
+        </>
+      )}
+      {result.validation && <WorkspaceValidationResultView result={result.validation} compact />}
+      {result.operation && (
+        <details className={styles.collapsible}>
+          <summary>Operation</summary>
+          <pre className={styles.queryBlock}>{formatJson(result.operation)}</pre>
+        </details>
+      )}
+    </div>
+  );
+}
+
+function workspaceMutationResultFromRecord(toolName: string, record: Record<string, unknown>): WorkspaceMutationResult {
+  const files = recordsField(record, 'files').map(workspaceChangedFileFromRecord);
+  const changedFiles = recordsField(record, 'changedFiles').map(workspaceChangedFileFromRecord);
+  const pendingChanges = recordsField(record, 'pendingChanges').map(workspacePendingChangeFromRecord);
+  const operation = recordField(record, 'operation');
+  const validationRecord = recordField(record, 'validation');
+  const path = stringField(record, 'path') ?? files[0]?.path ?? changedFiles[0]?.path ?? pendingChanges[0]?.path;
+  return {
+    title: workspaceMutationTitle(toolName),
+    summary: stringField(record, 'summary'),
+    status: stringField(record, 'status'),
+    path,
+    version: stringField(record, 'version'),
+    checksum: stringField(record, 'checksum'),
+    changedRanges: recordsField(record, 'changedRanges').map(workspaceChangedRangeFromRecord),
+    firstChangedLine: numberField(record, 'firstChangedLine'),
+    changedFiles: changedFiles.length > 0 ? changedFiles : files,
+    pendingChanges,
+    operation,
+    validation: validationRecord ? workspaceValidationResultFromRecord(validationRecord) : undefined,
+    diff: stringField(record, 'diff'),
+  };
+}
+
+function workspaceMutationTitle(toolName: string) {
+  switch (toolName) {
+    case 'write':
+      return 'Workspace file written';
+    case 'upsert_resource':
+      return 'Workspace resource updated';
+    default:
+      return 'Workspace file edited';
+  }
+}
+
+type WorkspaceValidationResult = {
+  status: string;
+  summary?: string;
+  workspaceId?: string;
+  baseVersion?: string;
+  checkedAt?: string;
+  findings: WorkspaceFinding[];
+  details?: Record<string, unknown>;
+};
+
+type WorkspaceFinding = {
+  severity: string;
+  message: string;
+  sourcePath?: string;
+  line?: number;
+};
+
+function WorkspaceValidationResultView({ result, compact }: { result: WorkspaceValidationResult; compact?: boolean }) {
+  const styles = useStyles2(getToolStyles);
+  return (
+    <div className={styles.structuredResult}>
+      <ResultMetaGrid
+        items={[
+          { label: 'Status', value: <WorkspaceStatusBadge status={result.status} /> },
+          { label: 'Summary', value: result.summary },
+          { label: 'Findings', value: formatCount(result.findings.length) },
+          { label: 'Workspace', value: !compact && result.workspaceId ? <code>{result.workspaceId}</code> : undefined },
+          {
+            label: 'Base',
+            value: !compact && result.baseVersion ? <code>{shortChecksum(result.baseVersion)}</code> : undefined,
+          },
+        ]}
+      />
+      {result.findings.length > 0 && <WorkspaceFindingsTable findings={result.findings} />}
+      {!compact && result.details && (
+        <details className={styles.collapsible}>
+          <summary>Validation details</summary>
+          <pre className={styles.queryBlock}>{formatJson(result.details)}</pre>
+        </details>
+      )}
+    </div>
+  );
+}
+
+function workspaceValidationResultFromRecord(record: Record<string, unknown>): WorkspaceValidationResult {
+  return {
+    status: stringField(record, 'status') ?? 'unknown',
+    summary: stringField(record, 'summary'),
+    workspaceId: stringField(record, 'workspaceId'),
+    baseVersion: stringField(record, 'baseVersion'),
+    checkedAt: stringField(record, 'checkedAt'),
+    findings: recordsField(record, 'findings').map((finding) => ({
+      severity: stringField(finding, 'severity') ?? 'info',
+      message: stringField(finding, 'message') ?? '',
+      sourcePath: stringField(finding, 'sourcePath'),
+      line: numberField(finding, 'line'),
+    })),
+    details: recordField(record, 'details'),
+  };
+}
+
+type WorkspaceDiffResult = {
+  status: string;
+  workspaceId?: string;
+  baseVersion?: string;
+  savedVersion?: string;
+  changedFiles: WorkspaceChangedFile[];
+  validation?: WorkspaceValidationResult;
+  audit?: Record<string, unknown>;
+  diff?: string;
+};
+
+function WorkspaceDiffResultView({ result }: { result: WorkspaceDiffResult }) {
+  const styles = useStyles2(getToolStyles);
+  const hasDiff = Boolean(result.diff);
+  return (
+    <div className={styles.structuredResult}>
+      {hasDiff ? (
+        result.diff && <DiffViewer defaultOpen diff={result.diff} />
+      ) : (
+        <>
+          <ResultMetaGrid
+            items={[
+              { label: 'Status', value: <WorkspaceStatusBadge status={result.status} /> },
+              { label: 'Changed files', value: formatCount(result.changedFiles.length) },
+            ]}
+          />
+          {result.changedFiles.length > 0 ? (
+            <WorkspaceChangedFilesView files={result.changedFiles} />
+          ) : (
+            <div className={styles.emptyState}>No workspace changes.</div>
+          )}
+        </>
+      )}
+      {result.validation && <WorkspaceValidationResultView result={result.validation} compact />}
+    </div>
+  );
+}
+
+function WorkspaceSaveResultView({ result }: { result: WorkspaceDiffResult }) {
+  const styles = useStyles2(getToolStyles);
+  const hasDiff = Boolean(result.diff);
+  return (
+    <div className={styles.structuredResult}>
+      {hasDiff ? (
+        result.diff && <DiffViewer defaultOpen diff={result.diff} />
+      ) : (
+        <>
+          <ResultMetaGrid
+            items={[
+              { label: 'Status', value: <WorkspaceStatusBadge status={result.status} /> },
+              { label: 'Changed files', value: formatCount(result.changedFiles.length) },
+            ]}
+          />
+          {result.changedFiles.length > 0 && <WorkspaceChangedFilesView files={result.changedFiles} />}
+        </>
+      )}
+      {result.validation && <WorkspaceValidationResultView result={result.validation} compact />}
+      {result.audit && (
+        <details className={styles.collapsible}>
+          <summary>Audit</summary>
+          <pre className={styles.queryBlock}>{formatJson(result.audit)}</pre>
+        </details>
+      )}
+    </div>
+  );
+}
+
+function workspaceDiffResultFromRecord(record: Record<string, unknown>): WorkspaceDiffResult {
+  const validation = recordField(record, 'validation');
+  return {
+    status: stringField(record, 'status') ?? 'unknown',
+    workspaceId: stringField(record, 'workspaceId'),
+    baseVersion: stringField(record, 'baseVersion'),
+    savedVersion: stringField(record, 'savedVersion'),
+    changedFiles: recordsField(record, 'changedFiles').map(workspaceChangedFileFromRecord),
+    validation: validation ? workspaceValidationResultFromRecord(validation) : undefined,
+    audit: recordField(record, 'audit'),
+    diff: stringField(record, 'diff'),
+  };
+}
+
+type WorkspaceBashResult = {
+  command: string;
+  cwd?: string;
+  exitCode?: number;
+  stdout?: string;
+  stderr?: string;
+  stdoutTruncated?: boolean;
+  stderrTruncated?: boolean;
+  timedOut?: boolean;
+  changedFiles: WorkspaceChangedFile[];
+  pendingChanges: WorkspacePendingChange[];
+};
+
+function WorkspaceBashResultView({ result }: { result: WorkspaceBashResult }) {
+  const styles = useStyles2(getToolStyles);
+  const status = result.timedOut ? 'timed out' : result.exitCode === 0 ? 'completed' : 'failed';
+  return (
+    <div className={styles.structuredResult}>
+      <ResultMetaGrid
+        items={[
+          { label: 'Status', value: <WorkspaceStatusBadge status={status} /> },
+          { label: 'Exit code', value: result.exitCode === undefined ? undefined : String(result.exitCode) },
+          { label: 'CWD', value: result.cwd ? <code>{result.cwd}</code> : undefined },
+          { label: 'Changed files', value: formatCount(result.changedFiles.length) },
+          { label: 'Pending', value: formatCount(result.pendingChanges.length) },
+        ]}
+      />
+      <pre className={styles.queryBlock}>{result.command}</pre>
+      {result.stdout && (
+        <details className={styles.collapsible} open>
+          <summary>stdout{result.stdoutTruncated ? ' | truncated' : ''}</summary>
+          <pre className={styles.queryBlock}>{result.stdout}</pre>
+        </details>
+      )}
+      {result.stderr && (
+        <details className={styles.collapsible} open={result.exitCode !== 0}>
+          <summary>stderr{result.stderrTruncated ? ' | truncated' : ''}</summary>
+          <pre className={styles.queryBlock}>{result.stderr}</pre>
+        </details>
+      )}
+      {result.changedFiles.length > 0 && <WorkspaceChangedFilesView files={result.changedFiles} />}
+      {result.pendingChanges.length > 0 && <WorkspacePendingChangesView changes={result.pendingChanges} />}
+    </div>
+  );
+}
+
+function workspaceBashResultFromRecord(record: Record<string, unknown>): WorkspaceBashResult {
+  return {
+    command: stringField(record, 'command') ?? '',
+    cwd: stringField(record, 'cwd'),
+    exitCode: numberField(record, 'exitCode'),
+    stdout: stringField(record, 'stdout'),
+    stderr: stringField(record, 'stderr'),
+    stdoutTruncated: booleanField(record, 'stdoutTruncated'),
+    stderrTruncated: booleanField(record, 'stderrTruncated'),
+    timedOut: booleanField(record, 'timedOut'),
+    changedFiles: recordsField(record, 'changedFiles').map(workspaceChangedFileFromRecord),
+    pendingChanges: recordsField(record, 'pendingChanges').map(workspacePendingChangeFromRecord),
+  };
+}
+
+function WorkspaceFileTable({ files, title }: { files: WorkspaceFileRef[]; title?: string }) {
+  const styles = useStyles2(getToolStyles);
+  if (files.length === 0) {
+    return <div className={styles.emptyState}>{title ? `${title}: none` : 'No files.'}</div>;
+  }
+
+  return (
+    <div className={styles.tableWrap}>
+      <table className={cx(styles.dataTable, styles.wideTable)}>
+        <thead>
+          <tr>
+            <th>{title ?? 'Path'}</th>
+            <th>Type</th>
+            <th>Layer</th>
+            <th>Language</th>
+            <th>Version</th>
+          </tr>
+        </thead>
+        <tbody>
+          {files.map((file, index) => (
+            <tr key={`${file.path}:${index}`}>
+              <td className={styles.monospace}>{file.path}</td>
+              <td>{file.type ?? (file.readOnly ? 'read-only' : 'file')}</td>
+              <td>{file.layer ?? <span className={styles.muted}>-</span>}</td>
+              <td>{file.language ?? <span className={styles.muted}>-</span>}</td>
+              <td className={styles.monospace}>
+                {(file.version ?? file.checksum) ? (
+                  shortChecksum(file.version ?? file.checksum ?? '')
+                ) : (
+                  <span className={styles.muted}>-</span>
+                )}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function WorkspaceChangedFilesView({ files }: { files: WorkspaceChangedFile[] }) {
+  const styles = useStyles2(getToolStyles);
+  return (
+    <div className={styles.tableWrap}>
+      <table className={cx(styles.dataTable, styles.wideTable)}>
+        <thead>
+          <tr>
+            <th>File</th>
+            <th>Changed</th>
+            <th>Size</th>
+          </tr>
+        </thead>
+        <tbody>
+          {files.map((file, index) => (
+            <tr key={`${file.path}:${index}`}>
+              <td className={styles.monospace}>{file.path}</td>
+              <td>{workspaceChangedFileSummary(file)}</td>
+              <td>{workspaceBytesSummary(file)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function WorkspacePendingChangesView({ changes }: { changes: WorkspacePendingChange[] }) {
+  const styles = useStyles2(getToolStyles);
+  return (
+    <details className={styles.collapsible} open={changes.length <= 3}>
+      <summary>Pending changes</summary>
+      <div className={styles.tableWrap}>
+        <table className={cx(styles.dataTable, styles.wideTable)}>
+          <thead>
+            <tr>
+              <th>File</th>
+              <th>Size</th>
+              <th>Checksum</th>
+              <th>Base</th>
+            </tr>
+          </thead>
+          <tbody>
+            {changes.map((change, index) => (
+              <tr key={`${change.path}:${index}`}>
+                <td className={styles.monospace}>{change.path}</td>
+                <td>{workspaceBytesSummary(change)}</td>
+                <td className={styles.monospace}>
+                  {change.checksum ? shortChecksum(change.checksum) : <span className={styles.muted}>-</span>}
+                </td>
+                <td className={styles.monospace}>
+                  {change.baseVersion ? shortChecksum(change.baseVersion) : <span className={styles.muted}>-</span>}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </details>
+  );
+}
+
+function WorkspaceFindingsTable({ findings }: { findings: WorkspaceFinding[] }) {
+  const styles = useStyles2(getToolStyles);
+  return (
+    <div className={styles.tableWrap}>
+      <table className={cx(styles.dataTable, styles.wideTable)}>
+        <thead>
+          <tr>
+            <th>Severity</th>
+            <th>Source</th>
+            <th>Line</th>
+            <th>Message</th>
+          </tr>
+        </thead>
+        <tbody>
+          {findings.map((finding, index) => (
+            <tr key={`${finding.sourcePath ?? 'finding'}:${finding.line ?? index}:${index}`}>
+              <td>
+                <WorkspaceStatusBadge status={finding.severity} />
+              </td>
+              <td className={styles.monospace}>{finding.sourcePath ?? <span className={styles.muted}>-</span>}</td>
+              <td>{finding.line ?? <span className={styles.muted}>-</span>}</td>
+              <td>{finding.message}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function WorkspaceStatusBadge({ status }: { status: string }) {
+  const normalized = status.toLowerCase();
+  const color: BadgeColor =
+    normalized === 'valid' || normalized === 'saved' || normalized === 'completed'
+      ? 'green'
+      : normalized === 'warning' || normalized === 'changed'
+        ? 'orange'
+        : normalized === 'error' || normalized === 'failed' || normalized === 'timed out'
+          ? 'red'
+          : 'blue';
+  return <Badge text={status} color={color} />;
+}
+
+function workspaceFileRefFromRecord(record: Record<string, unknown>): WorkspaceFileRef {
+  return {
+    name: stringField(record, 'name'),
+    path: stringField(record, 'path') ?? stringField(record, 'name') ?? '-',
+    type: stringField(record, 'type'),
+    layer: stringField(record, 'layer'),
+    language: stringField(record, 'language'),
+    version: stringField(record, 'version'),
+    checksum: stringField(record, 'checksum'),
+    readOnly: booleanField(record, 'readOnly'),
+  };
+}
+
+function workspaceSchemaRefFromRecord(record: Record<string, unknown>): WorkspaceFileRef {
+  return {
+    path: stringField(record, 'path') ?? stringField(record, 'schemaId') ?? '-',
+    type: 'schema',
+    language: stringField(record, 'language'),
+    version: stringField(record, 'schemaId'),
+    checksum: stringField(record, 'checksum'),
+    readOnly: true,
+  };
+}
+
+function workspacePendingChangeFromRecord(record: Record<string, unknown>): WorkspacePendingChange {
+  return {
+    path: stringField(record, 'path') ?? '-',
+    baseVersion: stringField(record, 'baseVersion'),
+    checksum: stringField(record, 'checksum'),
+    previousBytes: numberField(record, 'previousBytes'),
+    currentBytes: numberField(record, 'currentBytes') ?? numberField(record, 'bytes'),
+  };
+}
+
+function workspaceChangedFileFromRecord(record: Record<string, unknown>): WorkspaceChangedFile {
+  return {
+    ...workspacePendingChangeFromRecord(record),
+    addedLines: numberField(record, 'addedLines'),
+    removedLines: numberField(record, 'removedLines'),
+    firstChangedLine: numberField(record, 'firstChangedLine'),
+  };
+}
+
+function workspaceChangedRangeFromRecord(record: Record<string, unknown>) {
+  return {
+    startLine: numberField(record, 'startLine') ?? 0,
+    endLine: numberField(record, 'endLine') ?? 0,
+    newLines: numberField(record, 'newLines') ?? 0,
+  };
+}
+
+function workspaceChangedFileSummary(file: WorkspaceChangedFile) {
+  const parts = [
+    file.addedLines !== undefined ? `+${file.addedLines}` : undefined,
+    file.removedLines !== undefined ? `-${file.removedLines}` : undefined,
+    file.firstChangedLine ? `line ${file.firstChangedLine}` : undefined,
+  ].filter(Boolean);
+  return parts.length > 0 ? parts.join(' | ') : 'changed';
+}
+
+function workspaceBytesSummary(file: WorkspacePendingChange) {
+  if (file.previousBytes !== undefined && file.currentBytes !== undefined) {
+    return `${formatBytes(file.previousBytes)} -> ${formatBytes(file.currentBytes)}`;
+  }
+  return formatBytes(file.currentBytes) ?? '-';
+}
+
+function formatWorkspaceChangedRanges(ranges: WorkspaceMutationResult['changedRanges']) {
+  const visible = ranges.filter((range) => range.startLine > 0);
+  if (visible.length === 0) {
+    return undefined;
+  }
+  return visible
+    .slice(0, 3)
+    .map((range) =>
+      range.endLine < range.startLine
+        ? `${range.startLine} insert`
+        : `${range.startLine}-${range.endLine || range.startLine}`
+    )
+    .join(', ');
+}
+
 type JsonnetSearchResult = {
   total: number;
   capped: boolean;
@@ -3036,25 +4060,142 @@ function codeTokenClass(styles: ReturnType<typeof getToolStyles>, kind: CodeToke
   }
 }
 
-function DiffViewer({ diff }: { diff: string }) {
+function DiffViewer({ diff, defaultOpen }: { diff: string; defaultOpen?: boolean }) {
   const styles = useStyles2(getToolStyles);
+  const lines = optimizedUnifiedDiffLines(diff);
+  const summary = diffSummary(lines);
   return (
-    <pre className={styles.diffViewer}>
-      {diff.split('\n').map((line, index) => (
-        <div
-          className={cx(
-            styles.diffLine,
-            line.startsWith('+') && styles.diffAdd,
-            line.startsWith('-') && styles.diffDelete,
-            line.startsWith('@@') && styles.diffMeta
-          )}
-          key={`${index}:${line}`}
-        >
-          {line || ' '}
-        </div>
-      ))}
-    </pre>
+    <details className={styles.compactResult} open={defaultOpen}>
+      <summary className={styles.compactResultSummary}>
+        <Icon aria-hidden className={styles.toolTypeIcon} name="file-alt" />
+        <span className={styles.compactResultText}>{summary}</span>
+      </summary>
+      <div className={styles.compactResultBody}>
+        <pre className={styles.diffViewer}>
+          {lines.map((line, index) => {
+            const isMeta = isDiffMetadataLine(line);
+            return (
+              <div
+                className={cx(
+                  styles.diffLine,
+                  isMeta && styles.diffMeta,
+                  !isMeta && line.startsWith('+') && styles.diffAdd,
+                  !isMeta && line.startsWith('-') && styles.diffDelete
+                )}
+                key={`${index}:${line}`}
+              >
+                {line || ' '}
+              </div>
+            );
+          })}
+        </pre>
+      </div>
+    </details>
   );
+}
+
+function diffSummary(lines: string[]) {
+  const added = lines.filter((line) => !isDiffMetadataLine(line) && line.startsWith('+')).length;
+  const removed = lines.filter((line) => !isDiffMetadataLine(line) && line.startsWith('-')).length;
+  const hunks = lines.filter((line) => line.startsWith('@@')).length;
+  return summaryLine([
+    'Diff',
+    hunks > 0 ? formatLabeledCount(hunks, 'hunk', 'hunks') : undefined,
+    added > 0 || removed > 0 ? `+${formatCount(added)} / -${formatCount(removed)}` : undefined,
+  ]);
+}
+
+function optimizedUnifiedDiffLines(diff: string) {
+  const lines = diff.split('\n');
+  const optimized: string[] = [];
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index];
+    if (!line.startsWith('@@')) {
+      optimized.push(line);
+      continue;
+    }
+
+    const hunkLines: string[] = [];
+    let nextIndex = index + 1;
+    while (nextIndex < lines.length && !isDiffBoundaryLine(lines[nextIndex])) {
+      hunkLines.push(lines[nextIndex]);
+      nextIndex += 1;
+    }
+
+    optimized.push(...optimizeFullReplacementHunk(line, hunkLines));
+    index = nextIndex - 1;
+  }
+
+  return optimized;
+}
+
+function optimizeFullReplacementHunk(header: string, hunkLines: string[]) {
+  const normalizedHunkLines = trimTrailingEmptyDiffLine(hunkLines);
+  if (!shouldRediffHunk(normalizedHunkLines)) {
+    return [header, ...hunkLines];
+  }
+
+  const oldLines = normalizedHunkLines.filter((line) => line.startsWith('-')).map((line) => line.slice(1));
+  const newLines = normalizedHunkLines.filter((line) => line.startsWith('+')).map((line) => line.slice(1));
+  const range = parseUnifiedDiffHunkHeader(header);
+  const patch = structuredPatch('', '', diffLinesToText(oldLines), diffLinesToText(newLines), '', '', {
+    context: 3,
+  });
+  const optimizedHunkLines = patch.hunks.flatMap((hunk) => [
+    `@@ -${formatUnifiedDiffRange((range?.oldStart ?? 1) + hunk.oldStart - 1, hunk.oldLines)} +${formatUnifiedDiffRange(
+      (range?.newStart ?? 1) + hunk.newStart - 1,
+      hunk.newLines
+    )} @@`,
+    ...hunk.lines,
+  ]);
+
+  return optimizedHunkLines.length > 0 && optimizedHunkLines.length < normalizedHunkLines.length + 1
+    ? optimizedHunkLines
+    : [header, ...hunkLines];
+}
+
+function trimTrailingEmptyDiffLine(lines: string[]) {
+  return lines[lines.length - 1] === '' ? lines.slice(0, -1) : lines;
+}
+
+function shouldRediffHunk(hunkLines: string[]) {
+  if (hunkLines.length < 6) {
+    return false;
+  }
+
+  const hasRemoved = hunkLines.some((line) => line.startsWith('-'));
+  const hasAdded = hunkLines.some((line) => line.startsWith('+'));
+  const hasContext = hunkLines.some((line) => line.startsWith(' '));
+  const hasUnsupportedLine = hunkLines.some((line) => !line.startsWith('-') && !line.startsWith('+'));
+  return hasRemoved && hasAdded && !hasContext && !hasUnsupportedLine;
+}
+
+function parseUnifiedDiffHunkHeader(header: string) {
+  const match = /^@@\s+-(\d+)(?:,\d+)?\s+\+(\d+)(?:,\d+)?/.exec(header);
+  if (!match) {
+    return undefined;
+  }
+
+  return {
+    oldStart: Number(match[1]),
+    newStart: Number(match[2]),
+  };
+}
+
+function diffLinesToText(lines: string[]) {
+  return lines.length > 0 ? `${lines.join('\n')}\n` : '';
+}
+
+function formatUnifiedDiffRange(start: number, lines: number) {
+  return lines === 1 ? String(start) : `${start},${lines}`;
+}
+
+function isDiffBoundaryLine(line: string) {
+  return line.startsWith('@@') || line.startsWith('---') || line.startsWith('+++') || line.startsWith('Index:');
+}
+
+function isDiffMetadataLine(line: string) {
+  return line.startsWith('@@') || line.startsWith('---') || line.startsWith('+++') || line.startsWith('Index:');
 }
 
 function asSubagentDetails(details: unknown): SubagentRunDetails | undefined {
@@ -4420,6 +5561,58 @@ const getToolStyles = (theme: GrafanaTheme2) => ({
     borderRadius: theme.shape.radius.default,
     background: theme.colors.background.primary,
   }),
+  toolCallCollapsed: css({
+    display: 'grid',
+    minWidth: 0,
+    maxWidth: '100%',
+    border: `1px solid ${theme.colors.border.weak}`,
+    borderRadius: theme.shape.radius.default,
+    background: theme.colors.background.primary,
+    '&[open]': {
+      gap: theme.spacing(1),
+      paddingBottom: theme.spacing(1),
+    },
+  }),
+  toolCallCollapsedSummary: css({
+    display: 'grid',
+    gridTemplateColumns: 'auto auto auto minmax(0, 1fr)',
+    alignItems: 'center',
+    gap: theme.spacing(1),
+    minWidth: 0,
+    padding: theme.spacing(0.75, 1),
+    cursor: 'pointer',
+    listStyle: 'none',
+    '&::marker': {
+      content: '""',
+    },
+    '&::-webkit-details-marker': {
+      display: 'none',
+    },
+    '&:focus-visible': {
+      outline: `2px solid ${theme.colors.primary.border}`,
+      outlineOffset: theme.spacing(0.5),
+      borderRadius: theme.shape.radius.default,
+    },
+    '& strong': {
+      overflow: 'hidden',
+      textOverflow: 'ellipsis',
+      whiteSpace: 'nowrap',
+    },
+  }),
+  toolCallCollapsedBody: css({
+    display: 'grid',
+    gap: theme.spacing(1),
+    minWidth: 0,
+    padding: theme.spacing(0, 1),
+  }),
+  toolCallSummaryText: css({
+    minWidth: 0,
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
+    color: theme.colors.text.secondary,
+    fontSize: theme.typography.bodySmall.fontSize,
+  }),
   toolCallHeader: css({
     display: 'flex',
     alignItems: 'center',
@@ -4510,6 +5703,53 @@ const getToolStyles = (theme: GrafanaTheme2) => ({
   resultSummary: css({
     color: theme.colors.text.secondary,
     fontSize: theme.typography.bodySmall.fontSize,
+  }),
+  compactResult: css({
+    display: 'grid',
+    minWidth: 0,
+    maxWidth: '100%',
+    border: `1px solid ${theme.colors.border.weak}`,
+    borderRadius: theme.shape.radius.default,
+    background: theme.colors.background.primary,
+    '&[open]': {
+      gap: theme.spacing(1),
+      paddingBottom: theme.spacing(1),
+    },
+  }),
+  compactResultSummary: css({
+    display: 'grid',
+    gridTemplateColumns: 'auto minmax(0, 1fr)',
+    alignItems: 'center',
+    gap: theme.spacing(1),
+    minWidth: 0,
+    padding: theme.spacing(0.75, 1),
+    cursor: 'pointer',
+    listStyle: 'none',
+    color: theme.colors.text.secondary,
+    fontSize: theme.typography.bodySmall.fontSize,
+    '&::marker': {
+      content: '""',
+    },
+    '&::-webkit-details-marker': {
+      display: 'none',
+    },
+    '&:focus-visible': {
+      outline: `2px solid ${theme.colors.primary.border}`,
+      outlineOffset: theme.spacing(0.5),
+      borderRadius: theme.shape.radius.default,
+    },
+  }),
+  compactResultText: css({
+    minWidth: 0,
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
+  }),
+  compactResultBody: css({
+    display: 'grid',
+    gap: theme.spacing(1),
+    minWidth: 0,
+    padding: theme.spacing(0, 1),
   }),
   prometheusQueryPlanList: css({
     display: 'grid',

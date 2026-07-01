@@ -16,5 +16,6 @@ apps:
       isOpenAIAPIKeySet: true
       allowedPrometheusDatasourceUids: ['prometheus']
       customSkills: []
+      enableAgentContractSample: true
     secureJsonData:
       openAIAPIKey: $__env{OPENAI_API_KEY}

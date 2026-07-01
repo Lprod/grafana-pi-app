@@ -24,7 +24,7 @@ import {
   TextArea,
   useStyles2,
 } from '@grafana/ui';
-import { FolderPicker, locationService, usePluginUserStorage } from '@grafana/runtime';
+import { FolderPicker, getBackendSrv, locationService, usePluginUserStorage } from '@grafana/runtime';
 import { useRestrictedGrafanaApis, type DashboardMutationAPI, type GrafanaTheme2 } from '@grafana/data';
 import { PLUGIN_BASE_URL, PLUGIN_ID } from '../../constants';
 import { testIds } from '../../components/testIds';
@@ -95,6 +95,16 @@ import {
   type ChatRunSnapshot,
   type ChatToolConfirmationHandler,
 } from './chatRunRegistry';
+import {
+  agentWorkspaceLaunchFromSearch,
+  agentWorkspaceSessionTitle,
+  removeAgentWorkspaceLaunchParams,
+  renderAgentWorkspaceContextBlock,
+  renderAgentWorkspaceSystemPrompt,
+} from './agentWorkspace/launch';
+import { createAgentWorkspaceState } from './agentWorkspace/providerClient';
+import { createAgentWorkspaceTools } from './agentWorkspace/tools';
+import type { AgentWorkspaceRuntime, AgentWorkspaceState } from './agentWorkspace/types';
 
 type ChatSceneObjectState = SceneObjectState;
 
@@ -144,6 +154,8 @@ const PERSISTENT_WRITE_TOOLS = new Set([
   'save_dashboard',
   'upload_dashboard',
   'delete_dashboard',
+  'save_changes',
+  'submit_changes',
   ...LIVE_DASHBOARD_WRITE_TOOLS,
 ]);
 const ACTIVE_CHAT_LEAVE_MESSAGE =
@@ -168,6 +180,10 @@ type BenchmarkAgentEvent = {
   type: AgentEvent['type'];
   timestamp: number;
   [key: string]: unknown;
+};
+
+type PluginSettingsResponse = {
+  jsonData?: PiAppJsonData;
 };
 
 const BENCHMARK_EVENT_CONSOLE_PREFIX = '__PI_AGENT_BENCHMARK_EVENT__ ';
@@ -207,7 +223,12 @@ export function ChatApp({
   const { dashboardMutationAPI } = useRestrictedGrafanaApis();
   const liveDashboardEditingAvailable = hasActiveDashboardMutationCommands(dashboardMutationAPI);
   const pluginMeta = usePluginMeta();
-  const jsonData = useMemo(() => (pluginMeta?.jsonData ?? {}) as PiAppJsonData, [pluginMeta?.jsonData]);
+  const pluginMetaJsonData = useMemo(() => (pluginMeta?.jsonData ?? {}) as PiAppJsonData, [pluginMeta?.jsonData]);
+  const [settingsJsonData, setSettingsJsonData] = useState<PiAppJsonData | null>();
+  const jsonData = useMemo(
+    () => ({ ...(settingsJsonData ?? {}), ...pluginMetaJsonData }),
+    [pluginMetaJsonData, settingsJsonData]
+  );
   const llmModel = useMemo(() => createOpenAICompatibleModel(jsonData), [jsonData]);
   const thinkingLevel = useMemo(() => getConfiguredThinkingLevel(jsonData), [jsonData]);
   const skills = useMemo(() => getGrafanaSkills(jsonData), [jsonData]);
@@ -228,7 +249,31 @@ export function ChatApp({
   const artifactsRef = useRef<Record<string, Artifact>>({});
   const artifactCounterRef = useRef(0);
   const dashboardLaunchRef = useRef<DashboardAssistantLaunch>();
+  const agentWorkspaceRef = useRef<AgentWorkspaceState>();
   const [investigationReport, setInvestigationReport] = useState<InvestigationReport>();
+  useEffect(() => {
+    if (pluginMetaJsonData.isOpenAIAPIKeySet) {
+      return;
+    }
+
+    let mounted = true;
+    getBackendSrv()
+      .get<PluginSettingsResponse>(`/api/plugins/${PLUGIN_ID}/settings`)
+      .then((settings) => {
+        if (mounted) {
+          setSettingsJsonData(settings.jsonData ?? {});
+        }
+      })
+      .catch(() => {
+        if (mounted) {
+          setSettingsJsonData(null);
+        }
+      });
+
+    return () => {
+      mounted = false;
+    };
+  }, [pluginMetaJsonData.isOpenAIAPIKeySet]);
   const setVirtualJsonnetFile = useCallback((file: VirtualJsonnetFileSnapshot, options?: { hydrated?: boolean }) => {
     const path = normalizeJsonnetPath(file.path);
     const snapshot = { ...file, path };
@@ -263,6 +308,15 @@ export function ChatApp({
       setReport: setInvestigationReportSnapshot,
     }),
     [setInvestigationReportSnapshot]
+  );
+  const agentWorkspaceRuntime = useMemo<AgentWorkspaceRuntime>(
+    () => ({
+      getState: () => agentWorkspaceRef.current,
+      setState: (state) => {
+        agentWorkspaceRef.current = state;
+      },
+    }),
+    []
   );
   const setArtifactSnapshots = useCallback((artifacts: Record<string, Artifact>, counter?: number) => {
     const compacted = compactArtifacts(artifacts);
@@ -508,6 +562,26 @@ export function ChatApp({
 
   const buildSkillRuntime = useCallback(
     (prompt: string) => {
+      const agentWorkspace = agentWorkspaceRef.current;
+      if (agentWorkspace) {
+        const toolSet = createAgentWorkspaceTools(agentWorkspaceRuntime);
+        return {
+          systemPrompt: [
+            renderAgentWorkspaceSystemPrompt(agentWorkspace),
+            renderAgentWorkspaceContextBlock(agentWorkspace),
+          ]
+            .filter(Boolean)
+            .join('\n\n'),
+          tools: toolSet.all,
+          skillSelection: {
+            activeSkills: [],
+            activeSkillNames: [],
+            toolGroups: [],
+            explicitSkillNames: [],
+          },
+        };
+      }
+
       const sidebarPageContext = isSidebarVariant
         ? buildAssistantSidebarPageContextSnapshot(sidebarRouteRef.current, { liveDashboardEditingAvailable })
         : undefined;
@@ -558,6 +632,7 @@ export function ChatApp({
       emitRuntimeToolUpdate,
       dashboardMutationAPI,
       dashboardSaveFolderRuntime,
+      agentWorkspaceRuntime,
       isSidebarVariant,
       liveDashboardEditingAvailable,
       jsonData,
@@ -697,6 +772,7 @@ export function ChatApp({
     const id = createSessionId();
     stopCurrentAgentForSessionChange();
     dashboardLaunchRef.current = undefined;
+    agentWorkspaceRef.current = undefined;
     clearChatSessionParamFromLocation();
     sessionIdRef.current = id;
     titleRef.current = 'New chat';
@@ -723,6 +799,7 @@ export function ChatApp({
       const title = dashboardAssistantSessionTitle(launch);
       stopCurrentAgentForSessionChange();
       dashboardLaunchRef.current = launch;
+      agentWorkspaceRef.current = undefined;
       sessionIdRef.current = id;
       titleRef.current = title;
       virtualJsonnetFilesRef.current = {};
@@ -736,6 +813,34 @@ export function ChatApp({
       setCurrentTitle(title);
       setError(undefined);
       setInput(dashboardAssistantPrompt(launch));
+      setToolRuns({});
+      setInvestigationReport(undefined);
+      settleToolConfirmation(false);
+      buildAgent([]);
+    },
+    [buildAgent, clearArtifacts, setRunStatusSnapshot, settleToolConfirmation, stopCurrentAgentForSessionChange]
+  );
+
+  const startAgentWorkspaceLaunchSession = useCallback(
+    (state: AgentWorkspaceState) => {
+      const id = createSessionId();
+      const title = agentWorkspaceSessionTitle(state);
+      stopCurrentAgentForSessionChange();
+      dashboardLaunchRef.current = undefined;
+      agentWorkspaceRef.current = state;
+      sessionIdRef.current = id;
+      titleRef.current = title;
+      virtualJsonnetFilesRef.current = {};
+      virtualJsonnetHydratedRef.current = {};
+      investigationReportRef.current = undefined;
+      setRunStatusSnapshot(undefined);
+      clearArtifacts();
+      autoScrollRef.current = true;
+      setIsAutoScrollPaused(false);
+      setCurrentSessionId(id);
+      setCurrentTitle(title);
+      setError(undefined);
+      setInput(state.launch.initialPrompt ?? '');
       setToolRuns({});
       setInvestigationReport(undefined);
       settleToolConfirmation(false);
@@ -773,6 +878,7 @@ export function ChatApp({
       stopCurrentAgentForSessionChange();
       setChatRunConfirmationHandler(run.id, requestToolConfirmation);
       dashboardLaunchRef.current = run.dashboardLaunch;
+      agentWorkspaceRef.current = undefined;
       sessionIdRef.current = run.id;
       titleRef.current = run.title;
       virtualJsonnetFilesRef.current = run.virtualJsonnetFiles;
@@ -1119,6 +1225,7 @@ export function ChatApp({
       const stored = JSON.parse(raw) as StoredSession;
       stopCurrentAgentForSessionChange();
       dashboardLaunchRef.current = undefined;
+      agentWorkspaceRef.current = undefined;
       sessionIdRef.current = id;
       titleRef.current = stored.title;
       setChatSessionParamInLocation(id);
@@ -1149,9 +1256,44 @@ export function ChatApp({
     ]
   );
 
+  const initialLoadHandlersRef = useRef({
+    attachLiveRun,
+    loadSession,
+    startAgentWorkspaceLaunchSession,
+    startDashboardLaunchSession,
+    startNewSession,
+    stopCurrentAgentForSessionChange,
+  });
+  const initialLaunchPropsRef = useRef({ launchContextId, sessionId });
+  const initialConfigPending = !pluginMetaJsonData.isOpenAIAPIKeySet && settingsJsonData === undefined;
+
+  useLayoutEffect(() => {
+    initialLoadHandlersRef.current = {
+      attachLiveRun,
+      loadSession,
+      startAgentWorkspaceLaunchSession,
+      startDashboardLaunchSession,
+      startNewSession,
+      stopCurrentAgentForSessionChange,
+    };
+    initialLaunchPropsRef.current = { launchContextId, sessionId };
+  }, [
+    attachLiveRun,
+    launchContextId,
+    loadSession,
+    sessionId,
+    startAgentWorkspaceLaunchSession,
+    startDashboardLaunchSession,
+    startNewSession,
+    stopCurrentAgentForSessionChange,
+  ]);
+
   useEffect(() => {
+    if (initialConfigPending) {
+      return undefined;
+    }
     if (initialLoadStartedRef.current) {
-      return;
+      return undefined;
     }
     initialLoadStartedRef.current = true;
     let mounted = true;
@@ -1167,50 +1309,59 @@ export function ChatApp({
       setSessions(parsed);
 
       const location = locationService.getLocation();
-      const launch = launchContextId
-        ? consumeDashboardAssistantStoredLaunch(launchContextId)
+      const agentWorkspaceLaunch = agentWorkspaceLaunchFromSearch(location.search);
+      if (agentWorkspaceLaunch) {
+        const state = await createAgentWorkspaceState(agentWorkspaceLaunch);
+        if (!mounted) {
+          return;
+        }
+        initialLoadHandlersRef.current.startAgentWorkspaceLaunchSession(state);
+        locationService.partial(removeAgentWorkspaceLaunchParams(), true);
+        return;
+      }
+
+      const { launchContextId: initialLaunchContextId, sessionId: initialSessionProp } = initialLaunchPropsRef.current;
+      const launch = initialLaunchContextId
+        ? consumeDashboardAssistantStoredLaunch(initialLaunchContextId)
         : consumeDashboardAssistantLaunch(location.search);
       if (launch) {
-        startDashboardLaunchSession(launch);
-        if (!launchContextId) {
+        initialLoadHandlersRef.current.startDashboardLaunchSession(launch);
+        if (!initialLaunchContextId) {
           locationService.partial(removeDashboardAssistantLaunchParams(), true);
         }
         return;
       }
 
-      const initialSessionId = sessionId ?? chatSessionIdFromSearch(location.search);
+      const initialSessionId = initialSessionProp ?? chatSessionIdFromSearch(location.search);
       const liveRun = getChatRun(initialSessionId);
-      if (liveRun && attachLiveRun(liveRun)) {
+      if (liveRun && initialLoadHandlersRef.current.attachLiveRun(liveRun)) {
         return;
       }
-      if (initialSessionId && (await loadSession(initialSessionId))) {
+      if (initialSessionId && (await initialLoadHandlersRef.current.loadSession(initialSessionId))) {
         return;
       }
 
-      startNewSession();
+      initialLoadHandlersRef.current.startNewSession();
     }
 
     loadInitialState().catch((err) => {
       if (!mounted) {
         return;
       }
-      setError(err instanceof Error ? err.message : String(err));
-      startNewSession();
+      const message = err instanceof Error ? err.message : String(err);
+      try {
+        initialLoadHandlersRef.current.startNewSession();
+      } catch {
+        // Keep the original startup error visible below.
+      }
+      setError(message);
     });
 
     return () => {
       mounted = false;
-      stopCurrentAgentForSessionChange({ preserveLiveRun: true });
+      initialLoadHandlersRef.current.stopCurrentAgentForSessionChange({ preserveLiveRun: true });
     };
-  }, [
-    attachLiveRun,
-    launchContextId,
-    loadSession,
-    sessionId,
-    startDashboardLaunchSession,
-    startNewSession,
-    stopCurrentAgentForSessionChange,
-  ]);
+  }, [initialConfigPending]);
 
   const deleteSession = async (id: string) => {
     const next = sessions.filter((session) => session.id !== id);
@@ -1456,6 +1607,7 @@ export function ChatApp({
 
         stopCurrentAgentForSessionChange();
         dashboardLaunchRef.current = undefined;
+        agentWorkspaceRef.current = undefined;
         sessionIdRef.current = id;
         titleRef.current = title;
         virtualJsonnetFilesRef.current = imported.virtualJsonnetFiles ?? {};
@@ -2093,6 +2245,21 @@ function buildToolConfirmation(toolCallId: string, toolName: string, args: unkno
       ]),
       args,
       saveDashboardFolder: folderUid ? undefined : { title: GENERAL_FOLDER_TITLE },
+    };
+  }
+
+  if (toolName === 'save_changes' || toolName === 'submit_changes') {
+    return {
+      id,
+      toolCallId,
+      toolName,
+      title: toolName === 'save_changes' ? 'Approve workspace save' : 'Approve workspace submit',
+      description:
+        'The assistant wants to persist Coding Agent App Contract workspace changes through the provider backend. Approve only if the validation and diff match the change you requested.',
+      fields: compactConfirmationFields([
+        confirmationField('Action', toolName === 'save_changes' ? 'Save changes' : 'Submit changes'),
+      ]),
+      args,
     };
   }
 

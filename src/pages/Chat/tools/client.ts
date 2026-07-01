@@ -27,7 +27,15 @@ export async function pluginResourceFetch<T>(
   path: string,
   options: { method?: string; data?: unknown; params?: Record<string, unknown> } = {}
 ): Promise<T> {
-  return backendFetch<T>(`/api/plugins/${PLUGIN_ID}/resources${path}`, options);
+  return pluginResourceFetchForPlugin<T>(PLUGIN_ID, path, options);
+}
+
+export async function pluginResourceFetchForPlugin<T>(
+  pluginId: string,
+  path: string,
+  options: { method?: string; data?: unknown; params?: Record<string, unknown> } = {}
+): Promise<T> {
+  return backendFetch<T>(`/api/plugins/${encodeURIComponent(pluginId)}/resources${path}`, options);
 }
 
 export function formatBackendFetchError(error: unknown): string {

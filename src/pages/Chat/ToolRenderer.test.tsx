@@ -1716,4 +1716,305 @@ describe('ToolRenderer', () => {
     expect(container.textContent).toContain('2');
     expect(container.textContent).not.toContain('Live dashboard mutation succeeded');
   });
+
+  it('renders coding-agent workspace tool calls as compact summaries', () => {
+    const { container } = render(
+      <ContentBlocks
+        content={[
+          {
+            type: 'toolCall',
+            name: 'bash',
+            arguments: {
+              command:
+                'jq \'.resources["web-01"].memoryMiB = 8192\' /workspace/platform/shop/prod/virtual-machines.json',
+              timeoutMs: 5000,
+            },
+          },
+          {
+            type: 'toolCall',
+            name: 'read',
+            arguments: {
+              path: '/workspace/platform/shop/prod/virtual-machines.json',
+              offset: 1,
+              limit: 20,
+            },
+          },
+          {
+            type: 'toolCall',
+            name: 'validate_workspace',
+            arguments: {},
+          },
+        ]}
+      />
+    );
+
+    const summaries = Array.from(container.querySelectorAll('details > summary')).map((summary) => summary.textContent);
+    expect(summaries).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining('Run workspace bash'),
+        expect.stringContaining('Read workspace file'),
+        expect.stringContaining('Validate workspace overlay'),
+      ])
+    );
+    expect(summaries.some((summary) => summary?.includes('/workspace/platform/shop/prod/virtual-machines.json'))).toBe(
+      false
+    );
+    expect(summaries.some((summary) => summary?.includes('jq'))).toBe(false);
+    expect(Array.from(container.querySelectorAll('details')).every((details) => !details.hasAttribute('open'))).toBe(
+      true
+    );
+    expect(container.textContent).toContain('Run workspace bash');
+    expect(container.textContent).toContain('Read workspace file');
+    expect(container.textContent).toContain('Validate workspace overlay');
+    expect(container.textContent).toContain('/workspace/platform/shop/prod/virtual-machines.json');
+    expect(container.textContent).not.toContain('"command"');
+    expect(container.textContent).not.toContain('"path"');
+  });
+
+  it('renders workspace metadata, search, and read results without raw JSON', () => {
+    const { container } = render(
+      <>
+        <ToolResultMessageBody
+          toolName="workspace_info"
+          content={[{ type: 'text', text: '{}' }]}
+          details={{
+            provider: { pluginId: 'grafana-assistant-app' },
+            workspaceId: 'sample_wks_1',
+            workspaceKind: 'sample-resource-workspace',
+            displayName: 'Sample VM workspace',
+            rootPath: '/workspace',
+            baseVersion: 'sample-main:abc123',
+            files: [
+              {
+                path: '/workspace/platform/shop/prod/virtual-machines.json',
+                language: 'json',
+                version: 'blob:abc123',
+                readOnly: false,
+              },
+            ],
+            schemas: [{ schemaId: 'virtual-machine.v1', path: '/schemas/virtual-machine.v1.schema.json' }],
+            limits: { maxReadLines: 200 },
+            pendingChanges: [],
+          }}
+        />
+        <ToolResultMessageBody
+          toolName="grep"
+          content={[{ type: 'text', text: '{}' }]}
+          details={{
+            matchCount: 1,
+            matches: [
+              {
+                path: '/workspace/platform/shop/prod/virtual-machines.json',
+                line: 6,
+                text: '      "memoryMiB": 4096',
+              },
+            ],
+          }}
+        />
+        <ToolResultMessageBody
+          toolName="read"
+          content={[{ type: 'text', text: '{}' }]}
+          details={{
+            path: '/workspace/platform/shop/prod/virtual-machines.json',
+            language: 'json',
+            version: 'blob:abc123',
+            checksum: 'sha256:abc123',
+            totalLines: 9,
+            lines: [
+              { line: 5, text: '      "cpu": 2,' },
+              { line: 6, text: '      "memoryMiB": 4096' },
+            ],
+          }}
+        />
+      </>
+    );
+
+    expect(container.textContent).toContain('Sample VM workspace');
+    expect(container.textContent).toContain('sample_wks_1');
+    expect(container.textContent).toContain('virtual-machine.v1');
+    expect(container.textContent).toContain('1 matches');
+    const readSummary = Array.from(container.querySelectorAll('details > summary')).find((summary) =>
+      summary.textContent?.includes('/workspace/platform/shop/prod/virtual-machines.json | json | lines 5-6 of 9')
+    );
+    expect(readSummary).toBeTruthy();
+    expect((readSummary?.parentElement as HTMLDetailsElement | undefined)?.open).toBe(false);
+    expect(readSummary?.textContent).not.toContain('Read only');
+    expect(readSummary?.textContent).not.toContain('Version');
+    expect(readSummary?.textContent).not.toContain('Checksum');
+    expect(readSummary?.textContent).not.toContain('"memoryMiB": 4096');
+    expect(container.textContent).toContain('"memoryMiB": 4096');
+    expect(container.textContent).toContain('5-6 of 9');
+    expect(container.textContent).not.toContain('"workspaceKind"');
+    expect(container.textContent).not.toContain('"matchCount"');
+  });
+
+  it('renders workspace mutation, validation, preview, and save results with diffs', () => {
+    const diff =
+      '--- /workspace/platform/shop/prod/virtual-machines.json\n' +
+      '+++ /workspace/platform/shop/prod/virtual-machines.json\n' +
+      '@@ sample diff @@\n' +
+      '-{\n' +
+      '-  "resources": {\n' +
+      '-    "web-01": {\n' +
+      '-      "kind": "VirtualMachine",\n' +
+      '-      "cpu": 2,\n' +
+      '-      "memoryMiB": 4096\n' +
+      '-    }\n' +
+      '-  }\n' +
+      '-}\n' +
+      '+{\n' +
+      '+  "resources": {\n' +
+      '+    "web-01": {\n' +
+      '+      "kind": "VirtualMachine",\n' +
+      '+      "cpu": 2,\n' +
+      '+      "memoryMiB": 8192\n' +
+      '+    }\n' +
+      '+  }\n' +
+      '+}\n';
+
+    const validation = {
+      status: 'warning',
+      summary: 'Workspace is valid with warnings.',
+      findings: [
+        {
+          severity: 'warning',
+          message: 'web-01.memoryMiB is high',
+          sourcePath: '/workspace/platform/shop/prod/virtual-machines.json',
+          line: 6,
+        },
+      ],
+      details: { 'web-01': { memoryMiB: 8192 } },
+    };
+
+    const changedFile = {
+      path: '/workspace/platform/shop/prod/virtual-machines.json',
+      baseVersion: 'sha256:old',
+      checksum: 'sha256:new',
+      addedLines: 1,
+      removedLines: 1,
+      firstChangedLine: 6,
+      previousBytes: 119,
+      currentBytes: 119,
+    };
+
+    const { container } = render(
+      <>
+        <ToolResultMessageBody
+          toolName="edit"
+          content={[{ type: 'text', text: '{}' }]}
+          details={{
+            path: changedFile.path,
+            version: 'overlay:1',
+            checksum: 'fnv32:40fbcc5a',
+            changedRanges: [{ startLine: 6, endLine: 6, newLines: 1 }],
+            diff,
+            pendingChanges: [changedFile],
+          }}
+        />
+        <ToolResultMessageBody
+          toolName="validate_workspace"
+          content={[{ type: 'text', text: '{}' }]}
+          details={validation}
+        />
+        <ToolResultMessageBody
+          toolName="preview_diff"
+          content={[{ type: 'text', text: '{}' }]}
+          details={{
+            status: 'changed',
+            workspaceId: 'sample_wks_1',
+            baseVersion: 'sample-main:old',
+            changedFiles: [changedFile],
+            validation,
+            diff,
+          }}
+        />
+        <ToolResultMessageBody
+          toolName="save_changes"
+          content={[{ type: 'text', text: '{}' }]}
+          details={{
+            status: 'saved',
+            workspaceId: 'sample_wks_1',
+            savedVersion: 'sample-save:1',
+            changedFiles: [changedFile],
+            validation,
+            diff,
+            audit: { action: 'save_changes', provider: 'grafana-assistant-app' },
+          }}
+        />
+      </>
+    );
+
+    expect(container.textContent).toContain('Workspace is valid with warnings.');
+    expect(container.textContent).toContain('web-01.memoryMiB is high');
+    expect(container.textContent).not.toContain(
+      'Workspace file edited | /workspace/platform/shop/prod/virtual-machines.json | 6-6'
+    );
+    expect(container.textContent).not.toContain('Version');
+    expect(container.textContent).not.toContain('Checksum');
+    expect(container.textContent).not.toContain('Pending');
+    expect(container.textContent).not.toContain('Saved version');
+    expect(container.textContent).not.toContain('Changed files');
+    expect(Array.from(container.querySelectorAll('th')).map((header) => header.textContent)).not.toEqual(
+      expect.arrayContaining(['File', 'Changed', 'Size'])
+    );
+    const diffSummaries = Array.from(container.querySelectorAll('details > summary')).filter((summary) =>
+      summary.textContent?.includes('Diff | 1 hunk | +1 / -1')
+    );
+    expect(diffSummaries).toHaveLength(3);
+    expect(diffSummaries.every((summary) => (summary.parentElement as HTMLDetailsElement | null)?.open)).toBe(true);
+    expect(diffSummaries.some((summary) => summary.textContent?.includes('memoryMiB'))).toBe(false);
+    expect(container.textContent).toContain('-      "memoryMiB": 4096');
+    expect(container.textContent).toContain('+      "memoryMiB": 8192');
+    expect(container.textContent).toContain('       "cpu": 2,');
+    expect(container.textContent).not.toContain('-      "cpu": 2,');
+    expect(container.textContent).not.toContain('+      "cpu": 2,');
+    expect(container.textContent).not.toContain('-{');
+    expect(container.textContent).not.toContain('+{');
+    expect(container.textContent).not.toContain('"changedFiles"');
+    expect(container.textContent).not.toContain('"pendingChanges"');
+  });
+
+  it('renders bash results with command output and changed files', () => {
+    const { container } = render(
+      <ToolResultMessageBody
+        toolName="bash"
+        content={[{ type: 'text', text: '{}' }]}
+        details={{
+          command: 'jq . /workspace/platform/shop/prod/virtual-machines.json',
+          cwd: '/workspace',
+          exitCode: 0,
+          stdout: '{ "ok": true }\n',
+          stderr: '',
+          stdoutTruncated: false,
+          stderrTruncated: false,
+          timedOut: false,
+          changedFiles: [
+            {
+              path: '/workspace/platform/shop/prod/virtual-machines.json',
+              bytes: 119,
+              checksum: 'fnv32:40fbcc5a',
+              version: 'overlay:1',
+            },
+          ],
+          pendingChanges: [
+            {
+              path: '/workspace/platform/shop/prod/virtual-machines.json',
+              baseVersion: 'sha256:old',
+              checksum: 'fnv32:40fbcc5a',
+              previousBytes: 119,
+              currentBytes: 119,
+            },
+          ],
+        }}
+      />
+    );
+
+    expect(container.textContent).toContain('Exit code');
+    expect(container.textContent).toContain('jq . /workspace/platform/shop/prod/virtual-machines.json');
+    expect(container.textContent).toContain('{ "ok": true }');
+    expect(container.textContent).toContain('Changed files');
+    expect(container.textContent).toContain('Pending changes');
+    expect(container.textContent).not.toContain('"stdout"');
+    expect(container.textContent).not.toContain('"changedFiles"');
+  });
 });
