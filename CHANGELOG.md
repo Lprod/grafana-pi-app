@@ -1,3 +1,10 @@
+## [2.14.2](https://github.com/elohmeier/grafana-pi-app/compare/v2.14.1...v2.14.2) (2026-07-01)
+
+
+### Bug Fixes
+
+* **metrics:** support v2 dashboard specs ([2cb6413](https://github.com/elohmeier/grafana-pi-app/commit/2cb6413dc2e18452de9a9b9a741c4c32b7541194))
+
 ## [2.14.1](https://github.com/elohmeier/grafana-pi-app/compare/v2.14.0...v2.14.1) (2026-07-01)
 
 
