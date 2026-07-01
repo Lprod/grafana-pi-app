@@ -1,3 +1,10 @@
+# [2.13.0](https://github.com/elohmeier/grafana-pi-app/compare/v2.12.0...v2.13.0) (2026-07-01)
+
+
+### Features
+
+* support generic workspace launches ([d9ebe34](https://github.com/elohmeier/grafana-pi-app/commit/d9ebe341de36bc6dfbbfbe27add13878b094fd79))
+
 # [2.12.0](https://github.com/elohmeier/grafana-pi-app/compare/v2.11.1...v2.12.0) (2026-07-01)
 
 
