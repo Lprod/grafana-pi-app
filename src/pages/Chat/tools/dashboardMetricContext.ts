@@ -15,6 +15,8 @@ const MAX_OUTPUT_LENGTH = 100000;
 type DashboardResponse = {
   dashboard?: Record<string, any>;
   meta?: Record<string, any>;
+  metadata?: Record<string, any>;
+  spec?: Record<string, any>;
 };
 
 type DashboardMetricContextParams = {
@@ -335,7 +337,7 @@ function makeInspectDashboardMetricUsageTool(toolConfig: GrafanaToolConfig): Age
       try {
         throwIfAborted(signal);
         const response = await fetchDashboard(args.uid);
-        const result = extractDashboardMetricUsage(response.dashboard ?? {}, {
+        const result = extractDashboardMetricUsage(dashboardSpecFromResponse(response), {
           meta: response.meta,
           uid: args.uid,
           datasourceUid: args.datasourceUid,
@@ -516,7 +518,7 @@ async function buildDashboardMetricUsageSearch({
       const response = await fetchDashboard(item.uid);
       dashboards.push(
         withErrorContext(`extract dashboard metric usage for ${item.uid}`, () =>
-          extractDashboardMetricUsage(response.dashboard ?? {}, {
+          extractDashboardMetricUsage(dashboardSpecFromResponse(response), {
             meta: {
               ...response.meta,
               folderTitle: response.meta?.folderTitle ?? item.folderTitle,
@@ -592,7 +594,7 @@ async function metricUsageCorpusForDashboard({
   const response = await fetchDashboard(uid);
   return metricUsageCorpus({
     dashboards: [
-      extractDashboardMetricUsage(response.dashboard ?? {}, {
+      extractDashboardMetricUsage(dashboardSpecFromResponse(response), {
         meta: response.meta,
         uid,
         datasourceUid: params.datasourceUid,
@@ -642,6 +644,31 @@ function metricUsageCorpus({
 
 async function fetchDashboard(uid: string): Promise<DashboardResponse> {
   return fetchGrafanaApi<DashboardResponse>(`/api/dashboards/uid/${encodeURIComponent(uid)}`);
+}
+
+function dashboardSpecFromResponse(response: DashboardResponse): Record<string, any> {
+  const nestedSpec = recordField(response.dashboard, 'spec');
+  if (isDashboardV2Spec(response.dashboard) || isLegacyDashboardSpec(response.dashboard)) {
+    return response.dashboard;
+  }
+  if (isDashboardV2Spec(nestedSpec) || isLegacyDashboardSpec(nestedSpec)) {
+    return nestedSpec;
+  }
+  if (isDashboardV2Spec(response.spec) || isLegacyDashboardSpec(response.spec)) {
+    return response.spec;
+  }
+  if (isDashboardV2Spec(response) || isLegacyDashboardSpec(response)) {
+    return response;
+  }
+  return {};
+}
+
+function isDashboardV2Spec(value: unknown): value is Record<string, any> {
+  return isRecord(value) && isRecord(value.elements);
+}
+
+function isLegacyDashboardSpec(value: unknown): value is Record<string, any> {
+  return isRecord(value) && Array.isArray(value.panels);
 }
 
 async function fetchGrafanaApi<T>(url: string, params?: Record<string, unknown>): Promise<T> {
@@ -1252,6 +1279,10 @@ function matchesDatasourceFilters(
 }
 
 function collectPanels(dashboard: Record<string, any>) {
+  if (isDashboardV2Spec(dashboard)) {
+    return collectV2Panels(dashboard);
+  }
+
   const panels: DashboardPanelWithPath[] = [];
   const visit = (panel: Record<string, any>, rowPath: string[]) => {
     const nested = arrayField(panel, 'panels').filter(isRecord);
@@ -1273,6 +1304,113 @@ function collectPanels(dashboard: Record<string, any>) {
   }
 
   return panels;
+}
+
+function collectV2Panels(dashboard: Record<string, any>) {
+  const panels: DashboardPanelWithPath[] = [];
+  const elements = recordField(dashboard, 'elements') ?? {};
+  const seen = new Set<string>();
+
+  const pushElement = (name: string | undefined, rowPath: string[]) => {
+    if (!name || seen.has(name)) {
+      return;
+    }
+    const element = recordField(elements, name);
+    if (!element || stringField(element, 'kind') !== 'Panel') {
+      return;
+    }
+    const panel = v2PanelToLegacyPanel(element);
+    if (panel) {
+      seen.add(name);
+      panels.push({ panel, rowPath });
+    }
+  };
+
+  const visitLayout = (layout: Record<string, any> | undefined, rowPath: string[]) => {
+    const kind = stringField(layout, 'kind');
+    const spec = recordField(layout, 'spec');
+    if (!kind || !spec) {
+      return;
+    }
+
+    if (kind === 'GridLayout' || kind === 'AutoGridLayout') {
+      for (const item of arrayField(spec, 'items').filter(isRecord)) {
+        pushElement(stringField(recordField(recordField(item, 'spec'), 'element'), 'name'), rowPath);
+      }
+      return;
+    }
+
+    if (kind === 'RowsLayout') {
+      for (const row of arrayField(spec, 'rows').filter(isRecord)) {
+        const rowSpec = recordField(row, 'spec');
+        const title = stringField(rowSpec, 'title');
+        visitLayout(recordField(rowSpec, 'layout'), title ? [...rowPath, title] : rowPath);
+      }
+      return;
+    }
+
+    if (kind === 'TabsLayout') {
+      for (const tab of arrayField(spec, 'tabs').filter(isRecord)) {
+        const tabSpec = recordField(tab, 'spec');
+        const title = stringField(tabSpec, 'title');
+        visitLayout(recordField(tabSpec, 'layout'), title ? [...rowPath, title] : rowPath);
+      }
+    }
+  };
+
+  visitLayout(recordField(dashboard, 'layout'), []);
+
+  for (const [name, element] of Object.entries(elements)) {
+    if (isRecord(element) && stringField(element, 'kind') === 'Panel') {
+      pushElement(name, []);
+    }
+  }
+
+  return panels;
+}
+
+function v2PanelToLegacyPanel(element: Record<string, any>) {
+  const spec = recordField(element, 'spec');
+  if (!spec) {
+    return undefined;
+  }
+  const dataSpec = recordField(recordField(spec, 'data'), 'spec');
+  const vizConfig = recordField(spec, 'vizConfig');
+  const vizSpec = recordField(vizConfig, 'spec');
+  const targets = arrayField(dataSpec, 'queries').filter(isRecord).map(v2PanelQueryToLegacyTarget).filter(isRecord);
+  const datasource = recordField(targets[0], 'datasource');
+
+  return compactRecord({
+    id: numberField(spec, 'id'),
+    title: stringField(spec, 'title'),
+    type: stringField(vizConfig, 'group'),
+    datasource,
+    fieldConfig: recordField(vizSpec, 'fieldConfig'),
+    targets,
+  });
+}
+
+function v2PanelQueryToLegacyTarget(query: Record<string, any>) {
+  const spec = recordField(query, 'spec');
+  const dataQuery = recordField(spec, 'query');
+  const querySpec = recordField(dataQuery, 'spec');
+  const datasource = recordField(dataQuery, 'datasource');
+  const group = stringField(dataQuery, 'group');
+
+  return compactRecord({
+    refId: stringField(spec, 'refId'),
+    hide: spec?.hidden === true ? true : undefined,
+    datasource: compactRecord({
+      uid: stringField(datasource, 'uid') ?? stringField(datasource, 'name'),
+      name: stringField(datasource, 'name'),
+      type: group,
+    }),
+    expr: stringField(querySpec, 'expr'),
+    query: stringField(querySpec, 'query'),
+    rawSql: stringField(querySpec, 'rawSql'),
+    rawQuery: stringField(querySpec, 'rawQuery'),
+    legendFormat: stringField(querySpec, 'legendFormat'),
+  });
 }
 
 function targetQueryText(target: Record<string, any>): string | undefined {
@@ -1305,6 +1443,11 @@ function datasourceUid(ref: unknown): string | undefined {
 
 function datasourceType(ref: unknown): string | undefined {
   return isRecord(ref) ? stringField(ref, 'type') : undefined;
+}
+
+function numberField(record: Record<string, any> | undefined, key: string) {
+  const value = record?.[key];
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
 }
 
 function compactRecord<T extends Record<string, unknown> | undefined>(record: T): Record<string, unknown> {

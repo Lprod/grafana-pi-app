@@ -2230,6 +2230,76 @@ describe('grafana datasource tool policy', () => {
     );
   });
 
+  it('extracts dashboard metric usage from dashboard.grafana.app v2 specs', () => {
+    const result = extractDashboardMetricUsage(makeDashboardMetricUsageV2Fixture('Metric Context V2'), {
+      uid: 'metric-context-v2',
+      meta: {
+        folderTitle: 'Observability',
+        url: '/d/metric-context-v2/metric-context-v2',
+      },
+      allowedPrometheusDatasourceUids: ['prom-main'],
+    });
+
+    expect(result.dashboard).toMatchObject({
+      uid: 'metric-context-v2',
+      title: 'Metric Context V2',
+      folderTitle: 'Observability',
+    });
+    expect(result.metrics.map((metric) => metric.metric)).toEqual(
+      expect.arrayContaining(['sample_requests_total', 'sample_request_duration_seconds_bucket'])
+    );
+    expect(result.usages.find((usage) => usage.metric === 'sample_requests_total')).toMatchObject({
+      datasourceUid: 'prom-main',
+      datasourceType: 'prometheus',
+      panelTitle: 'HTTP requests',
+      panelType: 'timeseries',
+      rowPath: ['Overview'],
+      refId: 'A',
+      unit: 'reqps',
+      selector: 'sample_requests_total{status=~"5..",service="$service"}',
+    });
+  });
+
+  it('inspects dashboard metric usage from dashboard.grafana.app v2 resource responses', async () => {
+    const fetch = jest.fn(({ url }) => {
+      if (url === '/api/dashboards/uid/metric-context-v2') {
+        return of({
+          data: {
+            metadata: { name: 'metric-context-v2' },
+            spec: makeDashboardMetricUsageV2Fixture('Metric Context V2'),
+            meta: {
+              folderTitle: 'Observability',
+              url: '/d/metric-context-v2/metric-context-v2',
+            },
+          },
+        });
+      }
+
+      return throwError(() => new Error(`unexpected fetch: ${url}`));
+    });
+    (getBackendSrv as jest.Mock).mockReturnValue({ fetch });
+    const tool = getTool(
+      createGrafanaTools({ allowedPrometheusDatasourceUids: ['prom-main'] }),
+      'inspect_dashboard_metric_usage'
+    );
+
+    const result = await tool.execute('call-1', { uid: 'metric-context-v2' }, undefined);
+    const body = JSON.parse(result.content[0].text);
+
+    expect(body.metrics.map((metric: { metric: string }) => metric.metric)).toContain('sample_requests_total');
+    expect(body.usages[0]).toMatchObject({
+      dashboardUid: 'metric-context-v2',
+      panelTitle: 'HTTP requests',
+      datasourceUid: 'prom-main',
+    });
+    expect(result.details).toMatchObject({
+      uid: 'metric-context-v2',
+      title: 'Metric Context V2',
+      metricCount: 2,
+      usageCount: 2,
+    });
+  });
+
   it('searches visible dashboards for metric usage and ranks seed metric neighborhoods', async () => {
     const fetch = jest.fn(({ url }) => {
       if (url === '/api/search') {
@@ -2819,6 +2889,118 @@ function makeDashboardMetricUsageFixture(uid: string, title: string) {
             legendFormat: '{{vm}} {{route}}',
           },
         ],
+      },
+    ],
+  };
+}
+
+function makeDashboardMetricUsageV2Fixture(title: string) {
+  return {
+    title,
+    tags: ['metric-context'],
+    timeSettings: { from: 'now-6h', to: 'now', autoRefresh: '1m' },
+    elements: {
+      'panel-1': {
+        kind: 'Panel',
+        spec: {
+          id: 1,
+          title: 'HTTP requests',
+          description: 'Sample request volume and errors.',
+          data: {
+            kind: 'QueryGroup',
+            spec: {
+              queries: [
+                {
+                  kind: 'PanelQuery',
+                  spec: {
+                    refId: 'A',
+                    query: {
+                      kind: 'DataQuery',
+                      group: 'prometheus',
+                      datasource: { name: 'prom-main' },
+                      spec: {
+                        expr: 'sum by (service, status) (rate(sample_requests_total{status=~"5..",service="$service"}[$__rate_interval]))',
+                        legendFormat: '{{service}} {{status}}',
+                      },
+                    },
+                  },
+                },
+                {
+                  kind: 'PanelQuery',
+                  spec: {
+                    refId: 'B',
+                    query: {
+                      kind: 'DataQuery',
+                      group: 'prometheus',
+                      datasource: { name: 'prom-main' },
+                      spec: {
+                        expr: 'histogram_quantile(0.95, sum by (le, service) (rate(sample_request_duration_seconds_bucket{service="$service"}[$__rate_interval])))',
+                        legendFormat: '{{service}} p95',
+                      },
+                    },
+                  },
+                },
+              ],
+              transformations: [],
+              queryOptions: {},
+            },
+          },
+          vizConfig: {
+            kind: 'VizConfig',
+            group: 'timeseries',
+            spec: {
+              fieldConfig: {
+                defaults: { unit: 'reqps' },
+                overrides: [],
+              },
+            },
+          },
+        },
+      },
+    },
+    layout: {
+      kind: 'RowsLayout',
+      spec: {
+        rows: [
+          {
+            kind: 'RowsLayoutRow',
+            spec: {
+              title: 'Overview',
+              layout: {
+                kind: 'GridLayout',
+                spec: {
+                  items: [
+                    {
+                      kind: 'GridLayoutItem',
+                      spec: {
+                        x: 0,
+                        y: 0,
+                        width: 24,
+                        height: 8,
+                        element: { kind: 'ElementReference', name: 'panel-1' },
+                      },
+                    },
+                  ],
+                },
+              },
+            },
+          },
+        ],
+      },
+    },
+    variables: [
+      {
+        kind: 'QueryVariable',
+        spec: {
+          name: 'service',
+          current: { text: 'app-a', value: 'app-a' },
+          query: {
+            kind: 'DataQuery',
+            group: 'prometheus',
+            datasource: { name: 'prom-main' },
+            spec: { query: 'label_values(sample_requests_total, service)' },
+          },
+        },
       },
     ],
   };
