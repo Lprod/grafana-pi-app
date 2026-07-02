@@ -1,3 +1,10 @@
+# [2.15.0](https://github.com/elohmeier/grafana-pi-app/compare/v2.14.2...v2.15.0) (2026-07-02)
+
+
+### Features
+
+* **agent:** harden dashboard planning ([1078f79](https://github.com/elohmeier/grafana-pi-app/commit/1078f79048ddbe2a6a4ffec18b9952ade92a83f2))
+
 ## [2.14.2](https://github.com/elohmeier/grafana-pi-app/compare/v2.14.1...v2.14.2) (2026-07-01)
 
 
