@@ -14,7 +14,7 @@ apps:
       allowedUsers: []
       systemPromptAddendum: ''
       isOpenAIAPIKeySet: true
-      allowedPrometheusDatasourceUids: ['prometheus']
+      allowedPrometheusDatasourceUids: ['prometheus', 'thanos-prod-db']
       customSkills: []
       enableAgentContractSample: true
     secureJsonData:

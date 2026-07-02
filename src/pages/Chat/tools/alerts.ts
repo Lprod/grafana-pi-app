@@ -215,8 +215,8 @@ function makeFindPanelAlertRulesTool(toolConfig: GrafanaToolConfig): AgentTool {
       ]);
       throwIfAborted(signal);
       const maxRules = clampInt(args.maxRules ?? MAX_ALERT_MATCHES, 1, MAX_ALERT_MATCHES);
-      const matches = rules
-        .slice(0, MAX_ALERT_RULES)
+      const candidateRules = selectAlertRuleCandidates(rules, args, panel);
+      const matches = candidateRules
         .map((rule) => scoreAlertRule(rule, { ...args, panel }, namespace, toolConfig))
         .filter((match) => match.score > 0 || shouldReturnUnscoredRule(args))
         .sort((left, right) => right.score - left.score || left.rule.title.localeCompare(right.rule.title))
@@ -250,6 +250,7 @@ function makeFindPanelAlertRulesTool(toolConfig: GrafanaToolConfig): AgentTool {
         dashboardUid: args.dashboardUid,
         panelId: normalizedPanelId(args.panelId),
         ruleCount: rules.length,
+        scannedRuleCount: candidateRules.length,
         matchCount: matches.length,
         exactPanelMatchCount: exactPanelMatches.length,
         summarized: true,
@@ -355,6 +356,51 @@ async function fetchDashboardPanel(params: PanelAlertRuleSearchParams): Promise<
   );
   const panel = findDashboardPanel(dashboardSpecFromResponse(response), params.panelId, params.panelTitle);
   return panel ? summarizePanel(panel) : undefined;
+}
+
+function selectAlertRuleCandidates(rules: AlertRuleResource[], args: PanelAlertRuleSearchParams, panel?: PanelSummary) {
+  const highConfidence = rules.filter((rule) => isHighConfidenceAlertCandidate(rule, args, panel));
+  const candidates = new Map<string, AlertRuleResource>();
+
+  for (const rule of highConfidence) {
+    candidates.set(alertRuleCandidateKey(rule), rule);
+  }
+
+  const fallbackLimit = hasSearchContext(args)
+    ? Math.min(MAX_ALERT_RULES, Math.max(MAX_ALERT_RULES - candidates.size, 0))
+    : MAX_ALERT_RULES;
+  for (const rule of rules.slice(0, fallbackLimit)) {
+    candidates.set(alertRuleCandidateKey(rule), rule);
+  }
+
+  return [...candidates.values()];
+}
+
+function isHighConfidenceAlertCandidate(
+  rule: AlertRuleResource,
+  args: PanelAlertRuleSearchParams,
+  panel?: PanelSummary
+) {
+  const spec = rule.spec ?? {};
+  const name = stringField(rule.metadata, 'name');
+  const title = spec.title || name || '';
+  const panelLink = alertRulePanelLink(spec);
+  const wantedPanelId = normalizedPanelId(args.panelId) ?? panel?.id;
+
+  if (args.ruleName && name === args.ruleName) {
+    return true;
+  }
+
+  if (args.dashboardUid && panelLink?.dashboardUID === args.dashboardUid) {
+    return !wantedPanelId || String(panelLink.panelID) === wantedPanelId;
+  }
+
+  const searchText = [args.query, args.panelTitle].filter(Boolean).join(' ');
+  return scoreTextMatch(searchText, [title, name ?? '', labelsText(spec.labels)]) > 0;
+}
+
+function alertRuleCandidateKey(rule: AlertRuleResource) {
+  return stringField(rule.metadata, 'name') ?? stringField(rule.metadata, 'uid') ?? JSON.stringify(rule.metadata ?? {});
 }
 
 function dashboardSpecFromResponse(response: DashboardResponse): Record<string, any> {
@@ -597,7 +643,7 @@ function scoreAlertRule(
   }
 
   const datasourceScore = scoreDatasourceOverlap(context.panel, summary);
-  if (datasourceScore > 0) {
+  if (datasourceScore > 0 && score > 0) {
     score += datasourceScore;
     reasons.push('panel datasource overlaps alert datasource');
   }

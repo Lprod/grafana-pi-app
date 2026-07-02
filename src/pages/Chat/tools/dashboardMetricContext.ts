@@ -627,17 +627,17 @@ function metricUsageCorpus({
 
   return {
     seedMetrics: seedMetrics.length > 0 ? seedMetrics : undefined,
-    dashboards: dashboards.map((dashboard) => dashboard.dashboard),
     metrics,
-    usages: limitedUsages,
     relations: relations.slice(0, MAX_RESULT_RELATIONS),
+    usages: limitedUsages,
+    dashboards: dashboards.map((dashboard) => dashboard.dashboard),
     omitted: usages.length > limitedUsages.length ? { usages: usages.length - limitedUsages.length } : undefined,
   } as {
     seedMetrics?: string[];
-    dashboards: Array<ExtractedDashboardMetricUsage['dashboard']>;
     metrics: DashboardMetricSummary[];
-    usages: DashboardMetricUsage[];
     relations: MetricRelation[];
+    usages: DashboardMetricUsage[];
+    dashboards: Array<ExtractedDashboardMetricUsage['dashboard']>;
     omitted?: { usages?: number };
   };
 }

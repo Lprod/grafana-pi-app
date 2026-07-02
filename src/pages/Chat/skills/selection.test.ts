@@ -31,6 +31,17 @@ describe('Grafana skill selection', () => {
     );
   });
 
+  it('uses supervisor-only tools when the prompt mandates an exact specialist sequence', () => {
+    const selection = selectGrafanaSkills(
+      'Use exactly one run_investigation_agent top-level tool call first, then exactly one run_dashboard_agent top-level tool call.',
+      GRAFANA_SKILLS
+    );
+
+    expect(selection.supervisorOnly).toBe(true);
+    expect(selection.toolGroups).toEqual(['subagents']);
+    expect(selection.activeSkillNames).toEqual([]);
+  });
+
   it('activates the alerting skill for panel-linked alert troubleshooting', () => {
     const selection = selectGrafanaSkills('Why is the alert linked to this panel firing?', GRAFANA_SKILLS, {
       pageType: 'dashboard',

@@ -19,6 +19,8 @@ const BENCH_TEST_FILE = process.env.BENCH_TEST_FILE ?? 'tests/agentBenchmark.spe
 const BENCH_LABEL = process.env.BENCH_LABEL ?? 'agent benchmark';
 const BENCH_LOG_PREFIX = process.env.BENCH_LOG_PREFIX ?? 'agent-benchmark';
 const BENCH_DEV_RELOAD_TASK = process.env.BENCH_DEV_RELOAD_TASK ?? 'dev:reload';
+const BENCH_SEED_SAMPLES = process.env.BENCH_SEED_SAMPLES === undefined || process.env.BENCH_SEED_SAMPLES !== '0';
+const HISTORY_FUTURE_SECONDS = process.env.HISTORY_FUTURE_SECONDS ?? process.env.BENCH_HISTORY_FUTURE_SECONDS ?? '3600';
 const MANAGE_LOCAL_LLAMA =
   process.env.BENCH_MANAGE_LLAMA === undefined
     ? isLocalModelEndpoint(LLM_BASE_URL)
@@ -58,8 +60,22 @@ try {
   await runCommand('docker', ['compose', 'down', '-v', '--remove-orphans']);
 
   log(`Rebuilding plugin artifacts and starting the local stack with mise run ${BENCH_DEV_RELOAD_TASK}.`);
-  await runCommand('mise', ['run', BENCH_DEV_RELOAD_TASK]);
+  await runCommand('mise', ['run', BENCH_DEV_RELOAD_TASK], {
+    env: {
+      ...process.env,
+      HISTORY_FUTURE_SECONDS,
+    },
+  });
   await waitForGrafana();
+  if (BENCH_SEED_SAMPLES) {
+    log('Seeding Grafana development samples before benchmark run.');
+    await runCommand(process.execPath, ['scripts/seed-dev-samples.mjs'], {
+      env: {
+        ...process.env,
+        GRAFANA_URL,
+      },
+    });
+  }
 
   if (!MANAGE_LOCAL_LLAMA) {
     log(`Using externally configured OpenAI-compatible endpoint at ${LLM_BASE_URL}; not starting llama-server.`);

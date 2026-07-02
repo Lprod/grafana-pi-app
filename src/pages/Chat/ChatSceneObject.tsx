@@ -607,7 +607,7 @@ export function ChatApp({
         skillTools,
       };
       const tools =
-        prompt.trim() === ''
+        prompt.trim() === '' || selection.supervisorOnly
           ? createGrafanaSupervisorTools(toolOptions)
           : createGrafanaToolsForSkillGroups(toolOptions, selection.toolGroups);
       const systemPrompt = renderGrafanaSystemPrompt({

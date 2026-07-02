@@ -9,6 +9,7 @@ d.dashboard.new(
   title='HTTP Request Rate & Errors',
   uid='http-request-rate-errors',
   tags=['http', 'requests'],
+  time={ from: 'now-6h', to: 'now' },
   rows=[
     d.row('Overview', [
       d.layout.twoUp([
@@ -43,3 +44,5 @@ d.dashboard.new(
 ```
 
 Do not use `d.dashboard.new(...) + d.dashboard.with_*` chains unless you specifically need an optional mixin. Prefer passing title, uid, tags, time, refresh, and rows directly to `d.dashboard.new(...)`.
+
+Do not pass `timeframe`, `timeFrom`, or `timeTo` to `d.dashboard.new`; use `time={ from: 'now-6h', to: 'now' }`.

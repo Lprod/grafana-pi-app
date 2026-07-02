@@ -10,3 +10,12 @@ datasources:
     editable: true
     jsonData:
       timeInterval: 5s
+  - name: Thanos Prod
+    uid: thanos-prod-db
+    type: prometheus
+    access: proxy
+    url: $__env{PI_PROMETHEUS_URL}
+    isDefault: false
+    editable: true
+    jsonData:
+      timeInterval: 5s

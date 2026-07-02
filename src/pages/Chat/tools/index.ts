@@ -3,6 +3,7 @@ import { createAlertTools } from './alerts';
 import { createArtifactTools } from './artifacts';
 import { createDashboardTools } from './dashboards';
 import { createDashboardMetricContextTools } from './dashboardMetricContext';
+import { createDashboardPlanTools } from './dashboardPlans';
 import { createLiveDashboardMutationTools } from './dashboardMutation';
 import { createJsonnetDashboardTools } from './jsonnetDashboards';
 import { createJsonnetFileTools } from './jsonnetFiles';
@@ -17,6 +18,7 @@ export { artifactByteSize, artifactizeToolResult, createArtifactTools, readArtif
 export type { Artifact, ArtifactPreview, ArtifactRef, ArtifactRuntime } from './artifacts';
 export { createAlertTools } from './alerts';
 export { createDashboardMetricContextTools, extractDashboardMetricUsage } from './dashboardMetricContext';
+export { createDashboardPlanTools } from './dashboardPlans';
 export { getUnavailableDashboardDatasourceUids } from './dashboardPolicy';
 export { createLiveDashboardMutationTools, LIVE_DASHBOARD_WRITE_TOOLS } from './dashboardMutation';
 export { DEFAULT_JSONNET_FILE_PATH, normalizeJsonnetPath } from './jsonnetFiles';
@@ -25,6 +27,7 @@ export { createSkillTools } from './skills';
 export { buildNavigationPath } from './navigation';
 export type {
   CreateGrafanaToolsOptions,
+  DashboardPlanToolSet,
   DashboardSaveFolderRuntime,
   DashboardSaveFolderSelection,
   GrafanaToolConfig,
@@ -45,6 +48,7 @@ export function createGrafanaToolRegistry(options: CreateGrafanaToolsOptions = {
   const dashboards = createDashboardTools(options, options.includeAdHocDashboardTools);
   const dashboardReadTools = createDashboardTools(options, false);
   const liveDashboardEditing = createLiveDashboardMutationTools(options.dashboardMutation);
+  const dashboardPlans = createDashboardPlanTools(options);
   const jsonnetFiles = createJsonnetFileTools(options);
   const jsonnetDashboards = createJsonnetDashboardTools(options);
   const investigation = createInvestigationTools(options.investigationReport);
@@ -61,6 +65,7 @@ export function createGrafanaToolRegistry(options: CreateGrafanaToolsOptions = {
         dashboardMetricContextTools: dashboardMetricContext,
         dashboardReadTools,
         liveDashboardTools: liveDashboardEditing,
+        dashboardPlanTools: dashboardPlans.all,
         jsonnetFileTools: jsonnetFiles.all,
         jsonnetDashboardTools: jsonnetDashboards.all,
         investigationTools: investigation,
@@ -76,6 +81,7 @@ export function createGrafanaToolRegistry(options: CreateGrafanaToolsOptions = {
     dashboardMetricContext,
     dashboards,
     liveDashboardEditing,
+    dashboardPlans,
     jsonnetFiles,
     jsonnetDashboards,
     investigation,
@@ -88,6 +94,7 @@ export function createGrafanaToolRegistry(options: CreateGrafanaToolsOptions = {
       ...alerts,
       ...dashboardMetricContext,
       ...liveDashboardEditing,
+      ...dashboardPlans.all,
       ...jsonnetFiles.all,
       ...parentJsonnetDashboardTools,
       ...investigation,
@@ -134,6 +141,7 @@ export function createGrafanaToolsForSkillGroups(
   }
 
   if (groupSet.has('jsonnetFiles')) {
+    selected.push(...registry.dashboardPlans.all);
     selected.push(...registry.jsonnetFiles.all);
   }
 

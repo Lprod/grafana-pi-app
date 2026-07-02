@@ -43,6 +43,7 @@ export type GrafanaSkillSelection = {
   activeSkillNames: string[];
   toolGroups: SkillToolGroup[];
   explicitSkillNames: string[];
+  supervisorOnly: boolean;
 };
 
 export type GrafanaSkillContext = {

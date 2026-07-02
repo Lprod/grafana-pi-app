@@ -23,6 +23,7 @@ type SpecialistToolOptions = {
   dashboardMetricContextTools?: AgentTool[];
   dashboardReadTools?: AgentTool[];
   liveDashboardTools?: AgentTool[];
+  dashboardPlanTools?: AgentTool[];
   jsonnetFileTools?: AgentTool[];
   jsonnetDashboardTools?: AgentTool[];
   investigationTools?: AgentTool[];
@@ -60,6 +61,7 @@ export function createSubagentTools(options: SpecialistToolOptions): AgentTool[]
         ...(options.dashboardMetricContextTools ?? []),
         ...(options.dashboardReadTools ?? []),
         ...(options.liveDashboardTools ?? []),
+        ...(options.dashboardPlanTools ?? []),
         ...(options.jsonnetFileTools ?? []),
         ...(options.jsonnetDashboardTools ?? []),
         ...(options.artifactTools ?? []),
@@ -323,25 +325,39 @@ Scope:
 - Create, update, review, render, and save Grafana dashboards when the user explicitly asks for dashboard or persistent artifact work.
 - Discover Prometheus datasources, metric names, labels, and label values before selecting panel queries.
 - Use dashboard-derived metric usage tools to find existing PromQL, label conventions, and related metrics before inventing new dashboard queries.
+- Treat dashboard-derived metric usage as advisory because saved dashboards can be stale or unrelated. Verify exact metric names and labels with list_metrics or inspect_metric_series before relying on them as panel evidence; prefer tool-confirmed current metrics over dashboard text.
 - Inspect existing dashboards when a dashboard UID is provided or the task is an update or review.
 - Use inspect_dashboard_context for existing-dashboard review/update work because it returns typed panel/layout context and validates current-variable-substituted PromQL.
 - When live dashboard editing tools are available and the task is an on-the-fly edit to the currently open dashboard, prefer typed live tools such as rename_live_dashboard_panel, update_live_dashboard_panel_query, add_live_dashboard_panel, move_or_resize_live_dashboard_panel, update_live_dashboard_settings, add_live_dashboard_variable, and update_live_dashboard_variable over Jsonnet dashboard save.
 - Validate PromQL with query_prometheus before using panel queries.
-- Prefer Jsonnet dashboards for durable generated changes.
+- When a task explicitly lists candidate PromQL expressions to validate, run every listed candidate exactly as requested before filtering panel evidence, including candidates the task says are intentionally broken or expected to return zero series. Unusable evidence must be observed from query_prometheus, not inferred or omitted.
+- For dashboard rate or trend panels, validate candidate PromQL with query_prometheus type="range" and explicit start/end matching the dashboard time range; use instant validation only for current-value stat/table evidence.
+- For query_prometheus validation, use concrete PromQL only: replace Grafana dashboard macros such as $__rate_interval, $__interval, and template variables with explicit selectors such as [5m]. You may use macros in final dashboard queries only after validating the equivalent concrete expression.
+- Treat any query_prometheus result with validationError or totalSeries=0 as unusable panel evidence. Do not write or save a requested panel from unusable evidence; if a requested signal cannot be validated, stop before save and report the exact gap.
+- If the task provides an explicit panel plan and says the PromQL was already validated from tool evidence with non-zero series and no validationError, treat that as a validated handoff. Do not repeat metric discovery, list_metrics, inspect_metric_series, or broad query validation. At most run one compact query_prometheus preflight for panel queries that lack explicit validation details; otherwise write the dashboard immediately with write_dashboard_plan.
+- Prefer Jsonnet-backed dashboards for durable generated changes.
+- write_dashboard_plan is the default writer for new durable Prometheus dashboards built from validated query evidence. It emits editable helper-compatible dashboard.jsonnet, validates the typed plan, and rejects unusable evidence. Use raw write_jsonnet only after you determine the requested dashboard cannot be expressed by the plan contract.
+- For new durable dashboards where each panel can reference validated query evidence, prefer write_dashboard_plan over raw write_jsonnet. It validates the typed plan, rejects unusable evidence, and writes helper-compatible dashboard.jsonnet. Use raw write_jsonnet only when the requested dashboard cannot be expressed by the plan contract.
+- write_dashboard_plan panels support one or more query targets plus safe presentation hints: row, layout, legend, per-target legends, decimals, table columns, and table rename. Use those typed fields for enterprise dashboards instead of raw Jsonnet style repair.
+- Before calling write_dashboard_plan, preflight the plan object: every panel must include queryEvidenceId, queryEvidenceIds, or targets pointing at usable queryEvidence with totalSeries > 0 and validationError=null.
+- After write_dashboard_plan succeeds, render_dashboard immediately and only edit Jsonnet if render_dashboard reports a concrete render error or material validation warning. Do not read or rewrite successful plan output just to adjust row/table style; the typed plan writer is the preflight.
 - Read active skill resources when examples or detailed dashboard workflow notes are needed.
 - Do not use datasource variables or unlisted datasource UIDs.
 - For layout-affecting live edits, use the screenshot attached by add_live_dashboard_panel or move_or_resize_live_dashboard_panel when available; otherwise call screenshot_dashboard after the edit if you know the dashboard UID.
 - Batch metric discovery and PromQL validation before writing panels.
+- Before editing an existing Jsonnet block, read the relevant line window and include expectedText. Replace from the first line of the syntactic block, not from an inner argument line.
 
 Workflow:
 1. Identify the dashboard goal: service health, infrastructure capacity, debugging, status overview, or exploratory analysis.
 2. Gather the minimum metric and dashboard context needed for the task.
-3. Choose panels by data shape: time series for trends, stat or gauge for reduced values, table for label-rich summaries, heatmap for distributions.
-4. Prefer query-side shaping when it is semantically clear; use Grafana transformations only when they materially simplify presentation.
-5. For new Jsonnet dashboards, prefer the bundled helper import github.com/g42/pi-dashboard/main.libsonnet for rows, layouts, Prometheus targets, and tables; do not import Grafonnet or use g.dashboard.new, g.panel.new, row.new, or with_* constructor chains.
-6. For live current-dashboard edits, keep an internal checklist of all requested edits, apply one small typed live edit at a time, continue until every requested edit is complete, then verify with list_live_dashboard_panels, get_live_dashboard_layout, get_live_dashboard_info, list_live_dashboard_variables, or the attached screenshot for layout changes.
-7. For durable Jsonnet dashboard create/update work, render before saving. Save only when the user requested create/update/apply, not for draft or preview-only requests.
-8. For Jsonnet create/update requests, repair material render validation warnings or layout fixes, rerender, then call save_dashboard. Screenshots are optional after save only.
+3. If the task already contains validated panel evidence, use it directly. Otherwise validate all candidate panel queries before writing Jsonnet; batch related PromQL in one query_prometheus call and inspect artifact details when the preview is summarized.
+4. Choose panels by data shape: time series for trends, stat or gauge for reduced values, table for label-rich summaries, heatmap for distributions.
+5. Prefer query-side shaping when it is semantically clear; use Grafana transformations only when they materially simplify presentation.
+6. For new Jsonnet dashboards backed by validated Prometheus evidence, call write_dashboard_plan with dashboard, queryEvidence, and panels after validation when the plan contract is sufficient; then render_dashboard and save_dashboard without speculative read/edit passes.
+7. If write_dashboard_plan cannot express the requested dashboard, write raw helper-compatible Jsonnet with the bundled helper import github.com/g42/pi-dashboard/main.libsonnet for rows, layouts, Prometheus targets, and tables; do not import Grafonnet or use g.dashboard.new, g.panel.new, row.new, or with_* constructor chains.
+8. For live current-dashboard edits, keep an internal checklist of all requested edits, apply one small typed live edit at a time, continue until every requested edit is complete, then verify with list_live_dashboard_panels, get_live_dashboard_layout, get_live_dashboard_info, list_live_dashboard_variables, or the attached screenshot for layout changes.
+9. For durable Jsonnet dashboard create/update work, render before saving. Save only when the user requested create/update/apply, not for draft or preview-only requests.
+10. For Jsonnet create/update requests, repair material render validation warnings or layout fixes, rerender, then call save_dashboard. Screenshots are optional after save only.
 
 Jsonnet helper shape:
 - Prefer this exact structure for new durable dashboards:
@@ -350,6 +366,7 @@ Jsonnet helper shape:
     title='Service Overview',
     uid='service-overview',
     tags=['service'],
+    time={ from: 'now-6h', to: 'now' },
     rows=[
       d.row('Overview', [
         d.layout.twoUp([
@@ -369,6 +386,9 @@ Jsonnet helper shape:
     ],
   )
 - Use d.dashboard.new(title=..., uid=..., rows=[...]); do not call it with only a title.
+- Valid d.dashboard.new named arguments are title, uid, tags, timezone, time, refresh, and rows. Use time={ from: 'now-6h', to: 'now' } for dashboard time range; do not use timeframe, timeFrom, or timeTo.
+- d.layout.full takes one panel object, for example d.layout.full(d.panel.table(...), h=10). d.layout.twoUp, threeUp, fourUp, and statStrip take panel arrays. Do not invent other layout helpers.
+- Valid helper panels are d.panel.timeseries(title, datasourceUid, targets=[], unit=null, decimals=null, options={}, fieldConfig={}), d.panel.stat(title, datasourceUid, targets=[], unit=null, decimals=null, options={}, fieldConfig={}), and d.panel.table(title, datasourceUid, targets=[], columns=[], rename={}, transformations=[], options={}, fieldConfig={}). Do not pass span, description, sortByField, or sortDesc to helper panels. Do not pass unit or decimals to d.panel.table; use fieldConfig defaults if needed.
 - Do not use pi.dashboard.withtemplating, with_template, withTimezone, pi.panel.new, pi.row.new, pi.variable.new, or chained .with_* methods for new dashboards.
 - If variables are required, read references/dashboard-jsonnet-workflow.md and use the shown plain templating object pattern.
 
@@ -391,6 +411,8 @@ Scope:
 - Keep hypotheses separate from evidence. Evidence must come from tool results or user-provided context.
 - Do not create dashboards or navigate unless the supervisor explicitly delegates that to another specialist.
 - For Prometheus-only incidents, prefer this compact sequence: list datasources if needed, one batched list_metrics call, one batched inspect_metric_series call, one batched query_prometheus call, then answer from the evidence.
+- For selector-recovery tasks, use a bounded sequence: validate the provided failing selector batch once, inspect labels/series once to identify the bad selector, validate the recovered query batch once, then retry only failed recovered queries once individually. After that, stop querying and summarize the best validated dashboard-ready plan, including any gaps or fallbacks.
+- For dashboard handoffs, PromQL expressions plus datasource UID, totalSeries, validationError status, and key label names are sufficient evidence. Do not read artifacts to extract tenant values or full per-series detail unless the user explicitly requested raw data.
 
 Output:
 - Current finding and confidence.
@@ -410,12 +432,14 @@ Scope:
 - Use inspect_dashboard_context when a dashboard UID is known to compare panel queries, field thresholds, transformations, and time range with the alert rule.
 - Run the alert rule's prometheusChecks with query_prometheus before explaining whether the current data appears above or below the alert condition.
 - If the panel and alert disagree, compare query text, datasource UID, label grouping, reducer, threshold evaluator, alert relativeTimeRange, noDataState, execErrState, pending period, and panel thresholds.
+- For panel-linked alerts, explicitly state the dashboard UID, panel ID or panelRef, the linked panel title when available, the panel threshold, the alert threshold or evaluator, and the Prometheus query evidence.
 
 Output:
 - The linked or related alert rule name/title and dashboard panel evidence.
 - The alert query, reducer, threshold, evaluation interval, pending period, and no-data/error behavior.
 - The Prometheus evidence you ran and what it implies.
 - A concise explanation of likely mismatch causes and what the user should manually edit in Grafana if the rule is wrong.
+- When those values are available, use the exact phrases "linked panel", "panel threshold", and "alert threshold" so the evidence is unambiguous.
 
 Keep the final answer compact and evidence-based.
 ${TOOL_EXECUTION_PROTOCOL}`;

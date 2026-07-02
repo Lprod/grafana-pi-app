@@ -238,6 +238,11 @@ export type JsonnetDashboardToolSet = {
   save: AgentTool;
 };
 
+export type DashboardPlanToolSet = {
+  all: AgentTool[];
+  write: AgentTool;
+};
+
 export type JsonnetFileToolSet = {
   all: AgentTool[];
   write: AgentTool;
@@ -259,6 +264,7 @@ export type GrafanaToolRegistry = {
   dashboardMetricContext: AgentTool[];
   dashboards: AgentTool[];
   liveDashboardEditing: AgentTool[];
+  dashboardPlans: DashboardPlanToolSet;
   jsonnetDashboards: JsonnetDashboardToolSet;
   jsonnetFiles: JsonnetFileToolSet;
   investigation: AgentTool[];

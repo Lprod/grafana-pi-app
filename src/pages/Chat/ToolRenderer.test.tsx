@@ -1334,6 +1334,69 @@ describe('ToolRenderer', () => {
     expect(screen.getByText('properly linked')).toBeInTheDocument();
   });
 
+  it('collapses nested alert-agent dashboard context by default', () => {
+    const details = {
+      type: 'subagent',
+      agent: 'alerts',
+      status: 'completed',
+      task: 'Troubleshoot the panel-linked alert.',
+      toolNames: ['inspect_dashboard_context'],
+      toolCalls: [
+        {
+          id: 'tool-1',
+          name: 'inspect_dashboard_context',
+          args: {
+            uid: 'service-dashboard',
+            validateQueries: true,
+          },
+          status: 'completed',
+          result: {
+            content: [
+              {
+                type: 'text',
+                text: JSON.stringify({
+                  dashboard: { uid: 'service-dashboard', title: 'Service dashboard' },
+                  panels: [{ title: 'HTTP requests', targets: [{ query: 'sum(rate(sample_requests_total[5m]))' }] }],
+                }),
+              },
+            ],
+            details: {
+              uid: 'service-dashboard',
+              title: 'Service dashboard',
+              panelCount: 1,
+              queryCount: 1,
+              summarized: true,
+            },
+          },
+        },
+      ],
+      usage: {
+        turns: 1,
+        input: 10,
+        output: 4,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 14,
+        cost: 0,
+      },
+      finalOutput: 'The dashboard context was inspected.',
+    };
+
+    const { container } = render(
+      <ToolResultMessageBody
+        toolName="run_alert_agent"
+        content={[{ type: 'text', text: 'The dashboard context was inspected.' }]}
+        details={details}
+      />
+    );
+
+    const row = screen.getByText('inspect_dashboard_context').closest('details') as HTMLDetailsElement | null;
+
+    expect(row?.open).toBe(false);
+    expect(container.textContent).toContain('inspect_dashboard_context');
+    expect(container.textContent).not.toContain('HTTP requests');
+  });
+
   it('renders nested failed subagent tool calls with normalized errors', () => {
     const details = {
       type: 'subagent',

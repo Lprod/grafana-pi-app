@@ -10,6 +10,17 @@ const ALERT_NAMESPACE = process.env.ALERT_NAMESPACE ?? 'default';
 const PROMETHEUS_UID = process.env.PROMETHEUS_UID ?? 'prometheus';
 const FOLDER_UID = process.env.DEV_SAMPLE_FOLDER_UID ?? 'assistant-dev-samples';
 const FOLDER_TITLE = process.env.DEV_SAMPLE_FOLDER_TITLE ?? 'Assistant Dev Samples';
+const ENTERPRISE_PROFILE_ENABLED = readBooleanEnv(
+  process.env.DEV_SAMPLE_ENTERPRISE_PROFILE ?? process.env.DEV_SAMPLE_PRODUCTION_PROFILE,
+  true
+);
+const ENTERPRISE_FOLDER_COUNT = readPositiveInteger(process.env.DEV_SAMPLE_ENTERPRISE_FOLDERS, 12);
+const ENTERPRISE_DASHBOARD_COUNT = readPositiveInteger(process.env.DEV_SAMPLE_ENTERPRISE_DASHBOARDS, 72);
+const ENTERPRISE_ALERT_RULE_COUNT = readPositiveInteger(process.env.DEV_SAMPLE_ENTERPRISE_ALERT_RULES, 320);
+const ENTERPRISE_PANELS_PER_DASHBOARD = readPositiveInteger(process.env.DEV_SAMPLE_ENTERPRISE_PANELS, 8);
+const ENTERPRISE_CONCURRENCY = readPositiveInteger(process.env.DEV_SAMPLE_ENTERPRISE_CONCURRENCY, 8);
+const ENTERPRISE_ALERT_CONCURRENCY = readPositiveInteger(process.env.DEV_SAMPLE_ENTERPRISE_ALERT_CONCURRENCY, 1);
+const ALERT_WRITE_ATTEMPTS = readPositiveInteger(process.env.DEV_SAMPLE_ALERT_WRITE_ATTEMPTS, 8);
 
 const authHeader = `Basic ${Buffer.from(`${GRAFANA_USER}:${GRAFANA_PASSWORD}`).toString('base64')}`;
 
@@ -22,6 +33,37 @@ const samples = {
   metricInfraUid: 'metric-discovery-infra-demo',
 };
 
+const enterpriseServices = [
+  { id: 'auth', name: 'Auth', team: 'identity-platform', tier: 'platform' },
+  { id: 'checkout', name: 'Checkout', team: 'commerce-checkout', tier: 'critical' },
+  { id: 'payments', name: 'Payments', team: 'commerce-payments', tier: 'critical' },
+  { id: 'catalog', name: 'Catalog', team: 'catalog-core', tier: 'product' },
+  { id: 'search', name: 'Search', team: 'discovery', tier: 'product' },
+  { id: 'orders', name: 'Orders', team: 'order-management', tier: 'critical' },
+  { id: 'notifications', name: 'Notifications', team: 'messaging', tier: 'supporting' },
+  { id: 'fulfillment', name: 'Fulfillment', team: 'supply-chain', tier: 'critical' },
+  { id: 'billing', name: 'Billing', team: 'finance-platform', tier: 'critical' },
+  { id: 'inventory', name: 'Inventory', team: 'supply-chain', tier: 'product' },
+  { id: 'analytics', name: 'Analytics', team: 'data-platform', tier: 'supporting' },
+  { id: 'recommendations', name: 'Recommendations', team: 'ml-platform', tier: 'product' },
+];
+const enterpriseEnvironments = ['prod', 'staging', 'dev'];
+const enterpriseRegions = ['us-east-1', 'eu-central-1'];
+const enterpriseFolderThemes = [
+  { key: 'commerce', title: 'Commerce Operations' },
+  { key: 'platform', title: 'Platform Engineering' },
+  { key: 'customer', title: 'Customer Experience' },
+  { key: 'data', title: 'Data and ML' },
+  { key: 'security', title: 'Security and Identity' },
+  { key: 'infra', title: 'Infrastructure' },
+  { key: 'finance', title: 'Finance Systems' },
+  { key: 'supply', title: 'Supply Chain' },
+  { key: 'exec', title: 'Executive Reporting' },
+  { key: 'regional', title: 'Regional SRE' },
+  { key: 'shared', title: 'Shared Services' },
+  { key: 'experiments', title: 'Product Experiments' },
+];
+
 await main();
 
 async function main() {
@@ -31,6 +73,7 @@ async function main() {
   await seedDashboardEditingSample();
   await seedDashboardContextSample();
   await seedDashboardMetricDiscoverySamples();
+  const enterpriseSummary = ENTERPRISE_PROFILE_ENABLED ? await seedEnterpriseSamples() : undefined;
   await verifyPrometheusSample();
 
   log('Seeded development samples:');
@@ -40,6 +83,11 @@ async function main() {
   log(`- Dashboard context: ${dashboardUrl(samples.dashboardContextUid, 'dashboard-context')}`);
   log(`- Metric discovery service: ${dashboardUrl(samples.metricServiceUid, 'metric-discovery-service')}`);
   log(`- Metric discovery infra: ${dashboardUrl(samples.metricInfraUid, 'metric-discovery-infra')}`);
+  if (enterpriseSummary) {
+    log(
+      `- Enterprise corpus: ${enterpriseSummary.folders} folders, ${enterpriseSummary.dashboards} dashboards, ${enterpriseSummary.alertRules} alert rules`
+    );
+  }
 }
 
 async function waitForGrafana() {
@@ -367,6 +415,286 @@ async function seedDashboardMetricDiscoverySamples() {
   log(`Seeded metric discovery samples ${samples.metricServiceUid} and ${samples.metricInfraUid}.`);
 }
 
+async function seedEnterpriseSamples() {
+  const folderCount = Math.min(ENTERPRISE_FOLDER_COUNT, enterpriseFolderThemes.length);
+  const folders = enterpriseFolderThemes.slice(0, folderCount).map((theme, index) => ({
+    uid: `enterprise-${theme.key}`,
+    title: `Enterprise ${theme.title}`,
+    index,
+  }));
+
+  log(
+    `Seeding enterprise corpus with ${folders.length} folders, ${ENTERPRISE_DASHBOARD_COUNT} dashboards, ${ENTERPRISE_ALERT_RULE_COUNT} alert rules.`
+  );
+  await mapLimit(folders, ENTERPRISE_CONCURRENCY, (folder) => seedFolder(folder.uid, folder.title));
+
+  const dashboards = Array.from({ length: ENTERPRISE_DASHBOARD_COUNT }, (_, index) =>
+    enterpriseDashboardDefinition(index, folders[index % folders.length])
+  );
+  await mapLimit(dashboards, ENTERPRISE_CONCURRENCY, ({ folderUid, dashboard }) =>
+    upsertDashboard({ folderUid, dashboard })
+  );
+
+  const alertRules = Array.from({ length: ENTERPRISE_ALERT_RULE_COUNT }, (_, index) =>
+    enterpriseAlertRuleDefinition(index, dashboards[index % dashboards.length])
+  );
+  await mapLimit(alertRules, ENTERPRISE_ALERT_CONCURRENCY, async (rule) => {
+    await deleteAlertRule(rule.name);
+    await createAlertRule(rule);
+  });
+
+  return {
+    folders: folders.length,
+    dashboards: dashboards.length,
+    alertRules: alertRules.length,
+  };
+}
+
+function enterpriseDashboardDefinition(index, folder) {
+  const service = enterpriseServices[index % enterpriseServices.length];
+  const env = enterpriseEnvironments[Math.floor(index / enterpriseServices.length) % enterpriseEnvironments.length];
+  const region =
+    enterpriseRegions[Math.floor(index / (enterpriseServices.length * enterpriseEnvironments.length)) % enterpriseRegions.length];
+  const uid = `ent-${enterpriseServiceSlug(service)}-${enterpriseEnvSlug(env)}-${enterpriseRegionSlug(region)}-${String(index + 1).padStart(3, '0')}`;
+  const title = `Enterprise ${service.name} ${env.toUpperCase()} ${region} operations`;
+  const panels = enterprisePanels({ service, env, region }).slice(0, clampInt(ENTERPRISE_PANELS_PER_DASHBOARD, 4, 10));
+
+  return {
+    folderUid: folder.uid,
+    service,
+    env,
+    region,
+    dashboard: {
+      uid,
+      title,
+      tags: [
+        'assistant-enterprise-sample',
+        'prod-like',
+        service.team,
+        service.tier,
+        env,
+        region,
+        folder.uid,
+      ],
+      timezone: 'browser',
+      schemaVersion: 41,
+      time: { from: 'now-6h', to: 'now' },
+      templating: enterpriseTemplating({ service, env, region }),
+      panels,
+    },
+  };
+}
+
+function enterprisePanels({ service, env, region }) {
+  const baseSelector = `service="${service.id}",env="${env}",region="${region}"`;
+  const requestSelector = `enterprise_http_requests_total{${baseSelector}}`;
+  const errorSelector = `enterprise_http_requests_total{${baseSelector},status=~"5.."}`;
+  const panelDefs = [
+    {
+      title: 'Request rate by route',
+      type: 'timeseries',
+      unit: 'reqps',
+      expr: `sum by (route) (rate(${requestSelector}[$__rate_interval]))`,
+      legendFormat: '{{route}}',
+    },
+    {
+      title: '5xx error rate',
+      type: 'timeseries',
+      unit: 'reqps',
+      expr: `sum by (route) (rate(${errorSelector}[$__rate_interval]))`,
+      legendFormat: '{{route}} 5xx',
+    },
+    {
+      title: 'p95 request latency',
+      type: 'timeseries',
+      unit: 's',
+      expr: `histogram_quantile(0.95, sum by (le, route) (rate(enterprise_request_duration_seconds_bucket{${baseSelector}}[$__rate_interval])))`,
+      legendFormat: '{{route}} p95',
+    },
+    {
+      title: 'Queue depth',
+      type: 'timeseries',
+      unit: 'short',
+      expr: `max by (queue) (enterprise_queue_depth{${baseSelector}})`,
+      legendFormat: '{{queue}}',
+    },
+    {
+      title: 'Error budget remaining',
+      type: 'stat',
+      unit: 'percentunit',
+      expr: `min(enterprise_slo_error_budget_remaining_ratio{${baseSelector}})`,
+      legendFormat: 'remaining',
+    },
+    {
+      title: 'External dependency errors',
+      type: 'timeseries',
+      unit: 'eps',
+      expr: `sum by (dependency) (rate(enterprise_external_dependency_errors_total{${baseSelector}}[$__rate_interval]))`,
+      legendFormat: '{{dependency}}',
+    },
+    {
+      title: 'Cache hit ratio',
+      type: 'stat',
+      unit: 'percentunit',
+      expr: `avg(enterprise_cache_hit_ratio{${baseSelector}})`,
+      legendFormat: 'cache',
+    },
+    {
+      title: 'Worker restarts',
+      type: 'timeseries',
+      unit: 'ops',
+      expr: `sum by (worker) (rate(enterprise_worker_restarts_total{${baseSelector}}[$__rate_interval]))`,
+      legendFormat: '{{worker}}',
+    },
+    {
+      title: 'Database connections',
+      type: 'timeseries',
+      unit: 'short',
+      expr: `max by (pool) (enterprise_db_connections{${baseSelector}})`,
+      legendFormat: '{{pool}}',
+    },
+    {
+      title: 'Traffic mix table',
+      type: 'table',
+      unit: 'reqps',
+      expr: `sum by (method, status, route) (rate(${requestSelector}[$__rate_interval]))`,
+      legendFormat: '{{method}} {{status}} {{route}}',
+    },
+  ];
+
+  return panelDefs.map((panel, index) => enterprisePanel(panel, index));
+}
+
+function enterprisePanel(panel, index) {
+  const width = panel.type === 'stat' ? 6 : 12;
+  const height = panel.type === 'stat' ? 6 : 8;
+  const row = Math.floor(index / 2);
+  const x = index % 2 === 0 ? 0 : 12;
+  const y = row * 8;
+
+  return {
+    id: index + 1,
+    title: panel.title,
+    type: panel.type,
+    datasource: prometheusDatasource(),
+    gridPos: { x, y, w: width, h: height },
+    fieldConfig: { defaults: { unit: panel.unit }, overrides: [] },
+    options: panel.type === 'table' ? { showHeader: true } : undefined,
+    targets: [
+      {
+        refId: 'A',
+        datasource: prometheusDatasource(),
+        expr: panel.expr,
+        legendFormat: panel.legendFormat,
+        format: panel.type === 'table' ? 'table' : 'time_series',
+        instant: panel.type === 'stat',
+        range: panel.type !== 'stat',
+      },
+    ],
+  };
+}
+
+function enterpriseTemplating({ service, env, region }) {
+  return {
+    list: [
+      customVariable('service', enterpriseServices.map((item) => item.id), service.id),
+      customVariable('env', enterpriseEnvironments, env),
+      customVariable('region', enterpriseRegions, region),
+    ],
+  };
+}
+
+function customVariable(name, values, selectedValue) {
+  return {
+    name,
+    type: 'custom',
+    query: values.join(','),
+    current: { text: selectedValue, value: selectedValue },
+    options: values.map((value) => ({ text: value, value, selected: value === selectedValue })),
+  };
+}
+
+function enterpriseAlertRuleDefinition(index, dashboardEntry) {
+  const service = dashboardEntry.service;
+  const env = dashboardEntry.env;
+  const region = dashboardEntry.region;
+  const dashboardUid = dashboardEntry.dashboard.uid;
+  const linked = index % 5 !== 0;
+  const panelId = [2, 3, 4, 6][index % 4];
+  const alertKind = ['5xx', 'latency', 'queue', 'dependency'][index % 4];
+  const query = enterpriseAlertQuery({ service, env, region, alertKind });
+  const threshold = enterpriseAlertThreshold(alertKind, env);
+  const severity = env === 'prod' ? (index % 4 === 0 ? 'critical' : 'warning') : 'info';
+  const name = `ent-${String(index + 1).padStart(3, '0')}-${enterpriseServiceSlug(service)}-${enterpriseEnvSlug(env)}-${enterpriseRegionSlug(region)}-${enterpriseAlertKindSlug(alertKind)}`;
+
+  return {
+    name,
+    title: `${service.name} ${env.toUpperCase()} ${region} ${alertKind} alert`,
+    folderUid: dashboardEntry.folderUid,
+    dashboardUid: linked ? dashboardUid : undefined,
+    panelId: linked ? panelId : undefined,
+    labels: {
+      severity,
+      team: service.team,
+      service: service.id,
+      env,
+      region,
+      sample: 'enterprise-prod-like',
+    },
+    annotations: linked
+      ? { runbook_url: `https://runbooks.example.invalid/${service.team}/${service.id}/${alertKind}` }
+      : {
+          runbook_url: `https://runbooks.example.invalid/${service.team}/${service.id}/${alertKind}`,
+          summary: 'Unlinked enterprise seed rule used to stress alert search.',
+        },
+    expressions: alertExpressions(query, threshold),
+  };
+}
+
+function enterpriseServiceSlug(service) {
+  return service.id.replace(/[^a-z0-9]/g, '').slice(0, 8);
+}
+
+function enterpriseEnvSlug(env) {
+  return { prod: 'prd', staging: 'stg', dev: 'dev' }[env] ?? env.slice(0, 3);
+}
+
+function enterpriseRegionSlug(region) {
+  return { 'us-east-1': 'use1', 'eu-central-1': 'euc1' }[region] ?? region.replace(/[^a-z0-9]/g, '').slice(0, 6);
+}
+
+function enterpriseAlertKindSlug(alertKind) {
+  return { dependency: 'dep', latency: 'lat', queue: 'queue', '5xx': '5xx' }[alertKind] ?? alertKind.slice(0, 5);
+}
+
+function enterpriseAlertQuery({ service, env, region, alertKind }) {
+  const selector = `service="${service.id}",env="${env}",region="${region}"`;
+  switch (alertKind) {
+    case 'latency':
+      return `histogram_quantile(0.95, sum by (le) (rate(enterprise_request_duration_seconds_bucket{${selector}}[5m])))`;
+    case 'queue':
+      return `max(enterprise_queue_depth{${selector}})`;
+    case 'dependency':
+      return `sum(rate(enterprise_external_dependency_errors_total{${selector}}[5m]))`;
+    default:
+      return `sum(rate(enterprise_http_requests_total{${selector},status=~"5.."}[5m]))`;
+  }
+}
+
+function enterpriseAlertThreshold(alertKind, env) {
+  const envMultiplier = env === 'prod' ? 1 : 3;
+  switch (alertKind) {
+    case 'latency':
+      return 1.8 * envMultiplier;
+    case 'queue':
+      return 450 * envMultiplier;
+    case 'dependency':
+      return 3 * envMultiplier;
+    default:
+      return 1.5 * envMultiplier;
+  }
+}
+
 async function upsertDashboard({ folderUid, dashboard }) {
   const response = await grafanaFetch('/api/dashboards/db', {
     method: 'POST',
@@ -380,46 +708,109 @@ async function upsertDashboard({ folderUid, dashboard }) {
 }
 
 async function deleteAlertRule(name) {
-  const response = await grafanaFetch(
-    `/apis/rules.alerting.grafana.app/v0alpha1/namespaces/${encodeURIComponent(ALERT_NAMESPACE)}/alertrules/${encodeURIComponent(name)}`,
-    { method: 'DELETE' }
-  );
-  if (response.status !== 404) {
-    await expectOk(response, `delete alert rule ${name}`);
+  for (let attempt = 1; attempt <= ALERT_WRITE_ATTEMPTS; attempt += 1) {
+    const response = await grafanaFetch(
+      `/apis/rules.alerting.grafana.app/v0alpha1/namespaces/${encodeURIComponent(ALERT_NAMESPACE)}/alertrules/${encodeURIComponent(name)}`,
+      { method: 'DELETE' }
+    );
+    if (response.ok || response.status === 404) {
+      return;
+    }
+
+    const text = await response.text().catch(() => '');
+    if (attempt < ALERT_WRITE_ATTEMPTS && isRetryableGrafanaWriteError(text)) {
+      await delay(400 * attempt);
+      continue;
+    }
+
+    throw new Error(`delete alert rule ${name} failed with HTTP ${response.status}${text ? `: ${text}` : ''}`);
   }
 }
 
-async function createAlertRule({ name, title, dashboardUid, panelId, folderUid, labels, expressions }) {
-  const response = await grafanaFetch(
-    `/apis/rules.alerting.grafana.app/v0alpha1/namespaces/${encodeURIComponent(ALERT_NAMESPACE)}/alertrules`,
-    {
-      method: 'POST',
-      body: {
-        apiVersion: 'rules.alerting.grafana.app/v0alpha1',
-        kind: 'AlertRule',
-        metadata: {
-          name,
-          annotations: { 'grafana.app/folder': folderUid },
-        },
-        spec: {
-          title,
-          trigger: { interval: '1m' },
-          for: '2m',
-          noDataState: 'NoData',
-          execErrState: 'Error',
-          labels,
-          annotations: {
-            __dashboardUid__: dashboardUid,
-            __panelId__: String(panelId),
+async function createAlertRule({ name, title, dashboardUid, panelId, folderUid, labels, annotations, expressions }) {
+  for (let attempt = 1; attempt <= ALERT_WRITE_ATTEMPTS; attempt += 1) {
+    const response = await grafanaFetch(
+      `/apis/rules.alerting.grafana.app/v0alpha1/namespaces/${encodeURIComponent(ALERT_NAMESPACE)}/alertrules`,
+      {
+        method: 'POST',
+        body: {
+          apiVersion: 'rules.alerting.grafana.app/v0alpha1',
+          kind: 'AlertRule',
+          metadata: {
+            name,
+            annotations: compactRecord({ 'grafana.app/folder': folderUid }),
           },
-          panelRef: { dashboardUID: dashboardUid, panelID: panelId },
-          expressions,
+          spec: {
+            title,
+            trigger: { interval: '1m' },
+            for: '2m',
+            noDataState: 'NoData',
+            execErrState: 'Error',
+            labels,
+            annotations: compactRecord({
+              ...annotations,
+              __dashboardUid__: dashboardUid,
+              __panelId__: panelId === undefined ? undefined : String(panelId),
+            }),
+            panelRef:
+              dashboardUid && panelId !== undefined
+                ? { dashboardUID: dashboardUid, panelID: Number(panelId) }
+                : undefined,
+            expressions,
+          },
         },
-      },
-    }
-  );
+      }
+    );
 
-  await expectOk(response, `create alert rule ${name}`);
+    if (response.ok) {
+      return;
+    }
+
+    const text = await response.text().catch(() => '');
+    if (attempt < ALERT_WRITE_ATTEMPTS && (/folder does not exist/i.test(text) || isRetryableGrafanaWriteError(text))) {
+      await delay(400 * attempt);
+      continue;
+    }
+
+    throw new Error(`create alert rule ${name} failed with HTTP ${response.status}${text ? `: ${text}` : ''}`);
+  }
+}
+
+function isRetryableGrafanaWriteError(text) {
+  return /SQLITE_BUSY|database is locked|sqlstore\.max-retries-reached|InternalError/i.test(text);
+}
+
+function alertExpressions(query, threshold) {
+  return {
+    A: {
+      datasourceUID: PROMETHEUS_UID,
+      queryType: '',
+      relativeTimeRange: { from: '600s', to: '0s' },
+      model: {
+        datasource: prometheusDatasource(),
+        refId: 'A',
+        expr: query,
+        range: true,
+        instant: false,
+      },
+    },
+    B: {
+      datasourceUID: '__expr__',
+      queryType: '',
+      model: { type: 'reduce', reducer: 'last', expression: 'A', refId: 'B' },
+    },
+    C: {
+      datasourceUID: '__expr__',
+      queryType: '',
+      source: true,
+      model: {
+        type: 'threshold',
+        expression: 'B',
+        conditions: [{ evaluator: { type: 'gt', params: [threshold] }, reducer: { type: 'last' } }],
+        refId: 'C',
+      },
+    },
+  };
 }
 
 async function verifyPrometheusSample() {
@@ -470,6 +861,32 @@ function dashboardUrl(uid, slug, extraQuery) {
 function readPositiveInteger(rawValue, fallback) {
   const value = Number(rawValue);
   return Number.isInteger(value) && value > 0 ? value : fallback;
+}
+
+function readBooleanEnv(rawValue, fallback) {
+  if (rawValue === undefined || rawValue === null || rawValue === '') {
+    return fallback;
+  }
+  return !['0', 'false', 'no', 'off'].includes(String(rawValue).trim().toLowerCase());
+}
+
+function clampInt(value, min, max) {
+  return Math.min(max, Math.max(min, Math.trunc(Number(value) || min)));
+}
+
+async function mapLimit(items, limit, worker) {
+  const workers = Array.from({ length: Math.max(1, Math.min(limit, items.length)) }, async (_, workerIndex) => {
+    for (let index = workerIndex; index < items.length; index += limit) {
+      await worker(items[index], index);
+    }
+  });
+  await Promise.all(workers);
+}
+
+function compactRecord(record) {
+  return Object.fromEntries(
+    Object.entries(record).filter(([, value]) => value !== undefined && value !== null && value !== '')
+  );
 }
 
 function log(message) {

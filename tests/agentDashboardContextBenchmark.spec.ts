@@ -422,11 +422,16 @@ function findRichQualityError(run: BenchmarkRun, expectedUid: string) {
 
   const dashboard = getRecord(getRecord(getRecord(rendered.result)?.details)?.dashboard);
   const panels = recordsField(dashboard, 'panels');
-  if (panels.length < 3) {
-    return `expected at least 3 rendered panels, got ${panels.length}`;
+  const panelCount = numericField(dashboard, 'panelCount') ?? panels.length;
+  if (panelCount < 3) {
+    return `expected at least 3 rendered panels, got ${panelCount}`;
   }
 
-  const panelText = JSON.stringify(panels);
+  const panelText = [
+    JSON.stringify(panels),
+    extractResultText(rendered.result) ?? '',
+    dashboardMutationEvidenceText(nested),
+  ].join('\n');
   if (panelText.includes('http_request_total')) {
     return 'rendered dashboard still references stale http_request_total metric';
   }
@@ -448,6 +453,20 @@ function richContextHadStaleEvidence(nested: NestedToolCallSummary[]) {
   const details = getRecord(getRecord(context?.result)?.details);
   const validation = getRecord(details?.validation);
   return numericField(validation, 'failedQueries') > 0 || numericField(validation, 'zeroSeriesQueries') > 0;
+}
+
+function dashboardMutationEvidenceText(nested: NestedToolCallSummary[]) {
+  return nested
+    .filter((call) => ['write_dashboard_plan', 'write_jsonnet', 'edit_jsonnet'].includes(call.name))
+    .map((call) => {
+      const args = getRecord(call.args);
+      if (call.name === 'write_dashboard_plan') {
+        const detailsPlan = getRecord(getRecord(getRecord(call.result)?.details)?.dashboardPlan);
+        return JSON.stringify([args, detailsPlan]);
+      }
+      return [JSON.stringify(args), extractResultText(call.result) ?? ''].join('\n');
+    })
+    .join('\n');
 }
 
 function dashboardNestedCalls(run: BenchmarkRun) {

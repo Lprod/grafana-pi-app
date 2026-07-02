@@ -1701,12 +1701,7 @@ function shouldExpandSubagentToolCall(call: SubagentToolCall, agent: SubagentRun
   );
 }
 
-const ALERT_EVIDENCE_TOOL_NAMES = new Set([
-  'find_panel_alert_rules',
-  'get_alert_rule',
-  'query_prometheus',
-  'inspect_dashboard_context',
-]);
+const ALERT_EVIDENCE_TOOL_NAMES = new Set(['find_panel_alert_rules', 'get_alert_rule', 'query_prometheus']);
 
 function contentFromLegacyToolText(text: string | undefined) {
   return text ? [{ type: 'text', text }] : undefined;

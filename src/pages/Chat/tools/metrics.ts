@@ -314,7 +314,7 @@ function makeQueryPrometheusTool(toolConfig: GrafanaToolConfig): AgentTool {
     name: 'query_prometheus',
     label: 'Query Prometheus',
     description:
-      'Run an instant or range PromQL query through Grafana as the current user. Results are compact validation summaries with min/max/last values, not raw data frames.',
+      'Run an instant or range PromQL query through Grafana as the current user. Results are compact validation summaries with min/max/last values, not raw data frames. For dashboard rate/trend panel validation, prefer a batched type="range" call with explicit start/end matching the dashboard time range and treat validationError or totalSeries=0 as unusable evidence.',
     parameters: Type.Object({
       datasourceUid: Type.Optional(
         Type.String({
@@ -328,7 +328,7 @@ function makeQueryPrometheusTool(toolConfig: GrafanaToolConfig): AgentTool {
             query: Type.String({ description: 'PromQL expression.' }),
             type: Type.Optional(
               Type.Union([Type.Literal('instant'), Type.Literal('range')], {
-                description: 'Query type. Defaults to instant.',
+                description: 'Query type. Defaults to instant. Use range for dashboard time-series/rate validation.',
               })
             ),
             start: Type.Optional(
@@ -344,7 +344,7 @@ function makeQueryPrometheusTool(toolConfig: GrafanaToolConfig): AgentTool {
       ),
       type: Type.Optional(
         Type.Union([Type.Literal('instant'), Type.Literal('range')], {
-          description: 'Query type. Defaults to instant.',
+          description: 'Query type. Defaults to instant. Use range for dashboard time-series/rate validation.',
         })
       ),
       start: Type.Optional(Type.String({ description: 'Range start such as now-1h, now-6h, or an ISO timestamp.' })),
@@ -454,7 +454,18 @@ function makeQueryPrometheusRawTool(toolConfig: GrafanaToolConfig): AgentTool {
 
 function querySpecsFromParams(args: QueryPrometheusParams): PrometheusQuerySpec[] {
   if (Array.isArray(args.queries) && args.queries.length > 0) {
-    return args.queries.filter((querySpec) => typeof querySpec.query === 'string' && querySpec.query.trim());
+    return args.queries
+      .filter((querySpec) => typeof querySpec.query === 'string' && querySpec.query.trim())
+      .map((querySpec) => {
+        const start = querySpec.start ?? args.start;
+        const end = querySpec.end ?? args.end;
+        return {
+          ...querySpec,
+          type: querySpec.type ?? args.type ?? (start || end ? 'range' : undefined),
+          start,
+          end,
+        };
+      });
   }
   return typeof args.query === 'string' && args.query.trim()
     ? [{ query: args.query, type: args.type, start: args.start, end: args.end }]
@@ -487,15 +498,79 @@ async function runPrometheusQuerySummary(
   const timeRange =
     queryType === 'range' ? makeTimeRange(querySpec.start ?? 'now-1h', querySpec.end ?? 'now') : getDefaultTimeRange();
   const interval = queryType === 'range' ? chooseRangeInterval(timeRange) : '1m';
-  const response = await runPrometheusQuery(ds, querySpec.query, queryType, timeRange, interval, signal);
-  const frames = response.data ?? [];
-  return summarizePrometheusQuery({
+  try {
+    const response = await runPrometheusQuery(ds, querySpec.query, queryType, timeRange, interval, signal);
+    const frames = response.data ?? [];
+    return summarizePrometheusQuery({
+      datasourceUid: ds.uid,
+      query: querySpec.query,
+      queryType,
+      interval,
+      timeRange,
+      frames,
+    });
+  } catch (error) {
+    throwIfAborted(signal);
+    const summary = await runPrometheusResourceQuerySummary(
+      ds,
+      querySpec.query,
+      queryType,
+      timeRange,
+      interval,
+      signal
+    ).catch(() => {
+      throw error;
+    });
+    summary.notices.unshift({
+      severity: 'info',
+      text: `Grafana datasource query failed; used Prometheus resource fallback: ${formatBackendFetchError(error)}`,
+    });
+    return summary;
+  }
+}
+
+async function runPrometheusResourceQuerySummary(
+  ds: ResourceCapableDataSource,
+  query: string,
+  queryType: 'instant' | 'range',
+  timeRange: TimeRange,
+  interval: string,
+  signal?: AbortSignal
+): Promise<PrometheusQuerySummary> {
+  const response =
+    queryType === 'range'
+      ? await getDatasourceResource<PrometheusQueryApiResponse>(
+          ds,
+          'api/v1/query_range',
+          {
+            query,
+            start: timeRange.from.toISOString(),
+            end: timeRange.to.toISOString(),
+            step: String((durationToMs(interval) ?? 60000) / 1000),
+          },
+          signal
+        )
+      : await getDatasourceResource<PrometheusQueryApiResponse>(
+          ds,
+          'api/v1/query',
+          {
+            query,
+            time: timeRange.to.toISOString(),
+          },
+          signal
+        );
+
+  if (response.status && response.status !== 'success') {
+    throw new Error(response.error || response.errorType || 'Prometheus resource query failed');
+  }
+
+  return summarizePrometheusApiQuery({
     datasourceUid: ds.uid,
-    query: querySpec.query,
+    query,
     queryType,
     interval,
     timeRange,
-    frames,
+    response,
   });
 }
 
@@ -847,6 +922,23 @@ type SummaryPoint = {
   value: number | null;
 };
 
+type PrometheusQueryApiResponse = {
+  status?: string;
+  errorType?: string;
+  error?: string;
+  warnings?: string[];
+  data?: {
+    resultType?: string;
+    result?: PrometheusApiSeries[];
+  };
+};
+
+type PrometheusApiSeries = {
+  metric?: Record<string, string>;
+  value?: [number | string, string];
+  values?: Array<[number | string, string]>;
+};
+
 const MAX_SERIES_SUMMARIES = 8;
 const MAX_BATCH_SERIES_SUMMARIES = 3;
 const PROMETHEUS_QUERY_MAX_DATA_POINTS = 1200;
@@ -893,6 +985,114 @@ function summarizePrometheusQuery(options: {
     executedQueryStrings: collectExecutedQueryStrings(options.frames),
     series: selected.series,
   };
+}
+
+function summarizePrometheusApiQuery(options: {
+  datasourceUid: string;
+  query: string;
+  queryType: 'instant' | 'range';
+  interval: string;
+  timeRange: TimeRange;
+  response: PrometheusQueryApiResponse;
+}): PrometheusQuerySummary {
+  const allSeries = (options.response.data?.result ?? []).map(summarizePrometheusApiSeries);
+  const selected = selectProminentSeries(allSeries, MAX_SERIES_SUMMARIES);
+
+  return {
+    datasourceUid: options.datasourceUid,
+    query: options.query,
+    queryType: options.queryType,
+    interval: options.interval,
+    range: {
+      from: options.timeRange.from.toISOString(),
+      to: options.timeRange.to.toISOString(),
+      raw: options.timeRange.raw,
+    },
+    frameCount: allSeries.length,
+    totalSeries: allSeries.length,
+    truncatedSeries: allSeries.length > MAX_SERIES_SUMMARIES,
+    seriesSelection: selected.selection,
+    omittedSeries: selected.omittedSeries,
+    notices: (options.response.warnings ?? []).slice(0, 10).map((text) => ({ severity: 'warning', text })),
+    executedQueryStrings:
+      options.queryType === 'range'
+        ? [`Expr: ${options.query}\nStep: ${options.interval}`]
+        : [`Expr: ${options.query}`],
+    series: selected.series,
+  };
+}
+
+function summarizePrometheusApiSeries(series: PrometheusApiSeries): SeriesSummary {
+  const labels = stringLabelsFromRecord(series.metric ?? {});
+  const points = (series.values ?? (series.value ? [series.value] : [])).map(([rawTime, rawValue]) => ({
+    time: prometheusApiTime(rawTime),
+    value: finiteNumber(rawValue),
+  }));
+  const nonNullPoints = points.filter((point) => point.value !== null);
+  let min: SummaryPoint | undefined;
+  let max: SummaryPoint | undefined;
+  let sum = 0;
+
+  for (const point of nonNullPoints) {
+    sum += point.value!;
+    if (!min || point.value! < min.value!) {
+      min = point;
+    }
+    if (!max || point.value! > max.value!) {
+      max = point;
+    }
+  }
+
+  const first = nonNullPoints[0];
+  const last = nonNullPoints.at(-1);
+  const summary: SeriesSummary = {
+    name: prometheusApiSeriesName(series.metric ?? {}),
+    labels,
+    points: points.length,
+    nonNullPoints: nonNullPoints.length,
+    nullPoints: points.length - nonNullPoints.length,
+    last,
+    min,
+    max,
+    mean: nonNullPoints.length > 0 ? roundNumber(sum / nonNullPoints.length) : undefined,
+  };
+
+  if (first && last && first.value !== null && last.value !== null) {
+    summary.delta = roundNumber(last.value - first.value);
+    if (first.value !== 0) {
+      summary.deltaPercent = roundNumber(((last.value - first.value) / Math.abs(first.value)) * 100);
+    }
+  }
+
+  return summary;
+}
+
+function prometheusApiSeriesName(metric: Record<string, string>) {
+  const name = metric.__name__;
+  const labels = Object.entries(metric)
+    .filter(([key]) => key !== '__name__')
+    .sort(([left], [right]) => left.localeCompare(right));
+  if (labels.length === 0) {
+    return name || 'value';
+  }
+  const labelText = labels.map(([key, value]) => `${key}="${value}"`).join(',');
+  return name ? `${name}{${labelText}}` : `{${labelText}}`;
+}
+
+function stringLabelsFromRecord(metric: Record<string, string>): Record<string, string> {
+  return Object.fromEntries(
+    Object.entries(metric)
+      .filter(([key]) => key !== '__name__')
+      .map(([key, value]) => [key, String(value)])
+  );
+}
+
+function prometheusApiTime(raw: number | string): string | undefined {
+  const seconds = typeof raw === 'number' ? raw : Number(raw);
+  if (!Number.isFinite(seconds)) {
+    return undefined;
+  }
+  return new Date(seconds * 1000).toISOString();
 }
 
 function prometheusVisualizationDetails(summary: PrometheusQuerySummary) {

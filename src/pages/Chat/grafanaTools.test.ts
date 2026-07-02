@@ -27,6 +27,7 @@ jest.mock('typebox', () => ({
     Any: jest.fn((config) => config ?? {}),
     Boolean: jest.fn((config) => config ?? {}),
     Literal: jest.fn((value, config) => ({ ...config, const: value })),
+    Null: jest.fn((config) => ({ ...config, type: 'null' })),
     Number: jest.fn((config) => config ?? {}),
     Object: jest.fn((properties) => ({ properties })),
     Optional: jest.fn((schema) => schema),
@@ -397,6 +398,93 @@ describe('grafana datasource tool policy', () => {
     });
   });
 
+  it('treats batched query_prometheus items with start or end as range queries', async () => {
+    const frame = makePrometheusFrame({
+      displayName: 'value',
+      labels: {},
+      times: [Date.UTC(2026, 0, 1, 0, 0, 0)],
+      values: [1],
+    });
+    const dataSource = {
+      uid: 'prom-b',
+      type: 'prometheus',
+      query: jest.fn().mockResolvedValue({ state: 'Done', data: [frame] }),
+    };
+    mockDataSourceSrv.get.mockResolvedValue(dataSource);
+    const tool = getTool(createGrafanaTools({ allowedPrometheusDatasourceUids: ['prom-b'] }), 'query_prometheus');
+
+    await tool.execute(
+      'call-1',
+      {
+        queries: [{ query: 'sum(rate(http_requests_total[5m]))', start: 'now-6h', end: 'now' }],
+      },
+      undefined
+    );
+
+    expect(dataSource.query).toHaveBeenCalledTimes(1);
+    expect(dataSource.query.mock.calls[0][0].targets[0]).toMatchObject({
+      range: true,
+      instant: false,
+    });
+  });
+
+  it('falls back to Prometheus resource queries when datasource range query fails generically', async () => {
+    const dataSource = {
+      uid: 'prom-b',
+      type: 'prometheus',
+      query: jest.fn().mockResolvedValue({ state: 'Error', errors: [{}], data: [] }),
+      getResource: jest.fn().mockResolvedValue({
+        status: 'success',
+        data: {
+          resultType: 'matrix',
+          result: [
+            {
+              metric: { route: '/render/report', status: '500' },
+              values: [
+                [1782982140, '0.1'],
+                [1782982170, '0.2'],
+              ],
+            },
+          ],
+        },
+      }),
+    };
+    mockDataSourceSrv.get.mockResolvedValue(dataSource);
+    const tool = getTool(createGrafanaTools({ allowedPrometheusDatasourceUids: ['prom-b'] }), 'query_prometheus');
+
+    const result = await tool.execute(
+      'call-1',
+      {
+        query: 'sum by (route) (rate(http_requests_total{status=~"5.."}[5m]))',
+        type: 'range',
+        start: 'now-6h',
+        end: 'now',
+      },
+      undefined
+    );
+    const body = JSON.parse(result.content[0].text);
+
+    expect(dataSource.getResource).toHaveBeenCalledWith(
+      'api/v1/query_range',
+      expect.objectContaining({
+        query: 'sum by (route) (rate(http_requests_total{status=~"5.."}[5m]))',
+        step: '30',
+      })
+    );
+    expect(body).toMatchObject({
+      queryType: 'range',
+      frameCount: 1,
+      totalSeries: 1,
+    });
+    expect(body.validationError).toBeUndefined();
+    expect(body.notices[0].text).toContain('used Prometheus resource fallback');
+    expect(body.series[0]).toMatchObject({
+      labels: { route: '/render/report', status: '500' },
+      points: 2,
+      last: { value: 0.2 },
+    });
+  });
+
   it('retries transient Prometheus query failures without exposing retry noise', async () => {
     jest.useFakeTimers();
     try {
@@ -679,6 +767,80 @@ describe('grafana datasource tool policy', () => {
         panelLink: { dashboardUID: 'service-dashboard', panelID: 2, source: 'annotations' },
       },
     });
+  });
+
+  it('keeps exact panel-linked alert rules even when they appear after the fallback scan window', async () => {
+    const unrelatedRules = Array.from({ length: 260 }, (_, index) => ({
+      apiVersion: 'rules.alerting.grafana.app/v0alpha1',
+      kind: 'AlertRule',
+      metadata: { name: `noise-alert-${index}` },
+      spec: {
+        title: `Noise alert ${index}`,
+        labels: { service: 'background' },
+        expressions: {
+          A: {
+            datasourceUID: 'prom-b',
+            model: { refId: 'A', expr: `sum(rate(noise_metric_total{service="background-${index}"}[5m]))` },
+          },
+        },
+      },
+    }));
+    const linkedRule = {
+      apiVersion: 'rules.alerting.grafana.app/v0alpha1',
+      kind: 'AlertRule',
+      metadata: { name: 'late-panel-alert' },
+      spec: {
+        title: 'Late panel alert',
+        annotations: { __dashboardUid__: 'service-dashboard', __panelId__: '7' },
+        panelRef: { dashboardUID: 'service-dashboard', panelID: 7 },
+        expressions: {
+          A: {
+            datasourceUID: 'prom-b',
+            model: { refId: 'A', expr: 'sum(rate(http_requests_total{status=~"5.."}[5m]))' },
+          },
+        },
+      },
+    };
+    const fetch = jest.fn((request: { url: string }) => {
+      if (request.url === '/apis/rules.alerting.grafana.app/v0alpha1/namespaces/default/alertrules') {
+        return of({ data: { items: [...unrelatedRules, linkedRule] } });
+      }
+      if (request.url === '/api/dashboards/uid/service-dashboard') {
+        return of({
+          data: {
+            dashboard: {
+              panels: [
+                {
+                  id: 7,
+                  title: '5xx rate',
+                  type: 'timeseries',
+                  datasource: { uid: 'prom-b', type: 'prometheus' },
+                  targets: [{ refId: 'A', expr: 'sum(rate(http_requests_total{status=~"5.."}[$__rate_interval]))' }],
+                },
+              ],
+            },
+          },
+        });
+      }
+      throw new Error(`Unexpected request: ${request.url}`);
+    });
+    (getBackendSrv as jest.Mock).mockReturnValue({ fetch });
+    const tool = getTool(createGrafanaTools({ allowedPrometheusDatasourceUids: ['prom-b'] }), 'find_panel_alert_rules');
+
+    const result = await tool.execute(
+      'call-alerts',
+      { namespace: 'default', dashboardUid: 'service-dashboard', panelId: 7 },
+      undefined
+    );
+    const body = JSON.parse(result.content[0].text);
+
+    expect(result.details).toMatchObject({
+      ruleCount: 261,
+      scannedRuleCount: 250,
+      exactPanelMatchCount: 1,
+      matchCount: 1,
+    });
+    expect(body.matches[0].rule.name).toBe('late-panel-alert');
   });
 
   it('handles unrelated alert rules without Prometheus checks while scanning panel matches', async () => {
@@ -1064,6 +1226,339 @@ describe('grafana datasource tool policy', () => {
     expect(editResult.content[0].text).not.toContain('dashboard_jsonnet');
   });
 
+  it('writes a typed dashboard plan as helper-compatible virtual Jsonnet', async () => {
+    const runtime = createVirtualJsonnetRuntime('session-plan');
+    const fetch = jest.fn().mockImplementation(({ data }) =>
+      of({
+        data: {
+          path: 'dashboard.jsonnet',
+          version: 1,
+          checksum: 'sha256:plan',
+          lineCount: data.content.split('\n').length,
+          dashboardJsonnetSize: data.content.length,
+          dashboard_jsonnet: data.content,
+        },
+      })
+    );
+    (getBackendSrv as jest.Mock).mockReturnValue({ fetch });
+    const tool = getTool(createGrafanaTools({ virtualJsonnetFiles: runtime }), 'write_dashboard_plan');
+
+    const result = await tool.execute(
+      'call-plan',
+      {
+        dashboard: {
+          title: 'Plan Dashboard',
+          uid: 'plan-dashboard',
+          datasourceUid: 'prom-a',
+          timeRange: { from: 'now-6h', to: 'now' },
+          tags: ['plan'],
+        },
+        queryEvidence: [
+          {
+            id: 'storage',
+            datasourceUid: 'prom-a',
+            expr: 'sum by (tenant) (prometheus_tsdb_storage_blocks_bytes{namespace="thanos-prod"})',
+            queryType: 'range',
+            totalSeries: 3,
+            validationError: 'null',
+            labels: ['tenant'],
+          },
+          {
+            id: 'wal',
+            datasourceUid: 'prom-a',
+            expr: 'sum by (tenant) (prometheus_tsdb_wal_storage_size_bytes{namespace="thanos-prod"})',
+            queryType: 'instant',
+            totalSeries: 3,
+            validationError: null,
+            labels: ['tenant'],
+          },
+          {
+            id: 'cluster-scoped',
+            datasourceUid: 'prom-a',
+            expr: 'sum by (tenant) (prometheus_tsdb_storage_blocks_bytes{cluster="missing", namespace="thanos-prod"})',
+            queryType: 'range',
+            totalSeries: 0,
+            validationError: null,
+            labels: ['tenant'],
+          },
+        ],
+        panels: [
+          {
+            title: 'Storage by tenant',
+            type: 'timeseries',
+            queryEvidenceId: 'storage',
+            unit: 'bytes',
+            decimals: 2,
+            layout: 'full',
+            row: 'Tenant storage',
+            legend: '{{tenant}}',
+          },
+          {
+            title: 'WAL by tenant',
+            type: 'table',
+            targets: [
+              { queryEvidenceId: 'wal', legend: '{{tenant}} WAL' },
+              { queryEvidenceId: 'storage', legend: '{{tenant}} storage' },
+            ],
+            unit: 'bytes',
+            decimals: 1,
+            layout: 'twoUp',
+            row: 'Tenant storage',
+            columns: ['tenant', 'Value'],
+            rename: { Value: 'WAL bytes' },
+          },
+          {
+            title: 'Total WAL',
+            type: 'stat',
+            queryEvidenceId: 'wal',
+            unit: 'bytes',
+            layout: 'full',
+            row: 'Tenant totals',
+          },
+        ],
+      },
+      undefined
+    );
+
+    const sent = fetch.mock.calls[0][0].data.content;
+    expect(fetch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        url: '/api/plugins/g42-pi-app/resources/jsonnet-dashboards/jsonnet-files/write',
+        data: {
+          sessionId: 'session-plan',
+          path: 'dashboard.jsonnet',
+          content: sent,
+        },
+      })
+    );
+    expect(sent).toContain("local d = import 'github.com/g42/pi-dashboard/main.libsonnet';");
+    expect(sent).toContain('uid="plan-dashboard"');
+    expect(sent).toContain('d.row("Tenant storage", [');
+    expect(sent).toContain('d.row("Tenant totals", [');
+    expect(sent).toContain('d.panel.timeseries(');
+    expect(sent).toContain('d.panel.table(');
+    expect(sent).toContain('d.panel.stat(');
+    expect(sent).toContain('legend="{{tenant}}"');
+    expect(sent).toContain('legend="{{tenant}} storage"');
+    expect(sent).toContain('decimals=2');
+    expect(sent).toContain('columns=["tenant", "Value"]');
+    expect(sent).toContain('rename={ "Value": "WAL bytes" }');
+    expect(sent).toContain('fieldConfig={ defaults: { unit: "bytes", decimals: 1 } }');
+    expect(sent).toContain('format="table"');
+    expect(sent).not.toContain('cluster="missing"');
+    expect(runtime.getFile('dashboard.jsonnet')?.content).toBe(sent);
+    expect(result.content[0].text).toContain('DASHBOARD_PLAN_JSON:');
+    expect(result.content[0].text).not.toContain('dashboard_jsonnet');
+    expect(result.details).toMatchObject({
+      action: 'planned_written',
+      panelCount: 3,
+      rowCount: 2,
+      targetCount: 4,
+      queryEvidenceCount: 3,
+      dashboardPlan: {
+        dashboard: { uid: 'plan-dashboard', datasourceUid: 'prom-a' },
+      },
+    });
+    expect((result.details.dashboardPlan as any).queryEvidence[0]).toMatchObject({
+      id: 'storage',
+      validationError: null,
+    });
+    expect((result.details.dashboardPlan as any).panels[1]).toMatchObject({
+      queryEvidenceId: 'wal',
+      targets: [
+        { queryEvidenceId: 'wal', legend: '{{tenant}} WAL' },
+        { queryEvidenceId: 'storage', legend: '{{tenant}} storage' },
+      ],
+    });
+  });
+
+  it('infers omitted dashboard plan panel evidence IDs only when the match is unambiguous', async () => {
+    const runtime = createVirtualJsonnetRuntime('session-plan-infer');
+    const fetch = jest.fn().mockImplementation(({ data }) =>
+      of({
+        data: {
+          path: 'dashboard.jsonnet',
+          version: 1,
+          checksum: 'sha256:plan-infer',
+          lineCount: data.content.split('\n').length,
+          dashboardJsonnetSize: data.content.length,
+          dashboard_jsonnet: data.content,
+        },
+      })
+    );
+    (getBackendSrv as jest.Mock).mockReturnValue({ fetch });
+    const tool = getTool(createGrafanaTools({ virtualJsonnetFiles: runtime }), 'write_dashboard_plan');
+
+    const result = await tool.execute(
+      'call-plan-infer',
+      {
+        dashboard: {
+          title: 'Inferred Plan Dashboard',
+          uid: 'inferred-plan-dashboard',
+          datasourceUid: 'prom-a',
+          timeRange: { from: 'now-6h', to: 'now' },
+        },
+        queryEvidence: [
+          {
+            id: 'e_storage_tsdb',
+            datasourceUid: 'prom-a',
+            expr: 'sum by (tenant) (prometheus_tsdb_storage_blocks_bytes{namespace="thanos-prod"})',
+            queryType: 'instant',
+            totalSeries: 5,
+            labels: ['tenant'],
+          },
+          {
+            id: 'e_storage_tsdb_trend',
+            datasourceUid: 'prom-a',
+            expr: 'sum by (tenant) (prometheus_tsdb_storage_blocks_bytes{namespace="thanos-prod"})',
+            queryType: 'range',
+            totalSeries: 5,
+            labels: ['tenant'],
+          },
+          {
+            id: 'e_samples_rate',
+            datasourceUid: 'prom-a',
+            expr: 'sum by (tenant) (rate(thanos_receive_write_samples_sum{namespace="thanos-prod"}[5m]))',
+            queryType: 'range',
+            totalSeries: 5,
+            labels: ['tenant'],
+          },
+          {
+            id: 'e_ts_rate',
+            datasourceUid: 'prom-a',
+            expr: 'sum by (tenant) (rate(thanos_receive_write_timeseries_sum{namespace="thanos-prod"}[5m]))',
+            queryType: 'range',
+            totalSeries: 5,
+            labels: ['tenant'],
+          },
+          {
+            id: 'e_total_samples',
+            datasourceUid: 'prom-a',
+            expr: 'sum(sum by (tenant) (rate(thanos_receive_write_samples_sum{namespace="thanos-prod"}[5m])))',
+            queryType: 'instant',
+            totalSeries: 1,
+            labels: [],
+          },
+        ],
+        panels: [
+          {
+            title: 'TSDB Storage per Tenant',
+            type: 'table',
+            row: 'Tenant Storage Overview',
+            columns: ['Time', 'tenant', 'Value'],
+          },
+          {
+            title: 'TSDB Storage Trend over 6h',
+            type: 'timeseries',
+            row: 'Storage Trend',
+          },
+          {
+            title: 'Series/sec',
+            type: 'timeseries',
+            row: 'Ingest Rates',
+          },
+          {
+            title: 'Total Samples/sec',
+            type: 'stat',
+            row: 'Resource Consumers',
+          },
+        ],
+      },
+      undefined
+    );
+
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect((result.details.dashboardPlan as any).panels.map((panel: any) => panel.queryEvidenceId)).toEqual([
+      'e_storage_tsdb',
+      'e_storage_tsdb_trend',
+      'e_ts_rate',
+      'e_total_samples',
+    ]);
+    expect(result.details).toMatchObject({
+      panelCount: 4,
+      targetCount: 4,
+    });
+  });
+
+  it('rejects omitted dashboard plan panel evidence IDs when inference is ambiguous', async () => {
+    const runtime = createVirtualJsonnetRuntime('session-plan-infer-ambiguous');
+    const fetch = jest.fn();
+    (getBackendSrv as jest.Mock).mockReturnValue({ fetch });
+    const tool = getTool(createGrafanaTools({ virtualJsonnetFiles: runtime }), 'write_dashboard_plan');
+
+    await expect(
+      tool.execute(
+        'call-plan-infer-ambiguous',
+        {
+          dashboard: {
+            title: 'Ambiguous Plan Dashboard',
+            uid: 'ambiguous-plan-dashboard',
+            datasourceUid: 'prom-a',
+            timeRange: { from: 'now-6h', to: 'now' },
+          },
+          queryEvidence: [
+            {
+              id: 'storage-east',
+              datasourceUid: 'prom-a',
+              expr: 'sum by (tenant) (storage_bytes{region="east"})',
+              queryType: 'range',
+              totalSeries: 3,
+              validationError: null,
+              labels: ['tenant'],
+            },
+            {
+              id: 'storage-west',
+              datasourceUid: 'prom-a',
+              expr: 'sum by (tenant) (storage_bytes{region="west"})',
+              queryType: 'range',
+              totalSeries: 3,
+              validationError: null,
+              labels: ['tenant'],
+            },
+          ],
+          panels: [{ title: 'Storage', type: 'timeseries' }],
+        },
+        undefined
+      )
+    ).rejects.toThrow('panel title must unambiguously match one validated queryEvidence entry');
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it('rejects dashboard plans whose panels reference unusable evidence', async () => {
+    const runtime = createVirtualJsonnetRuntime('session-plan-reject');
+    const fetch = jest.fn();
+    (getBackendSrv as jest.Mock).mockReturnValue({ fetch });
+    const tool = getTool(createGrafanaTools({ virtualJsonnetFiles: runtime }), 'write_dashboard_plan');
+
+    await expect(
+      tool.execute(
+        'call-plan',
+        {
+          dashboard: {
+            title: 'Bad Plan',
+            uid: 'bad-plan',
+            datasourceUid: 'prom-a',
+            timeRange: { from: 'now-6h', to: 'now' },
+          },
+          queryEvidence: [
+            {
+              id: 'bad',
+              datasourceUid: 'prom-a',
+              expr: 'up{cluster="missing"}',
+              queryType: 'range',
+              totalSeries: 0,
+              validationError: null,
+              labels: ['job'],
+            },
+          ],
+          panels: [{ title: 'Bad panel', type: 'timeseries', queryEvidenceId: 'bad', unit: null, layout: 'full' }],
+        },
+        undefined
+      )
+    ).rejects.toThrow('references unusable queryEvidence bad');
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
   it('rejects rewriting an existing virtual Jsonnet file through the write tool', async () => {
     const source = "{ title: 'Saved Jsonnet', uid: 'saved-jsonnet', panels: [] }";
     const runtime = createVirtualJsonnetRuntime('session-tools', {
@@ -1082,6 +1577,384 @@ describe('grafana datasource tool policy', () => {
       'dashboard.jsonnet already exists at version 3; use edit_jsonnet for follow-up changes.'
     );
     expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it('rejects unsupported dashboard helper time arguments before writing Jsonnet', async () => {
+    const runtime = createVirtualJsonnetRuntime('session-guard');
+    const source = `local d = import 'github.com/g42/pi-dashboard/main.libsonnet';
+
+d.dashboard.new(
+  title='Bad Time Range',
+  uid='bad-time-range',
+  timeframe='now-6h',
+  rows=[],
+)`;
+    const fetch = jest.fn();
+    (getBackendSrv as jest.Mock).mockReturnValue({ fetch });
+    const tool = getTool(createGrafanaTools({ virtualJsonnetFiles: runtime }), 'write_jsonnet');
+
+    await expect(tool.execute('call-1', { content: source }, undefined)).rejects.toThrow(
+      "d.dashboard.new does not support timeframe=. Use time={ from: 'now-6h', to: 'now' } or omit time instead."
+    );
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it('rejects unavailable dashboard helper layouts before writing Jsonnet', async () => {
+    const runtime = createVirtualJsonnetRuntime('session-layout-guard');
+    const source = `local d = import 'github.com/g42/pi-dashboard/main.libsonnet';
+
+d.dashboard.new(
+  title='Bad Layout',
+  uid='bad-layout',
+  rows=[
+    d.row('Overview', [
+      d.layout.oneByThree([]),
+    ]),
+  ],
+)`;
+    const fetch = jest.fn();
+    (getBackendSrv as jest.Mock).mockReturnValue({ fetch });
+    const tool = getTool(createGrafanaTools({ virtualJsonnetFiles: runtime }), 'write_jsonnet');
+
+    await expect(tool.execute('call-1', { content: source }, undefined)).rejects.toThrow(
+      'd.layout.oneByThree is not available'
+    );
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it('rejects d.layout.full array arguments before writing Jsonnet', async () => {
+    const runtime = createVirtualJsonnetRuntime('session-full-layout-guard');
+    const source = `local d = import 'github.com/g42/pi-dashboard/main.libsonnet';
+
+d.dashboard.new(
+  title='Bad Full Layout',
+  uid='bad-full-layout',
+  rows=[
+    d.row('Overview', [
+      d.layout.full([
+        d.panel.timeseries(title='Requests', datasourceUid='prometheus'),
+      ]),
+    ]),
+  ],
+)`;
+    const fetch = jest.fn();
+    (getBackendSrv as jest.Mock).mockReturnValue({ fetch });
+    const tool = getTool(createGrafanaTools({ virtualJsonnetFiles: runtime }), 'write_jsonnet');
+
+    await expect(tool.execute('call-1', { content: source }, undefined)).rejects.toThrow(
+      'd.layout.full takes one panel object, not an array'
+    );
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it('rejects unsupported dashboard helper panel arguments before writing Jsonnet', async () => {
+    const runtime = createVirtualJsonnetRuntime('session-panel-arg-guard');
+    const source = `local d = import 'github.com/g42/pi-dashboard/main.libsonnet';
+
+d.dashboard.new(
+  title='Bad Panel Argument',
+  uid='bad-panel-argument',
+  rows=[
+    d.row('Overview', [
+      d.layout.twoUp([
+        d.panel.timeseries(
+          title='Requests',
+          datasourceUid='prometheus',
+          targets=[d.prom.query('sum(rate(http_requests_total[$__rate_interval]))', 'prometheus')],
+          span=12,
+        ),
+      ]),
+    ]),
+  ],
+)`;
+    const fetch = jest.fn();
+    (getBackendSrv as jest.Mock).mockReturnValue({ fetch });
+    const tool = getTool(createGrafanaTools({ virtualJsonnetFiles: runtime }), 'write_jsonnet');
+
+    await expect(tool.execute('call-1', { content: source }, undefined)).rejects.toThrow(
+      'd.panel.timeseries does not support span='
+    );
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it('normalizes table-only helper presentation args before writing Jsonnet', async () => {
+    const runtime = createVirtualJsonnetRuntime('session-table-arg-guard');
+    const source = `local d = import 'github.com/g42/pi-dashboard/main.libsonnet';
+
+d.dashboard.new(
+  title='Bad Table Argument',
+  uid='bad-table-argument',
+  rows=[
+    d.row('Overview', [
+      d.layout.full(
+        d.panel.table(
+          title='Targets',
+          datasourceUid='prometheus',
+          targets=[d.prom.query('up', 'prometheus', instant=true, format='table')],
+          columns=['job', 'instance', 'Value'],
+          unit='short',
+          decimals=2,
+        ),
+      ),
+    ]),
+  ],
+)`;
+    const fetch = jest.fn().mockImplementation(({ data }) =>
+      of({
+        data: {
+          path: 'dashboard.jsonnet',
+          version: 1,
+          checksum: 'sha256:normalized-table',
+          lineCount: data.content.split('\n').length,
+          dashboardJsonnetSize: data.content.length,
+          dashboard_jsonnet: data.content,
+        },
+      })
+    );
+    (getBackendSrv as jest.Mock).mockReturnValue({ fetch });
+    const tool = getTool(createGrafanaTools({ virtualJsonnetFiles: runtime }), 'write_jsonnet');
+
+    await tool.execute('call-1', { content: source }, undefined);
+
+    const sentContent = fetch.mock.calls[0][0].data.content;
+    expect(sentContent).not.toContain("unit='short'");
+    expect(sentContent).not.toContain('decimals=2');
+    expect(sentContent).toContain("fieldConfig={ defaults: { unit: 'short', decimals: 2 } }");
+  });
+
+  it('rejects unavailable dashboard helper panel constructors before writing Jsonnet', async () => {
+    const runtime = createVirtualJsonnetRuntime('session-panel-constructor-guard');
+    const source = `local d = import 'github.com/g42/pi-dashboard/main.libsonnet';
+
+d.dashboard.new(
+  title='Bad Panel Constructor',
+  uid='bad-panel-constructor',
+  rows=[
+    d.row('Overview', [
+      d.layout.full(d.panel.heatmap(title='Latency', datasourceUid='prometheus')),
+    ]),
+  ],
+)`;
+    const fetch = jest.fn();
+    (getBackendSrv as jest.Mock).mockReturnValue({ fetch });
+    const tool = getTool(createGrafanaTools({ virtualJsonnetFiles: runtime }), 'write_jsonnet');
+
+    await expect(tool.execute('call-1', { content: source }, undefined)).rejects.toThrow(
+      'd.panel.heatmap is not available'
+    );
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it('rejects unsupported dashboard helper edits before sending them to the backend', async () => {
+    const source = `local d = import 'github.com/g42/pi-dashboard/main.libsonnet';
+
+d.dashboard.new(
+  title='Good Time Range',
+  uid='good-time-range',
+  time={ from: 'now-6h', to: 'now' },
+  rows=[],
+)`;
+    const runtime = createVirtualJsonnetRuntime('session-edit-guard', {
+      path: 'dashboard.jsonnet',
+      content: source,
+      version: 1,
+      checksum: 'sha256:guard',
+      lineCount: 8,
+      dashboardJsonnetSize: source.length,
+    });
+    runtime.markHydrated('dashboard.jsonnet', 1);
+    const fetch = jest.fn();
+    (getBackendSrv as jest.Mock).mockReturnValue({ fetch });
+    const tool = getTool(createGrafanaTools({ virtualJsonnetFiles: runtime }), 'edit_jsonnet');
+
+    await expect(
+      tool.execute(
+        'call-1',
+        {
+          baseVersion: 1,
+          edits: [{ startLine: 6, endLine: 6, replacement: "  timeframe='now-6h'," }],
+        },
+        undefined
+      )
+    ).rejects.toThrow(
+      "d.dashboard.new does not support timeframe=. Use time={ from: 'now-6h', to: 'now' } or omit time instead."
+    );
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it('anchors structural Jsonnet edits to the matching block start before sending them to the backend', async () => {
+    const source = `local d = import 'github.com/g42/pi-dashboard/main.libsonnet';
+
+d.dashboard.new(
+  title='Thanos Tenant Cost Benchmark',
+  uid='thanos-cost',
+  time={ from: 'now-6h', to: 'now' },
+  rows=[
+    d.row('Storage Overview', [
+      d.layout.full(d.panel.table(
+        title='TSDB Storage Blocks per Tenant',
+        datasourceUid='thanos-prod-db',
+        targets=[d.prom.query(
+          'sum by (tenant) (prometheus_tsdb_storage_blocks_bytes{namespace="thanos-prod"})',
+          'thanos-prod-db',
+          legend='storage'
+        )],
+        columns=['Time', 'tenant', 'value'],
+      )),
+    ]),
+  ],
+)`;
+    const replacement = `    d.row('Storage Overview', [
+      d.layout.twoUp([
+        d.panel.table(
+          title='TSDB Storage Blocks per Tenant',
+          datasourceUid='thanos-prod-db',
+          targets=[d.prom.query(
+            'sum by (tenant) (prometheus_tsdb_storage_blocks_bytes{namespace="thanos-prod"})',
+            'thanos-prod-db',
+            legend='storage'
+          )],
+          columns=['Time', 'tenant', 'value'],
+        ),
+        d.panel.table(
+          title='WAL Storage per Tenant',
+          datasourceUid='thanos-prod-db',
+          targets=[d.prom.query(
+            'sum by (tenant) (prometheus_tsdb_wal_storage_size_bytes{namespace="thanos-prod"})',
+            'thanos-prod-db',
+            legend='wal'
+          )],
+          columns=['Time', 'tenant', 'value'],
+        ),
+      ]),
+    ]),`;
+    const edited = source.replace(
+      `    d.row('Storage Overview', [
+      d.layout.full(d.panel.table(
+        title='TSDB Storage Blocks per Tenant',
+        datasourceUid='thanos-prod-db',
+        targets=[d.prom.query(
+          'sum by (tenant) (prometheus_tsdb_storage_blocks_bytes{namespace="thanos-prod"})',
+          'thanos-prod-db',
+          legend='storage'
+        )],
+        columns=['Time', 'tenant', 'value'],
+      )),
+    ]),`,
+      replacement
+    );
+    const runtime = createVirtualJsonnetRuntime('session-edit-anchor', {
+      path: 'dashboard.jsonnet',
+      content: source,
+      version: 1,
+      checksum: 'sha256:anchor',
+      lineCount: source.split('\n').length,
+      dashboardJsonnetSize: source.length,
+    });
+    runtime.markHydrated('dashboard.jsonnet', 1);
+    const fetch = jest.fn().mockReturnValue(
+      of({
+        data: {
+          path: 'dashboard.jsonnet',
+          version: 2,
+          checksum: 'sha256:anchored',
+          lineCount: edited.split('\n').length,
+          dashboardJsonnetSize: edited.length,
+          dashboard_jsonnet: edited,
+          changedRanges: [{ startLine: 8, endLine: 19, newLines: 24 }],
+          firstChangedLine: 8,
+        },
+      })
+    );
+    (getBackendSrv as jest.Mock).mockReturnValue({ fetch });
+    const tool = getTool(createGrafanaTools({ virtualJsonnetFiles: runtime }), 'edit_jsonnet');
+
+    await tool.execute(
+      'call-1',
+      {
+        baseVersion: 1,
+        edits: [{ startLine: 11, endLine: 19, replacement }],
+      },
+      undefined
+    );
+
+    expect(fetch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: {
+          sessionId: 'session-edit-anchor',
+          path: 'dashboard.jsonnet',
+          baseVersion: 1,
+          edits: [{ startLine: 8, endLine: 19, replacement }],
+        },
+      })
+    );
+    expect(runtime.getFile('dashboard.jsonnet')?.content).toBe(edited);
+  });
+
+  it('normalizes table presentation args introduced by Jsonnet edits', async () => {
+    const source = `local d = import 'github.com/g42/pi-dashboard/main.libsonnet';
+
+d.dashboard.new(
+  title='Table Edit',
+  uid='table-edit',
+  rows=[
+    d.row('Overview', [
+      d.layout.full(
+        d.panel.table(
+          title='Targets',
+          datasourceUid='prometheus',
+          targets=[d.prom.query('up', 'prometheus')],
+          columns=['job', 'instance', 'Value'],
+        ),
+      ),
+    ]),
+  ],
+)`;
+    const replacement = `        d.panel.table(
+          title='Targets',
+          datasourceUid='prometheus',
+          targets=[d.prom.query('up', 'prometheus')],
+          columns=['job', 'instance', 'Value'],
+          unit='short',
+        ),`;
+    const runtime = createVirtualJsonnetRuntime('session-edit-table-args', {
+      path: 'dashboard.jsonnet',
+      content: source,
+      version: 1,
+      checksum: 'sha256:table-args',
+      lineCount: source.split('\n').length,
+      dashboardJsonnetSize: source.length,
+    });
+    runtime.markHydrated('dashboard.jsonnet', 1);
+    const fetch = jest.fn().mockImplementation(({ data }) =>
+      of({
+        data: {
+          path: 'dashboard.jsonnet',
+          version: 2,
+          checksum: 'sha256:normalized-table-edit',
+          lineCount: data.edits[0].replacement.split('\n').length,
+          dashboardJsonnetSize: data.edits[0].replacement.length,
+          dashboard_jsonnet: data.edits[0].replacement,
+        },
+      })
+    );
+    (getBackendSrv as jest.Mock).mockReturnValue({ fetch });
+    const tool = getTool(createGrafanaTools({ virtualJsonnetFiles: runtime }), 'edit_jsonnet');
+
+    await tool.execute(
+      'call-1',
+      {
+        baseVersion: 1,
+        edits: [{ startLine: 9, endLine: 14, replacement }],
+      },
+      undefined
+    );
+
+    const sentEdit = fetch.mock.calls[0][0].data.edits[0];
+    expect(sentEdit.startLine).toBe(1);
+    expect(sentEdit.endLine).toBe(source.split('\n').length);
+    expect(sentEdit.replacement).not.toContain("unit='short'");
+    expect(sentEdit.replacement).toContain("fieldConfig={ defaults: { unit: 'short' } }");
   });
 
   it('normalizes local dashboard wrapper drafts before writing Jsonnet', async () => {
@@ -1492,6 +2365,7 @@ describe('grafana datasource tool policy', () => {
     expect(names).toContain('query_prometheus');
     expect(names).toContain('find_panel_alert_rules');
     expect(names).toContain('get_alert_rule');
+    expect(names).toContain('write_dashboard_plan');
     expect(names).toContain('write_jsonnet');
     expect(names).toContain('edit_jsonnet');
     expect(names).toContain('fix_jsonnet');
@@ -2593,6 +3467,7 @@ describe('grafana datasource tool policy', () => {
     expect(names).toContain('run_support_agent');
     expect(names).toContain('run_navigation_agent');
     expect(names).not.toContain('write_jsonnet');
+    expect(names).not.toContain('write_dashboard_plan');
     expect(names).not.toContain('render_dashboard');
     expect(names).not.toContain('save_dashboard');
     expect(names).not.toContain('get_dashboard');
@@ -2612,6 +3487,7 @@ describe('grafana datasource tool policy', () => {
     ).map((tool) => tool.name);
 
     expect(names).toContain('query_prometheus');
+    expect(names).toContain('write_dashboard_plan');
     expect(names).toContain('write_jsonnet');
     expect(names).toContain('render_dashboard');
     expect(names).toContain('save_dashboard');
@@ -2654,6 +3530,19 @@ describe('grafana datasource tool policy', () => {
     });
     expect(call?.task).toContain('Prefer datasource UID: prom-b.');
     expect(call?.task).toContain('Inspect existing dashboard UID: http-current.');
+    expect(call?.systemPrompt).toContain('validate candidate PromQL with query_prometheus type="range"');
+    expect(call?.systemPrompt).toContain('Treat dashboard-derived metric usage as advisory');
+    expect(call?.systemPrompt).toContain('replace Grafana dashboard macros such as $__rate_interval');
+    expect(call?.systemPrompt).toContain('run every listed candidate exactly as requested before filtering');
+    expect(call?.systemPrompt).toContain('validationError or totalSeries=0 as unusable panel evidence');
+    expect(call?.systemPrompt).toContain('treat that as a validated handoff');
+    expect(call?.systemPrompt).toContain('write_dashboard_plan is the default writer');
+    expect(call?.systemPrompt).toContain('prefer write_dashboard_plan over raw write_jsonnet');
+    expect(call?.systemPrompt).toContain('one or more query targets');
+    expect(call?.systemPrompt).toContain('per-target legends');
+    expect(call?.systemPrompt).toContain('render_dashboard immediately and only edit Jsonnet');
+    expect(call?.systemPrompt).toContain("Use time={ from: 'now-6h', to: 'now' }");
+    expect(call?.systemPrompt).toContain('do not use timeframe, timeFrom, or timeTo');
     expect(result.details).toMatchObject({ agent: 'dashboard', status: 'completed' });
     expect(childToolNames).toEqual(
       expect.arrayContaining([
@@ -2663,6 +3552,7 @@ describe('grafana datasource tool policy', () => {
         'query_prometheus',
         'search_dashboard_metric_usage',
         'get_metric_neighborhood',
+        'write_dashboard_plan',
         'write_jsonnet',
         'edit_jsonnet',
         'fix_jsonnet',
@@ -2679,6 +3569,43 @@ describe('grafana datasource tool policy', () => {
     expect(childToolNames).not.toContain('upload_dashboard');
     expect(childToolNames).not.toContain('delete_dashboard');
     expect(childToolNames).not.toContain('run_dashboard_agent');
+  });
+
+  it('runs the investigation agent with bounded selector-recovery guidance', async () => {
+    const registry = createGrafanaToolRegistry({
+      skillTools: createSkillTools(GRAFANA_SKILLS),
+      runtime: {
+        model: {} as any,
+        streamFn: jest.fn() as any,
+        thinkingLevel: 'off',
+      },
+    });
+    const tool = getTool(registry.subagents, 'run_investigation_agent');
+
+    const result = await tool.execute(
+      'call-1',
+      {
+        task: 'Recover PromQL selectors after an over-scoped label returns zero series.',
+        datasourceUid: 'prom-b',
+      },
+      undefined
+    );
+    const call = jest.mocked(runSpecialistAgent).mock.calls.at(-1)?.[0];
+    const childToolNames = call?.tools.map((childTool) => childTool.name) ?? [];
+
+    expect(call).toMatchObject({
+      kind: 'investigation',
+      task: expect.stringContaining('Recover PromQL selectors after an over-scoped label returns zero series.'),
+    });
+    expect(call?.task).toContain('Prefer datasource UID: prom-b.');
+    expect(call?.systemPrompt).toContain('For selector-recovery tasks, use a bounded sequence');
+    expect(call?.systemPrompt).toContain('retry only failed recovered queries once individually');
+    expect(call?.systemPrompt).toContain('PromQL expressions plus datasource UID, totalSeries');
+    expect(result.details).toMatchObject({ agent: 'investigation', status: 'completed' });
+    expect(childToolNames).toEqual(
+      expect.arrayContaining(['list_metrics', 'inspect_metric_series', 'query_prometheus', 'update_report'])
+    );
+    expect(childToolNames).not.toContain('save_dashboard');
   });
 
   it('runs the alert agent with read-only alert, dashboard, and Prometheus child tools', async () => {
@@ -2712,6 +3639,10 @@ describe('grafana datasource tool policy', () => {
     expect(call?.task).toContain('Prefer datasource UID: prom-b.');
     expect(call?.task).toContain('Dashboard UID: service-dashboard.');
     expect(call?.task).toContain('Panel ID: 2.');
+    expect(call?.systemPrompt).toContain('panel ID or panelRef');
+    expect(call?.systemPrompt).toContain('panel threshold');
+    expect(call?.systemPrompt).toContain('alert threshold');
+    expect(call?.systemPrompt).toContain('linked panel');
     expect(result.details).toMatchObject({ agent: 'alerts', status: 'completed' });
     expect(childToolNames).toEqual(
       expect.arrayContaining([

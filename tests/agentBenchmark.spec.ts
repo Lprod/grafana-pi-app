@@ -476,11 +476,12 @@ function findDashboardQualityError(events: BenchmarkEvent[]) {
   }
 
   const panels = recordsField(dashboard, 'panels');
-  if (panels.length < 2) {
-    return `expected at least 2 panels, got ${panels.length}`;
+  const panelCount = numericField(dashboard, 'panelCount') ?? panels.length;
+  if (panelCount < 2) {
+    return `expected at least 2 panels, got ${panelCount}`;
   }
 
-  const panelText = JSON.stringify(panels).toLowerCase();
+  const panelText = `${JSON.stringify(panels)}\n${extractResultText(rendered.result) ?? ''}`.toLowerCase();
   if (!panelText.includes('rate(')) {
     return 'dashboard panels do not include a rate() query';
   }

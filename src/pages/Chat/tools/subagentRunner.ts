@@ -368,7 +368,8 @@ function buildSpecialistFollowUp(
           'Continue this dashboard create/update task; it is incomplete until the Jsonnet dashboard is saved.',
           `Missing successful steps: ${missing.join(', ')}.`,
           'Use the verified datasource UID and metrics already gathered.',
-          'If no virtual Jsonnet source exists, call write_jsonnet with Jsonnet that evaluates to a classic Grafana dashboard object; prefer the bundled github.com/g42/pi-dashboard helper import for new dashboards.',
+          'If no virtual Jsonnet source exists and the dashboard is backed by validated Prometheus evidence, call write_dashboard_plan first; it writes editable dashboard.jsonnet.',
+          'Use raw write_jsonnet only when write_dashboard_plan cannot express the requested dashboard.',
           'Then call render_dashboard, repair Jsonnet if render fails, repair material validation warnings if render reports them, and call save_dashboard.',
           'Do not report completion until save_dashboard succeeds. If a required tool fails, return the exact failure.',
         ].join('\n'),
@@ -404,8 +405,8 @@ function dashboardTaskRequiresSync(task: string) {
 
 function missingDashboardCompletionSteps(toolCalls: Map<string, SubagentToolCall>) {
   const missing: string[] = [];
-  if (!hasAnySuccessfulToolCall(toolCalls, ['write_jsonnet', 'edit_jsonnet', 'fix_jsonnet'])) {
-    missing.push('write_jsonnet or edit_jsonnet');
+  if (!hasAnySuccessfulToolCall(toolCalls, ['write_dashboard_plan', 'write_jsonnet', 'edit_jsonnet', 'fix_jsonnet'])) {
+    missing.push('write_dashboard_plan, write_jsonnet, or edit_jsonnet');
   }
   if (!hasSuccessfulToolCall(toolCalls, 'render_dashboard')) {
     missing.push('render_dashboard');

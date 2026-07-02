@@ -13,6 +13,40 @@ WEB_ROUTES = ("/", "/api/orders", "/render/report")
 METHOD = "GET"
 CPU_COUNT = 2
 HISTOGRAM_BUCKETS = (0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0)
+THANOS_NAMESPACE = "thanos-prod"
+THANOS_TENANTS = (
+    ("kubernetes_obs_it_prod_30d_crit_high", 1073.8, 36.6, 140_000.0, 139_500.0),
+    ("client_30d_crit_high_bestand", 824.7, 20.7, 88_000.0, 87_500.0),
+    ("default_1y_crit_high", 645.0, 12.4, 52_000.0, 51_000.0),
+    ("kubernetes_entw_alt_entw_30d_crit_med_bestand", 512.5, 16.8, 133_000.0, 132_500.0),
+    ("vm_30d_crit_med_bestand", 477.2, 14.6, 121_000.0, 120_500.0),
+)
+THANOS_PODS = (
+    ("thanos-global-crit-med-bestand-receive-distributor-5f479f4qlktc", "receive", "crit_med_bestand", 1.70, 28.0),
+    ("thanos-rzb-crit-med-bestand-receive-4", "receive", "crit_med_bestand", 1.65, 31.0),
+    ("thanos-rza-crit-med-bestand-receive-0", "receive", "crit_med_bestand", 1.63, 30.0),
+    ("thanos-default-30d-compactor-29715135-xtfdt", "compact", "default_30d", 0.58, 68.1),
+    ("thanos-vm-30d-compactor-29715135-792fp", "compact", "vm_30d", 0.52, 47.7),
+    ("thanos-rza-crit-high-receive-5", "receive", "crit_high", 1.25, 46.6),
+)
+ENTERPRISE_SERVICES = (
+    ("auth", "identity-platform", 135.0),
+    ("checkout", "commerce-checkout", 190.0),
+    ("payments", "commerce-payments", 155.0),
+    ("catalog", "catalog-core", 220.0),
+    ("search", "discovery", 245.0),
+    ("orders", "order-management", 165.0),
+    ("notifications", "messaging", 95.0),
+    ("fulfillment", "supply-chain", 115.0),
+)
+ENTERPRISE_ENVS = ("prod", "staging", "dev")
+ENTERPRISE_REGIONS = ("us-east-1", "eu-central-1")
+ENTERPRISE_ROUTES = ("/api/read", "/api/write", "/api/admin")
+ENTERPRISE_METHOD = "GET"
+ENTERPRISE_STATUS_RATIOS = (("200", 0.982), ("400", 0.014), ("500", 0.004))
+ENTERPRISE_QUEUES = ("default", "priority")
+ENTERPRISE_DEPENDENCIES = ("postgres", "redis", "partner-api")
+ENTERPRISE_HISTOGRAM_BUCKETS = (0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0)
 DEFAULT_HISTORY_HOURS = 6
 DEFAULT_STEP_SECONDS = 60
 DEFAULT_INCIDENT_DURATION_SECONDS = 900
@@ -135,6 +169,53 @@ def counter_value(rate_func: Callable[[float], float], t: float) -> float:
     return integrate_rate(rate_func, t)
 
 
+def periodic_counter(rate: float, t: float, phase: float, amplitude: float = 0.08, period: float = 900.0) -> float:
+    if t <= 0:
+        return 0.0
+    return rate * (t + amplitude * period * (math.cos(phase) - math.cos((t / period) + phase)))
+
+
+def stable_phase(*parts: str) -> float:
+    total = 0
+    for part in parts:
+        total += sum(ord(char) for char in part)
+    return (total % 628) / 100.0
+
+
+def enterprise_env_multiplier(env: str) -> float:
+    return {"prod": 1.0, "staging": 0.32, "dev": 0.14}[env]
+
+
+def enterprise_region_multiplier(region: str) -> float:
+    return {"us-east-1": 0.58, "eu-central-1": 0.42}[region]
+
+
+def enterprise_route_multiplier(route: str) -> float:
+    return {"/api/read": 0.66, "/api/write": 0.28, "/api/admin": 0.06}[route]
+
+
+def enterprise_latency_baseline(service: str, route: str) -> float:
+    service_penalty = {
+        "search": 0.08,
+        "checkout": 0.12,
+        "payments": 0.16,
+        "fulfillment": 0.10,
+    }.get(service, 0.04)
+    route_penalty = {"/api/read": 0.06, "/api/write": 0.13, "/api/admin": 0.22}[route]
+    return service_penalty + route_penalty
+
+
+def enterprise_request_rate(service_rate: float, env: str, region: str, route: str, status: str) -> float:
+    status_ratio = dict(ENTERPRISE_STATUS_RATIOS)[status]
+    return (
+        service_rate
+        * enterprise_env_multiplier(env)
+        * enterprise_region_multiplier(region)
+        * enterprise_route_multiplier(route)
+        * status_ratio
+    )
+
+
 def histogram_bucket_count(vm: str, route: str, le: float, t: float, incident_start_seconds: float) -> float:
     def rate_at(moment: float) -> float:
         rps = traffic_rps(vm, route, moment, incident_start_seconds)
@@ -233,8 +314,345 @@ def render_prometheus_metrics(elapsed_seconds: float, incident_start_seconds: fl
     lines.extend(metric_family("http_requests_total", "counter", "HTTP requests by route, status, and VM.", request_samples))
     lines.extend(metric_family("http_request_duration_seconds", "histogram", "HTTP request duration histogram.", [*bucket_samples, *latency_sum_samples]))
     lines.extend(metric_family("http_inflight_requests", "gauge", "Current in-flight HTTP requests.", inflight_samples))
+    lines.extend(render_enterprise_metric_families(t))
+    lines.extend(render_thanos_cost_metric_families(t))
 
     return "\n".join(lines) + "\n"
+
+
+def render_enterprise_metric_families(t: float) -> list[str]:
+    lines: list[str] = []
+    request_samples = []
+    bucket_samples = []
+    latency_sum_samples = []
+    queue_samples = []
+    slo_samples = []
+    dependency_error_samples = []
+    cache_samples = []
+    worker_restart_samples = []
+    db_connection_samples = []
+
+    for service_index, (service, team, service_rate) in enumerate(ENTERPRISE_SERVICES):
+        for env in ENTERPRISE_ENVS:
+            for region in ENTERPRISE_REGIONS:
+                env_region_phase = stable_phase(service, env, region)
+                traffic_total = 0.0
+                weighted_latency_total = 0.0
+
+                for route in ENTERPRISE_ROUTES:
+                    route_latency = enterprise_latency_baseline(service, route)
+                    route_rate = 0.0
+                    for status, _ratio in ENTERPRISE_STATUS_RATIOS:
+                        rate = enterprise_request_rate(service_rate, env, region, route, status)
+                        phase = stable_phase(service, env, region, route, status)
+                        request_samples.append(
+                            sample(
+                                "enterprise_http_requests_total",
+                                periodic_counter(rate, t, phase),
+                                service=service,
+                                team=team,
+                                env=env,
+                                region=region,
+                                route=route,
+                                method=ENTERPRISE_METHOD,
+                                status=status,
+                                instance=f"{service}-{region}-{env}:8080",
+                                job="enterprise-app",
+                            )
+                        )
+                        route_rate += rate
+
+                    route_total = periodic_counter(route_rate, t, stable_phase(service, env, region, route))
+                    traffic_total += route_total
+                    weighted_latency_total += route_total * route_latency
+                    for bucket in ENTERPRISE_HISTOGRAM_BUCKETS:
+                        fraction = clamp(1.0 - math.exp(-bucket / max(route_latency / 2.5, 0.001)), 0.0, 1.0)
+                        bucket_samples.append(
+                            sample(
+                                "enterprise_request_duration_seconds_bucket",
+                                route_total * fraction,
+                                service=service,
+                                team=team,
+                                env=env,
+                                region=region,
+                                route=route,
+                                method=ENTERPRISE_METHOD,
+                                le=str(bucket),
+                                job="enterprise-app",
+                            )
+                        )
+                    bucket_samples.append(
+                        sample(
+                            "enterprise_request_duration_seconds_bucket",
+                            route_total,
+                            service=service,
+                            team=team,
+                            env=env,
+                            region=region,
+                            route=route,
+                            method=ENTERPRISE_METHOD,
+                            le="+Inf",
+                            job="enterprise-app",
+                        )
+                    )
+                    latency_sum_samples.append(
+                        sample(
+                            "enterprise_request_duration_seconds_sum",
+                            route_total * route_latency,
+                            service=service,
+                            team=team,
+                            env=env,
+                            region=region,
+                            route=route,
+                            method=ENTERPRISE_METHOD,
+                            job="enterprise-app",
+                        )
+                    )
+                    latency_sum_samples.append(
+                        sample(
+                            "enterprise_request_duration_seconds_count",
+                            route_total,
+                            service=service,
+                            team=team,
+                            env=env,
+                            region=region,
+                            route=route,
+                            method=ENTERPRISE_METHOD,
+                            job="enterprise-app",
+                        )
+                    )
+
+                avg_latency = weighted_latency_total / max(traffic_total, 1.0)
+                error_budget = clamp(
+                    0.93
+                    - 0.06 * enterprise_env_multiplier(env)
+                    + 0.03 * math.sin((t / 1800.0) + env_region_phase)
+                    - min(avg_latency, 2.0) * 0.02,
+                    0.08,
+                    0.99,
+                )
+                slo_samples.append(
+                    sample(
+                        "enterprise_slo_error_budget_remaining_ratio",
+                        error_budget,
+                        service=service,
+                        team=team,
+                        env=env,
+                        region=region,
+                        objective="99.9",
+                        job="enterprise-slo",
+                    )
+                )
+
+                cache_samples.append(
+                    sample(
+                        "enterprise_cache_hit_ratio",
+                        clamp(0.82 + 0.08 * math.sin((t / 1200.0) + service_index), 0.55, 0.99),
+                        service=service,
+                        team=team,
+                        env=env,
+                        region=region,
+                        cache="edge",
+                        job="enterprise-app",
+                    )
+                )
+                for queue_index, queue in enumerate(ENTERPRISE_QUEUES):
+                    queue_samples.append(
+                        sample(
+                            "enterprise_queue_depth",
+                            45
+                            + service_rate * enterprise_env_multiplier(env) * 0.8
+                            + 28 * math.sin((t / 600.0) + env_region_phase + queue_index),
+                            service=service,
+                            team=team,
+                            env=env,
+                            region=region,
+                            queue=queue,
+                            job="enterprise-worker",
+                        )
+                    )
+                    worker_restart_samples.append(
+                        sample(
+                            "enterprise_worker_restarts_total",
+                            periodic_counter(
+                                0.002 * (queue_index + 1) * enterprise_env_multiplier(env),
+                                t,
+                                stable_phase(service, env, region, queue),
+                                amplitude=0.2,
+                            ),
+                            service=service,
+                            team=team,
+                            env=env,
+                            region=region,
+                            worker=queue,
+                            job="enterprise-worker",
+                        )
+                    )
+
+                for dependency_index, dependency in enumerate(ENTERPRISE_DEPENDENCIES):
+                    dependency_error_samples.append(
+                        sample(
+                            "enterprise_external_dependency_errors_total",
+                            periodic_counter(
+                                0.018
+                                * (dependency_index + 1)
+                                * enterprise_env_multiplier(env)
+                                * enterprise_region_multiplier(region),
+                                t,
+                                stable_phase(service, env, region, dependency),
+                            ),
+                            service=service,
+                            team=team,
+                            env=env,
+                            region=region,
+                            dependency=dependency,
+                            job="enterprise-app",
+                        )
+                    )
+
+                for pool in ("read", "write"):
+                    pool_multiplier = 0.72 if pool == "read" else 0.28
+                    db_connection_samples.append(
+                        sample(
+                            "enterprise_db_connections",
+                            10
+                            + service_rate
+                            * enterprise_env_multiplier(env)
+                            * enterprise_region_multiplier(region)
+                            * pool_multiplier
+                            * (1.0 + 0.08 * math.sin((t / 700.0) + env_region_phase)),
+                            service=service,
+                            team=team,
+                            env=env,
+                            region=region,
+                            pool=pool,
+                            job="enterprise-db",
+                        )
+                    )
+
+    lines.extend(metric_family("enterprise_http_requests_total", "counter", "Synthetic enterprise HTTP requests.", request_samples))
+    lines.extend(
+        metric_family(
+            "enterprise_request_duration_seconds",
+            "histogram",
+            "Synthetic enterprise request duration histogram.",
+            [*bucket_samples, *latency_sum_samples],
+        )
+    )
+    lines.extend(metric_family("enterprise_queue_depth", "gauge", "Synthetic enterprise queue depth.", queue_samples))
+    lines.extend(metric_family("enterprise_slo_error_budget_remaining_ratio", "gauge", "Synthetic enterprise SLO budget.", slo_samples))
+    lines.extend(
+        metric_family(
+            "enterprise_external_dependency_errors_total",
+            "counter",
+            "Synthetic enterprise dependency errors.",
+            dependency_error_samples,
+        )
+    )
+    lines.extend(metric_family("enterprise_cache_hit_ratio", "gauge", "Synthetic enterprise cache hit ratio.", cache_samples))
+    lines.extend(metric_family("enterprise_worker_restarts_total", "counter", "Synthetic enterprise worker restarts.", worker_restart_samples))
+    lines.extend(metric_family("enterprise_db_connections", "gauge", "Synthetic enterprise DB connections.", db_connection_samples))
+    return lines
+
+
+def render_thanos_cost_metric_families(t: float) -> list[str]:
+    gib = 1024 * 1024 * 1024
+    lines: list[str] = []
+
+    tsdb_samples = []
+    wal_samples = []
+    receive_samples = []
+    timeseries_samples = []
+    for index, (tenant, storage_gib, wal_gib, sample_rate, series_rate) in enumerate(THANOS_TENANTS):
+        storage_wave = 1.0 + 0.01 * math.sin((t / 900.0) + index)
+        wal_wave = 1.0 + 0.03 * math.sin((t / 420.0) + index)
+        tsdb_samples.append(
+            sample(
+                "prometheus_tsdb_storage_blocks_bytes",
+                storage_gib * gib * storage_wave,
+                namespace=THANOS_NAMESPACE,
+                tenant=tenant,
+                job=f"thanos-{tenant}-receive",
+            )
+        )
+        wal_samples.append(
+            sample(
+                "prometheus_tsdb_wal_storage_size_bytes",
+                wal_gib * gib * wal_wave,
+                namespace=THANOS_NAMESPACE,
+                tenant=tenant,
+                job=f"thanos-{tenant}-receive",
+            )
+        )
+        receive_samples.append(
+            sample(
+                "thanos_receive_write_samples_sum",
+                counter_value(lambda moment, sample_rate=sample_rate, index=index: sample_rate * (1.0 + 0.04 * math.sin(moment / 600.0 + index)), t),
+                namespace=THANOS_NAMESPACE,
+                tenant=tenant,
+                service=f"thanos-{tenant}-receive",
+                job="thanos-receive",
+            )
+        )
+        timeseries_samples.append(
+            sample(
+                "thanos_receive_write_timeseries_sum",
+                counter_value(lambda moment, series_rate=series_rate, index=index: series_rate * (1.0 + 0.04 * math.sin(moment / 600.0 + index)), t),
+                namespace=THANOS_NAMESPACE,
+                tenant=tenant,
+                service=f"thanos-{tenant}-receive",
+                job="thanos-receive",
+            )
+        )
+
+    lines.extend(metric_family("prometheus_tsdb_storage_blocks_bytes", "gauge", "Synthetic Thanos TSDB blocks storage by tenant.", tsdb_samples))
+    lines.extend(metric_family("prometheus_tsdb_wal_storage_size_bytes", "gauge", "Synthetic Thanos WAL storage by tenant.", wal_samples))
+    lines.extend(metric_family("thanos_receive_write_samples_sum", "counter", "Synthetic Thanos received samples.", receive_samples))
+    lines.extend(metric_family("thanos_receive_write_timeseries_sum", "counter", "Synthetic Thanos received time series.", timeseries_samples))
+
+    cpu_samples = []
+    memory_working_set_samples = []
+    memory_usage_samples = []
+    for index, (pod, component, tenant_id, cpu_cores, memory_gib) in enumerate(THANOS_PODS):
+        cpu_samples.append(
+            sample(
+                "container_cpu_usage_seconds_total",
+                counter_value(lambda moment, cpu_cores=cpu_cores, index=index: cpu_cores * (1.0 + 0.05 * math.sin(moment / 500.0 + index)), t),
+                namespace=THANOS_NAMESPACE,
+                pod=pod,
+                container=component,
+                tenant_id=tenant_id,
+                job="cadvisor",
+            )
+        )
+        memory_value = memory_gib * gib * (1.0 + 0.02 * math.sin(t / 500.0 + index))
+        memory_working_set_samples.append(
+            sample(
+                "container_memory_working_set_bytes",
+                memory_value,
+                namespace=THANOS_NAMESPACE,
+                pod=pod,
+                container=component,
+                tenant_id=tenant_id,
+                job="cadvisor",
+            )
+        )
+        memory_usage_samples.append(
+            sample(
+                "container_memory_usage_bytes",
+                memory_value * 1.05,
+                namespace=THANOS_NAMESPACE,
+                pod=pod,
+                container=component,
+                tenant_id=tenant_id,
+                job="cadvisor",
+            )
+        )
+
+    lines.extend(metric_family("container_cpu_usage_seconds_total", "counter", "Synthetic container CPU usage.", cpu_samples))
+    lines.extend(metric_family("container_memory_working_set_bytes", "gauge", "Synthetic container memory working set.", memory_working_set_samples))
+    lines.extend(metric_family("container_memory_usage_bytes", "gauge", "Synthetic container memory usage.", memory_usage_samples))
+    return lines
 
 
 def render_openmetrics_history(start_timestamp: int, total_seconds: int, step_seconds: int, incident_start_seconds: int) -> str:
