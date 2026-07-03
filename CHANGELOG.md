@@ -1,3 +1,10 @@
+## [2.15.1](https://github.com/elohmeier/grafana-pi-app/compare/v2.15.0...v2.15.1) (2026-07-03)
+
+
+### Bug Fixes
+
+* improve tool rendering robustness ([45dd137](https://github.com/elohmeier/grafana-pi-app/commit/45dd1379be36c8b2fe348027c1224a76969bcac4))
+
 # [2.15.0](https://github.com/elohmeier/grafana-pi-app/compare/v2.14.2...v2.15.0) (2026-07-02)
 
 
