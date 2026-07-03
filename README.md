@@ -8,7 +8,7 @@ Observability Analyst is a Grafana app plugin that embeds an LLM analyst for obs
 - Lists metric names and label values through Grafana datasource resource APIs.
 - Runs PromQL through Grafana datasource query APIs, returning compact min/max/last/sample summaries for range queries by default.
 - Extracts Prometheus metric usage from existing dashboards, including panel co-usage, labels, grouping labels, functions, and related metric neighborhoods.
-- Creates app-managed dashboards from model-authored Jsonnet source. The source is stored with each dashboard so future edits can update the Jsonnet and re-sync through the app.
+- Creates dashboards from model-authored Jsonnet source. The source lives in session-scoped virtual files saved with the chat session, so follow-up prompts can edit the Jsonnet, re-render, and save again through the app.
 - Lists, fetches, and screenshots dashboards through Grafana APIs.
 - Adds dashboard panel menu actions for contextual Assistant prompts.
 - Optionally runs as the `grafana-assistant-app` variant with Grafana's extension sidebar integration enabled.
@@ -58,30 +58,38 @@ Managed dashboard writes use the plugin service account declared in `plugin.json
 
 The backend vendors Jsonnet libraries under `pkg/plugin/jsonnet/vendor` using the same `jsonnet-bundler` layout as `agentic-observability`. For new dashboards the assistant writes self-contained plain Jsonnet source to a session-scoped virtual `dashboard.jsonnet` file, applies compact edits to that file, and the backend compiles it with the embedded vendored libraries before saving the dashboard. If a model invents unsupported Grafonnet constructors, `render_dashboard` automatically attempts one transactional structural repair for common bad `g.dashboard.new(...)`, `g.dashboard.with_panels(...)`, panel constructor, and target constructor shapes. `fix_jsonnet` remains available for explicit repair after other render errors.
 
-The assistant can render, sync, and later retrieve Jsonnet-backed dashboards with:
+The assistant can plan, write, render, and save Jsonnet-backed dashboards with:
 
-- `list_managed_dashboards`
-- `get_dashboard_source`
+- `write_dashboard_plan`
 - `write_jsonnet`
 - `edit_jsonnet`
 - `fix_jsonnet`
 - `read_jsonnet`
 - `render_dashboard`
-- `sync_dashboard`
+- `save_dashboard`
 
-Synced dashboards are saved through the `dashboard.grafana.app` resource API with `grafana.app/managedBy=plugin`, `grafana.app/managerId=g42-pi-app`, the source checksum, and the exact Jsonnet source. The app intentionally does not set `grafana.app/managerAllowsEdits`, so normal Grafana UI edits are treated as read-only/export flows while stored Jsonnet remains the source of truth.
+Rendered dashboards are saved through the Grafana dashboards API (`/api/dashboards/db`) using the plugin service account. Before saving, the backend requires a title, normalizes the UID and panel layout, forces the `genai` tag, and rejects dashboards that reference datasource UIDs outside the configured allow-list. The Jsonnet source and its checksum stay with the chat session's virtual files, which are persisted in plugin user storage.
 
-The default chat toolset does not expose raw dashboard JSON upload/delete tools, raw Prometheus data-frame output, direct vendored Jsonnet file browsing, or a Jsonnet subagent. Dashboard writes go through the Jsonnet-backed managed dashboard sync path.
+The default chat toolset does not expose raw dashboard JSON upload/delete tools, raw Prometheus data-frame output, or direct vendored Jsonnet file browsing. Durable dashboard writes go through the Jsonnet-backed render-and-save path.
 
 ## Subagents
 
-The default chat toolset includes `run_query_agent` as a high-level fallback for broad metric and PromQL reconnaissance and `run_dashboard_agent` for dashboard work. Both start nested agents with narrow tool allow-lists: the query subagent can discover datasources, inspect Prometheus metadata, validate PromQL, and mine dashboard-derived metric context; the dashboard subagent can inspect metrics and dashboards and use managed dashboard tools, while persistent writes still require the parent assistant's existing approval flow.
+The top-level assistant is a supervisor that delegates to specialist subagents, each a nested agent with a narrow system prompt, a narrow tool allow-list, and a per-specialist tool-call budget:
+
+- `run_query_agent`: Prometheus metric discovery and PromQL validation.
+- `run_dashboard_agent`: dashboard design, Jsonnet, render, save, and live-edit work.
+- `run_investigation_agent`: incident and root-cause analysis with a structured report.
+- `run_alert_agent`: read-only troubleshooting of Grafana-managed alert rules, especially panel-linked rules.
+- `run_support_agent`: Grafana and observability explanations.
+- `run_navigation_agent`: safe Grafana navigation and link building.
+
+Persistent writes from any specialist still require the parent assistant's existing approval flow.
 
 ## Skills
 
 Dashboard instructions are split into repo-local skills under `.agents/skills/<skill-name>/SKILL.md`, using the same default `SKILL.md` directory shape as local agent skill installs. `npm run generate:skills` validates those files and bundles them into `src/pages/Chat/skills/bundledSkills.generated.ts` for the frontend.
 
-The chat agent always has metric discovery tools, dashboard-derived metric context tools, and `run_query_agent` available. Dashboard guidance activates when the prompt asks for dashboard, panel, Jsonnet, render, or sync work, which also enables the managed dashboard and Jsonnet tool groups for that turn. New bundled skills can be added by creating another `.agents/skills/<name>/SKILL.md`; add optional text resources under `references/`, `templates/`, or `assets/`.
+The bundled skills are `grafana-dashboard`, `grafana-alerting`, and `investigation`. The chat agent always has metric discovery tools, dashboard-derived metric context tools, and the specialist subagent tools available. Dashboard guidance activates when the prompt asks for dashboard, panel, Jsonnet, render, or save work, which also enables the dashboard read, live-edit, and Jsonnet tool groups for that turn; alert wording (or panel context plus a firing/warning mention) activates the alerting skill and its read-only alert tools. New bundled skills can be added by creating another `.agents/skills/<name>/SKILL.md`; add optional text resources under `references/`, `templates/`, or `assets/`.
 
 Admins can also add small instance-specific custom skills through plugin configuration:
 
@@ -105,8 +113,8 @@ Admins can also add small instance-specific custom skills through plugin configu
 ]
 ```
 
-Custom skills are non-secret frontend configuration and are sent to the configured LLM when active. Supported custom skill tool groups are `metrics`, `dashboardMetricContext`, `dashboardRead`, `jsonnetFiles`, `managedDashboards`, `subagents`, and `skillResources`.
-The bundled investigation skill also uses the `investigation` tool group to maintain the structured report shown in the chat workspace.
+Custom skills are non-secret frontend configuration and are sent to the configured LLM when active. Supported custom skill tool groups are `metrics`, `alerts`, `dashboardMetricContext`, `dashboardRead`, `jsonnetFiles`, `jsonnetDashboards`, `investigation`, `subagents`, and `skillResources`.
+The bundled investigation skill uses the `investigation` tool group to maintain the structured report shown in the chat workspace.
 
 ## Development
 
@@ -239,7 +247,7 @@ To benchmark the typed dashboard context repair path, run:
 npm run benchmark:dashboard-context
 ```
 
-This benchmark seeds a stale dashboard, then runs a rich-context repair that must use `inspect_dashboard_context`, render, and sync a managed dashboard copy. It writes the report to `test-results/dashboard-context-benchmark/latest-report.txt` with separate event and answer files for the run.
+This benchmark seeds a stale dashboard, then runs a rich-context repair that must use `inspect_dashboard_context`, render, and save a managed dashboard copy. It writes the report to `test-results/dashboard-context-benchmark/latest-report.txt` with separate event and answer files for the run.
 
 To benchmark approved live dashboard editing in the sidebar-capable variant, run:
 
