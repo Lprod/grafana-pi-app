@@ -1,6 +1,19 @@
 import React from 'react';
 import { fireEvent, render, screen } from '@testing-library/react';
+import { config } from '@grafana/runtime';
+import { structuredPatch } from 'diff';
+import { highlightJsonnetLines } from './jsonnetRendering';
 import { ContentBlocks, ToolResultMessageBody } from './ToolRenderer';
+
+jest.mock('./jsonnetRendering', () => {
+  const actual = jest.requireActual<typeof import('./jsonnetRendering')>('./jsonnetRendering');
+  return { ...actual, highlightJsonnetLines: jest.fn(actual.highlightJsonnetLines) };
+});
+
+jest.mock('diff', () => {
+  const actual = jest.requireActual<typeof import('diff')>('diff');
+  return { ...actual, structuredPatch: jest.fn(actual.structuredPatch) };
+});
 
 jest.mock('@grafana/scenes', () => {
   const React = jest.requireActual<typeof import('react')>('react');
@@ -812,6 +825,10 @@ describe('ToolRenderer', () => {
     expect(container.textContent).toContain('Query 1');
     expect(container.textContent).toContain(rangeQuery);
     expect(container.textContent).toContain('range | 1 series | 30s');
+    expect(screen.queryByTestId('prometheus-timeseries-panel')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByText('Chart'));
+
     expect(screen.getByTestId('prometheus-timeseries-panel')).toBeInTheDocument();
     expect(container.textContent).not.toContain('"queryCount"');
   });
@@ -944,6 +961,9 @@ describe('ToolRenderer', () => {
     expect(container.textContent).toContain('Query 1');
     expect(container.textContent).toContain(rangeQuery);
     expect(container.textContent).toContain('range | 1 series | 30s');
+
+    fireEvent.click(screen.getByText('Chart'));
+
     expect(screen.getByTestId('prometheus-timeseries-panel')).toBeInTheDocument();
     expect(container.textContent).not.toContain('Stored artifact [artifact: artifact_1]');
   });
@@ -1032,6 +1052,9 @@ describe('ToolRenderer', () => {
 
     expect(container.textContent).toContain('1 of 1 Prometheus queries summarized');
     expect(container.textContent).toContain('instant | 1 series | 1m');
+
+    fireEvent.click(screen.getByText('Chart'));
+
     expect(screen.getByTestId('prometheus-timeseries-panel')).toBeInTheDocument();
     expect(container.textContent).not.toContain('Stored artifact [artifact: artifact_1]');
   });
@@ -1543,6 +1566,10 @@ describe('ToolRenderer', () => {
 
     render(<ToolResultMessageBody toolName="query_prometheus" content={content} details={details} />);
 
+    expect(screen.queryByTestId('prometheus-timeseries-panel')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByText('Chart'));
+
     expect(screen.getByTestId('prometheus-timeseries-panel')).toBeInTheDocument();
     expect(screen.getByTestId('mock-embedded-scene')).toHaveTextContent('Query result');
     expect(screen.getAllByText(query).length).toBeGreaterThan(0);
@@ -1681,6 +1708,10 @@ describe('ToolRenderer', () => {
     expect(screen.getByTestId('gf-prometheus')).toBeInTheDocument();
     expect(screen.getByTestId('angle-down')).toBeInTheDocument();
     expect(screen.getByTestId('angle-right')).toBeInTheDocument();
+    expect(screen.queryByTestId('prometheus-timeseries-panel')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByText('Chart'));
+
     expect(screen.getByTestId('prometheus-timeseries-panel')).toBeInTheDocument();
     expect(container.textContent).not.toContain('"queryCount"');
   });
@@ -2470,5 +2501,430 @@ describe('ToolRenderer', () => {
     expect(container.textContent).toContain('Pending changes');
     expect(container.textContent).not.toContain('"stdout"');
     expect(container.textContent).not.toContain('"changedFiles"');
+  });
+});
+
+describe('ToolRenderer hardening', () => {
+  const subagentUsage = {
+    turns: 1,
+    input: 10,
+    output: 4,
+    cacheRead: 0,
+    cacheWrite: 0,
+    totalTokens: 14,
+    cost: 0,
+  };
+
+  it('renders malformed subagent details without crashing', () => {
+    const { container } = render(
+      <ToolResultMessageBody
+        toolName="run_query_agent"
+        content={[{ type: 'text', text: 'done' }]}
+        details={{ type: 'subagent', status: 'completed' }}
+      />
+    );
+
+    expect(container.textContent).toContain('Specialist agent');
+    expect(container.textContent).toContain('0 tool calls');
+  });
+
+  it('renders subagent tool calls with non-string ids and names without crashing', () => {
+    const { container } = render(
+      <ToolResultMessageBody
+        toolName="run_query_agent"
+        content={[{ type: 'text', text: 'done' }]}
+        details={{
+          type: 'subagent',
+          agent: 'query',
+          status: 'completed',
+          task: 'Inspect.',
+          toolCalls: [
+            { id: 7, name: { bad: true }, args: {}, status: 'completed' },
+            { name: 'list_metrics', args: {}, status: 'completed' },
+          ],
+          usage: subagentUsage,
+        }}
+      />
+    );
+
+    expect(container.textContent).toContain('2 tool calls');
+    expect(container.textContent).toContain('list_metrics');
+  });
+
+  it('renders non-string thinking blocks without crashing', () => {
+    const { container } = render(<ContentBlocks content={[{ type: 'thinking', thinking: { nested: true } }]} />);
+
+    expect(container.textContent).toContain('"nested"');
+  });
+
+  it('renders non-string tool call names without crashing', () => {
+    const { container } = render(
+      <ContentBlocks content={[{ type: 'toolCall', name: { bad: true }, arguments: { a: 1 } }]} />
+    );
+
+    expect(container.textContent).toContain('"bad"');
+  });
+
+  it('renders a completed batch shell when list_metrics batch content is truncated', () => {
+    const { container } = render(
+      <ToolResultMessageBody
+        toolName="list_metrics"
+        content={[{ type: 'text', text: '{\n  "datasourceUid": "prometheus",\n  "prefixCount": 2,' }]}
+        details={{ datasourceUid: 'prometheus', batch: true, prefixes: ['http_', 'node_'], count: 42, truncated: true }}
+      />
+    );
+
+    expect(container.textContent).toContain('2 metric prefixes | 42 metrics | from prometheus | truncated');
+    expect(container.textContent).toContain(
+      'The metric list batch completed, but the detailed result text was unavailable.'
+    );
+    expect(container.textContent).not.toContain('"prefixCount"');
+    expect(container.textContent).not.toContain('"datasourceUid"');
+  });
+
+  it('mounts range query charts only after the chart section is opened', () => {
+    const query = 'rate(http_requests_total[5m])';
+    const details = {
+      datasourceUid: 'prometheus',
+      query,
+      interval: '1m',
+      summarized: true,
+      visualization: {
+        kind: 'prometheus-timeseries',
+        datasourceUid: 'prometheus',
+        query,
+        queryType: 'range',
+        interval: '1m',
+        maxDataPoints: 1200,
+        range: {
+          from: '2026-05-28T10:00:00.000Z',
+          to: '2026-05-28T11:00:00.000Z',
+          raw: { from: 'now-1h', to: 'now' },
+        },
+      },
+    };
+    const content = [
+      {
+        type: 'text',
+        text: JSON.stringify({
+          datasourceUid: 'prometheus',
+          query,
+          queryType: 'range',
+          interval: '1m',
+          frameCount: 1,
+          totalSeries: 1,
+          truncatedSeries: false,
+          notices: [],
+          executedQueryStrings: [],
+          series: [{ name: query, labels: { job: 'api' }, points: 60, last: { value: 2 } }],
+        }),
+      },
+    ];
+
+    render(<ToolResultMessageBody toolName="query_prometheus" content={content} details={details} />);
+
+    expect(screen.queryByTestId('prometheus-timeseries-panel')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByText('Chart'));
+
+    expect(screen.getByTestId('prometheus-timeseries-panel')).toBeInTheDocument();
+  });
+
+  it('prefixes Explore links with the Grafana sub-path', () => {
+    const query = 'rate(http_requests_total[5m])';
+    const previousAppSubUrl = config.appSubUrl;
+    config.appSubUrl = '/grafana';
+    try {
+      render(
+        <ToolResultMessageBody
+          toolName="query_prometheus"
+          content={[
+            {
+              type: 'text',
+              text: JSON.stringify({
+                datasourceUid: 'prometheus',
+                query,
+                queryType: 'range',
+                interval: '1m',
+                frameCount: 1,
+                totalSeries: 1,
+                truncatedSeries: false,
+                notices: [],
+                executedQueryStrings: [],
+                series: [{ name: query, labels: { job: 'api' }, points: 60, last: { value: 2 } }],
+              }),
+            },
+          ]}
+          details={{
+            datasourceUid: 'prometheus',
+            query,
+            summarized: true,
+            visualization: {
+              kind: 'prometheus-timeseries',
+              datasourceUid: 'prometheus',
+              query,
+              queryType: 'range',
+              interval: '1m',
+              maxDataPoints: 1200,
+              range: {
+                from: '2026-05-28T10:00:00.000Z',
+                to: '2026-05-28T11:00:00.000Z',
+                raw: { from: 'now-1h', to: 'now' },
+              },
+            },
+          }}
+        />
+      );
+
+      fireEvent.click(screen.getByText('Chart'));
+
+      const href = screen.getByRole('link', { name: 'Explore' }).getAttribute('href') ?? '';
+      expect(href.startsWith('/grafana/explore?left=')).toBe(true);
+    } finally {
+      config.appSubUrl = previousAppSubUrl;
+    }
+  });
+
+  it('renders a structured streaming summary from partial query_prometheus JSON', () => {
+    const partialJson =
+      '{"datasourceUid":"prometheus","queries":[{"query":"rate(http_requests_total[5m])","type":"range","start":"now-1h","end":"no';
+
+    const { container } = render(
+      <ContentBlocks
+        content={[{ type: 'toolCall', name: 'query_prometheus', arguments: undefined, partialJson }]}
+        isStreaming
+      />
+    );
+
+    expect(container.textContent).toContain('1 range query');
+    expect(container.textContent).toContain('streaming');
+    expect(container.textContent).toContain('rate(http_requests_total[5m])');
+    expect(container.textContent).not.toContain('"queries"');
+  });
+
+  it('counts removed lines starting with dashes as content, not metadata', () => {
+    const diff =
+      '--- dashboard.jsonnet\n' +
+      '+++ dashboard.jsonnet\n' +
+      '@@ -1,2 +1,2 @@\n' +
+      '---foo\n' +
+      '+++bar\n' +
+      ' context\n';
+
+    const { container } = render(
+      <ToolResultMessageBody
+        toolName="edit_jsonnet"
+        content={[{ type: 'text', text: '{}' }]}
+        details={{ path: 'dashboard.jsonnet', changedRanges: [], diff }}
+      />
+    );
+
+    expect(container.textContent).toContain('Diff | 1 hunk | +1 / -1');
+  });
+
+  it('does not fabricate hunk positions when the diff header is unparseable', () => {
+    const diff =
+      '@@ sample diff @@\n' +
+      '-{\n' +
+      '-  "a": 1,\n' +
+      '-  "b": 2,\n' +
+      '-  "c": 3\n' +
+      '-}\n' +
+      '+{\n' +
+      '+  "a": 1,\n' +
+      '+  "b": 2,\n' +
+      '+  "c": 4\n' +
+      '+}\n';
+
+    const { container } = render(
+      <ToolResultMessageBody
+        toolName="edit_jsonnet"
+        content={[{ type: 'text', text: '{}' }]}
+        details={{ path: 'dashboard.jsonnet', changedRanges: [], diff }}
+      />
+    );
+
+    expect(container.textContent).toContain('@@ sample diff @@');
+    expect(container.textContent).not.toMatch(/@@ -\d/);
+  });
+
+  it('renders alert rule matches with duplicate rule names without duplicate keys', () => {
+    const consoleError = jest.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      render(
+        <ToolResultMessageBody
+          toolName="find_panel_alert_rules"
+          content={[
+            {
+              type: 'text',
+              text: JSON.stringify({
+                ruleCount: 2,
+                matchCount: 2,
+                exactPanelMatchCount: 0,
+                matches: [
+                  { score: 1, reasons: [], rule: { name: 'unknown', title: 'Rule A' } },
+                  { score: 1, reasons: [], rule: { name: 'unknown', title: 'Rule B' } },
+                ],
+              }),
+            },
+          ]}
+          details={{ ruleCount: 2, matchCount: 2 }}
+        />
+      );
+
+      expect(consoleError.mock.calls.flat().join(' ')).not.toContain('same key');
+    } finally {
+      consoleError.mockRestore();
+    }
+  });
+
+  it('falls back to the default error message instead of dumping JSON', () => {
+    render(
+      <ToolResultMessageBody
+        toolName="query_prometheus"
+        content={undefined}
+        details={{ someField: { nested: true } }}
+        isError
+      />
+    );
+
+    const error = screen.getByTestId('tool-error');
+    expect(error.textContent).toContain('Tool failed without a readable error message.');
+  });
+
+  it('ignores non-string error primitives like false', () => {
+    render(
+      <ToolResultMessageBody toolName="query_prometheus" content={undefined} details={{ error: false }} isError />
+    );
+
+    const error = screen.getByTestId('tool-error');
+    expect(error.textContent).toContain('Tool failed without a readable error message.');
+    // The raw details JSON stays inspectable in the Details section, but the
+    // headline error message must not be the stringified primitive.
+    expect(screen.queryByText('false')).not.toBeInTheDocument();
+  });
+
+  it('omits the line range for empty jsonnet library reads', () => {
+    const { container } = render(
+      <ToolResultMessageBody
+        toolName="read_grafonnet"
+        content={[{ type: 'text', text: JSON.stringify({ path: 'gen.libsonnet', totalLines: 10, result: [] }) }]}
+        details={{}}
+      />
+    );
+
+    expect(container.textContent).not.toContain('0-0');
+  });
+
+  it('skips non-primitive label values instead of stringifying them', () => {
+    const { container } = render(
+      <ToolResultMessageBody
+        toolName="inspect_metric_series"
+        content={[
+          {
+            type: 'text',
+            text: JSON.stringify({
+              datasourceUid: 'prometheus',
+              match: 'up',
+              labelNames: ['job'],
+              totalSeries: 1,
+              truncated: false,
+              examples: [{ job: 'api', bad: { nested: true } }],
+            }),
+          },
+        ]}
+        details={undefined}
+      />
+    );
+
+    expect(container.textContent).toContain('Selector');
+    expect(container.textContent).toContain('job');
+    expect(container.textContent).not.toContain('[object Object]');
+  });
+
+  it('does not render dashboard links with unsafe schemes', () => {
+    render(
+      <ToolResultMessageBody
+        toolName="list_dashboards"
+        content={[
+          {
+            type: 'text',
+            text: JSON.stringify([{ title: 'Evil', uid: 'evil', url: 'javascript:alert(1)' }]),
+          },
+        ]}
+        details={{}}
+      />
+    );
+
+    expect(screen.queryByRole('link', { name: 'Open' })).not.toBeInTheDocument();
+    expect(screen.getAllByText('Open').length).toBeGreaterThan(0);
+  });
+
+  it('strips remote images and iframes from rendered markdown', () => {
+    const { container } = render(
+      <ContentBlocks
+        content={'![exfil](https://evil.example/x.png)\n\n<iframe src="https://evil.example"></iframe>\n\nplain text'}
+      />
+    );
+
+    expect(container.querySelector('img')).toBeNull();
+    expect(container.querySelector('iframe')).toBeNull();
+    expect(container.textContent).toContain('plain text');
+  });
+
+  it('memoizes jsonnet highlighting across re-renders of the same content', () => {
+    const highlightMock = highlightJsonnetLines as jest.Mock;
+    highlightMock.mockClear();
+    const block = () => (
+      <ContentBlocks
+        content={[
+          {
+            type: 'toolCall',
+            name: 'write_jsonnet',
+            arguments: { path: 'dashboard.jsonnet', content: 'local a = 1;\n{ panels: [] }' },
+          },
+        ]}
+      />
+    );
+
+    const { rerender } = render(block());
+    const callsAfterFirstRender = highlightMock.mock.calls.length;
+    expect(callsAfterFirstRender).toBeGreaterThan(0);
+
+    rerender(block());
+
+    expect(highlightMock.mock.calls.length).toBe(callsAfterFirstRender);
+  });
+
+  it('memoizes diff optimization across re-renders of the same diff', () => {
+    const patchMock = structuredPatch as jest.Mock;
+    patchMock.mockClear();
+    const diff =
+      '@@ -1,5 +1,5 @@\n' +
+      '-{\n' +
+      '-  "a": 1,\n' +
+      '-  "b": 2,\n' +
+      '-  "c": 3\n' +
+      '-}\n' +
+      '+{\n' +
+      '+  "a": 1,\n' +
+      '+  "b": 2,\n' +
+      '+  "c": 4\n' +
+      '+}\n';
+    const block = () => (
+      <ToolResultMessageBody
+        toolName="edit_jsonnet"
+        content={[{ type: 'text', text: '{}' }]}
+        details={{ path: 'dashboard.jsonnet', changedRanges: [], diff }}
+      />
+    );
+
+    const { rerender } = render(block());
+    const callsAfterFirstRender = patchMock.mock.calls.length;
+    expect(callsAfterFirstRender).toBeGreaterThan(0);
+
+    rerender(block());
+
+    expect(patchMock.mock.calls.length).toBe(callsAfterFirstRender);
   });
 });

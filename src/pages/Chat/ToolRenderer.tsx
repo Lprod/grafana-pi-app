@@ -2,6 +2,7 @@ import React, { useMemo, useState } from 'react';
 import { css, cx, keyframes } from '@emotion/css';
 import type { AgentToolResult } from '@earendil-works/pi-agent-core';
 import { renderMarkdown, type GrafanaTheme2, type IconName } from '@grafana/data';
+import { config } from '@grafana/runtime';
 import {
   EmbeddedScene,
   PanelBuilders,
@@ -79,7 +80,7 @@ export function ContentBlocks({
             <div key={index}>{typedBlock.text}</div>
           );
         }
-        if (typedBlock.type === 'thinking') {
+        if (typedBlock.type === 'thinking' && typeof typedBlock.thinking === 'string') {
           return (
             <details className={styles.collapsible} key={index}>
               <summary>Thinking</summary>
@@ -87,7 +88,7 @@ export function ContentBlocks({
             </details>
           );
         }
-        if (typedBlock.type === 'toolCall') {
+        if (typedBlock.type === 'toolCall' && typeof typedBlock.name === 'string') {
           return (
             <ToolCallBlock
               key={index}
@@ -178,21 +179,24 @@ export function ToolActivityPanel({ runs }: { runs: ToolRunView[] }) {
         <span>Tool activity</span>
       </div>
       <div className={styles.activityList}>
-        {runs.map((run) => (
-          <div className={styles.activityItem} key={run.id}>
-            <ToolHeader name={run.name} status={run.status} compact />
-            {asSubagentDetails(run.partialResult?.details) ? (
-              <SubagentDetailsView details={run.partialResult?.details as SubagentRunDetails} compact />
-            ) : (
-              <>
-                {renderStructuredToolCall(run.name, run.args, undefined, run.status === 'running') ?? (
-                  <pre className={styles.toolCallJson}>{formatJson(run.args)}</pre>
-                )}
-                {run.partialResult && <ContentBlocks content={run.partialResult.content} isStreaming />}
-              </>
-            )}
-          </div>
-        ))}
+        {runs.map((run) => {
+          const subagentDetails = asSubagentDetails(run.partialResult?.details);
+          return (
+            <div className={styles.activityItem} key={run.id}>
+              <ToolHeader name={run.name} status={run.status} compact />
+              {subagentDetails ? (
+                <SubagentDetailsView details={subagentDetails} compact />
+              ) : (
+                <>
+                  {renderStructuredToolCall(run.name, run.args, undefined, run.status === 'running') ?? (
+                    <pre className={styles.toolCallJson}>{formatJson(run.args)}</pre>
+                  )}
+                  {run.partialResult && <ContentBlocks content={run.partialResult.content} isStreaming />}
+                </>
+              )}
+            </div>
+          );
+        })}
       </div>
     </section>
   );
@@ -200,7 +204,10 @@ export function ToolActivityPanel({ runs }: { runs: ToolRunView[] }) {
 
 function MarkdownText({ text, isStreaming }: { text: string; isStreaming?: boolean }) {
   const styles = useStyles2(getToolStyles);
-  const html = useMemo(() => renderMarkdown(completeOpenMarkdownFences(text), { breaks: true }).trim(), [text]);
+  const html = useMemo(
+    () => hardenMarkdownHtml(renderMarkdown(completeOpenMarkdownFences(text), { breaks: true }).trim()),
+    [text]
+  );
 
   return (
     <div className={styles.markdown}>
@@ -208,6 +215,28 @@ function MarkdownText({ text, isStreaming }: { text: string; isStreaming?: boole
       {isStreaming && <span className={styles.streamingCursor} aria-hidden="true" />}
     </div>
   );
+}
+
+// Grafana's markdown sanitizer blocks scripts but still allows remote images and
+// sandboxed iframes, both zero-click exfiltration channels for prompt-injected
+// model output. Keep only inline data-URI images.
+function hardenMarkdownHtml(html: string): string {
+  if (!html || typeof document === 'undefined') {
+    return html;
+  }
+
+  const template = document.createElement('template');
+  template.innerHTML = html;
+  for (const iframe of Array.from(template.content.querySelectorAll('iframe'))) {
+    iframe.remove();
+  }
+  for (const image of Array.from(template.content.querySelectorAll('img'))) {
+    const src = image.getAttribute('src')?.trim().toLowerCase() ?? '';
+    if (!src.startsWith('data:image/')) {
+      image.remove();
+    }
+  }
+  return template.innerHTML;
 }
 
 function ToolCallBlock({
@@ -361,7 +390,29 @@ function prometheusQueryToolCallFromPartialJson(partialJson: string): Prometheus
   try {
     return prometheusQueryToolCallFromArgs(JSON.parse(partialJson), true);
   } catch {
-    return undefined;
+    const query = partialJsonStringField(partialJson, 'query') ?? partialJsonStringField(partialJson, 'expr');
+    if (query === undefined) {
+      return undefined;
+    }
+
+    const start = partialJsonStringField(partialJson, 'start') ?? partialJsonStringField(partialJson, 'from');
+    const end = partialJsonStringField(partialJson, 'end') ?? partialJsonStringField(partialJson, 'to');
+    return {
+      datasourceUid: partialJsonStringField(partialJson, 'datasourceUid'),
+      queries: [
+        {
+          query,
+          type:
+            partialJsonStringField(partialJson, 'type') ??
+            partialJsonStringField(partialJson, 'queryType') ??
+            (start || end ? 'range' : 'instant'),
+          start,
+          end,
+          interval: partialJsonStringField(partialJson, 'interval') ?? partialJsonStringField(partialJson, 'step'),
+        },
+      ],
+      partial: true,
+    };
   }
 }
 
@@ -1230,7 +1281,7 @@ const DEFAULT_TOOL_CALL_JSONNET_PATH = 'dashboard.jsonnet';
 
 function JsonnetWriteToolCallView({ call }: { call: JsonnetWriteToolCall }) {
   const styles = useStyles2(getToolStyles);
-  const lines = call.content ? textToCodeLines(call.content) : [];
+  const lines = useMemo(() => (call.content ? textToCodeLines(call.content) : []), [call.content]);
   return (
     <div className={styles.structuredResult}>
       <div className={styles.resultSummary}>
@@ -1419,10 +1470,12 @@ function extractErrorMessage(value: unknown): string | undefined {
     return extractErrorMessageFromText(value);
   }
   if (!value || typeof value !== 'object') {
-    return value === undefined || value === null ? undefined : String(value);
+    // Non-string primitives like `false` or `0` are not readable error
+    // messages; the raw details stay available in the Details section.
+    return undefined;
   }
   if (Array.isArray(value)) {
-    return extractErrorMessageFromText(extractToolText(value)) ?? formatJson(value);
+    return extractErrorMessageFromText(extractToolText(value));
   }
 
   const record = value as Record<string, unknown>;
@@ -1434,7 +1487,7 @@ function extractErrorMessage(value: unknown): string | undefined {
     }
   }
 
-  return formatJson(record);
+  return undefined;
 }
 
 function extractErrorMessageFromText(text: string | undefined): string | undefined {
@@ -1598,8 +1651,13 @@ function SubagentDetailsView({
         </details>
       )}
       <div className={styles.toolTimeline}>
-        {details.toolCalls.map((call) => (
-          <SubagentToolCallRow agent={details.agent} call={call} key={call.id} onOpenDashboard={onOpenDashboard} />
+        {details.toolCalls.map((call, index) => (
+          <SubagentToolCallRow
+            agent={details.agent}
+            call={call}
+            key={`${call.id}:${index}`}
+            onOpenDashboard={onOpenDashboard}
+          />
         ))}
       </div>
     </div>
@@ -2288,7 +2346,7 @@ function AlertRuleMatchesList({ matches }: { matches: AlertRuleMatchView[] }) {
   return (
     <div className={styles.queryResultList}>
       {matches.map((match, index) => (
-        <AlertRuleMatchItem defaultOpen={index === 0} index={index} key={match.rule.name} match={match} />
+        <AlertRuleMatchItem defaultOpen={index === 0} index={index} key={`${match.rule.name}:${index}`} match={match} />
       ))}
     </div>
   );
@@ -2965,6 +3023,7 @@ type LineListBatchResult = {
   totalCount: number;
   truncated?: boolean;
   groups: LineListBatchGroup[];
+  contentAvailable: boolean;
 };
 
 type LineListBatchGroup = {
@@ -2986,6 +3045,11 @@ function LineListBatchResultView({ result }: { result: LineListBatchResult }) {
   return (
     <div className={styles.structuredResult}>
       <div className={styles.resultSummary}>{summaryParts.join(' | ')}</div>
+      {!result.contentAvailable && (
+        <div className={styles.emptyState}>
+          The metric list batch completed, but the detailed result text was unavailable.
+        </div>
+      )}
       <div className={styles.queryResultList}>
         {result.groups.map((group, index) => (
           <LineListBatchResultItem
@@ -3318,7 +3382,7 @@ function PrometheusQueryResultView({
         ]}
       />
       <pre className={styles.queryBlock}>{result.query}</pre>
-      {visualization && <PrometheusTimeseriesPanelView visualization={visualization} />}
+      {visualization && <PrometheusTimeseriesSection visualization={visualization} />}
       {result.notices.length > 0 && (
         <div className={styles.noticeList}>
           {result.notices.map((notice, index) => (
@@ -3372,6 +3436,31 @@ function PrometheusQueryResultView({
         </table>
       </div>
     </div>
+  );
+}
+
+// The scene panel runs the PromQL live on mount, so it must never mount from
+// merely rendering a message (loading a session with N stored query results
+// would fire N queries). Mount only after the user opens the section, and stay
+// mounted afterwards so toggling does not re-run the query.
+function PrometheusTimeseriesSection({ visualization }: { visualization: PrometheusTimeseriesVisualization }) {
+  const styles = useStyles2(getToolStyles);
+  const [isOpen, setIsOpen] = useState(false);
+  const [hasOpened, setHasOpened] = useState(false);
+
+  return (
+    <details className={styles.collapsible} open={isOpen}>
+      <summary
+        onClick={(event) => {
+          event.preventDefault();
+          setIsOpen((open) => !open);
+          setHasOpened(true);
+        }}
+      >
+        Chart
+      </summary>
+      {hasOpened && <PrometheusTimeseriesPanelView visualization={visualization} />}
+    </details>
   );
 }
 
@@ -3489,7 +3578,8 @@ function buildPrometheusExploreHref(visualization: PrometheusTimeseriesVisualiza
     },
   };
 
-  return `/explore?left=${encodeURIComponent(JSON.stringify(left))}`;
+  const subUrl = config.appSubUrl?.replace(/\/+$/, '') ?? '';
+  return `${subUrl}/explore?left=${encodeURIComponent(JSON.stringify(left))}`;
 }
 
 type RawPrometheusQueryResult = {
@@ -4803,7 +4893,10 @@ function JsonnetReadResultView({ result }: { result: JsonnetReadResult }) {
           { label: 'Path', value: <code>{result.path}</code> },
           {
             label: 'Lines',
-            value: `${result.lines[0]?.line ?? 0}-${result.lines[result.lines.length - 1]?.line ?? 0} of ${result.totalLines}`,
+            value:
+              result.lines.length > 0
+                ? `${result.lines[0].line}-${result.lines[result.lines.length - 1].line} of ${result.totalLines}`
+                : undefined,
           },
         ]}
       />
@@ -5091,11 +5184,29 @@ function LabelPills({ labels, limit = 12 }: { labels: Record<string, string>; li
 
 function ExternalLink({ href, children }: { href: string; children: React.ReactNode }) {
   const styles = useStyles2(getToolStyles);
+  const safeHref = safeLinkHref(href);
+  if (!safeHref) {
+    return <>{children}</>;
+  }
   return (
-    <a className={styles.externalLink} href={href} rel="noreferrer" target="_blank">
+    <a className={styles.externalLink} href={safeHref} rel="noreferrer" target="_blank">
       {children}
     </a>
   );
+}
+
+// All current callers pass server-generated URLs, but nothing enforces that
+// invariant for future tool results, so reject anything that is not http(s)
+// or an in-app absolute path.
+function safeLinkHref(href: string): string | undefined {
+  const trimmed = href.trim();
+  if (/^https?:\/\//i.test(trimmed)) {
+    return trimmed;
+  }
+  if (trimmed.startsWith('/') && !trimmed.startsWith('//')) {
+    return trimmed;
+  }
+  return undefined;
 }
 
 function CodeViewer({ lines, language = 'jsonnet' }: { lines: CodeLine[]; language?: 'jsonnet' | 'plain' }) {
@@ -5162,8 +5273,11 @@ function codeTokenClass(styles: ReturnType<typeof getToolStyles>, kind: CodeToke
 
 function DiffViewer({ diff, defaultOpen }: { diff: string; defaultOpen?: boolean }) {
   const styles = useStyles2(getToolStyles);
-  const lines = optimizedUnifiedDiffLines(diff);
-  const summary = diffSummary(lines);
+  const { lines, metadataFlags, summary } = useMemo(() => {
+    const optimizedLines = optimizedUnifiedDiffLines(diff);
+    const flags = diffMetadataFlags(optimizedLines);
+    return { lines: optimizedLines, metadataFlags: flags, summary: diffSummary(optimizedLines, flags) };
+  }, [diff]);
   return (
     <details className={styles.compactResult} open={defaultOpen}>
       <summary className={styles.compactResultSummary}>
@@ -5173,7 +5287,7 @@ function DiffViewer({ diff, defaultOpen }: { diff: string; defaultOpen?: boolean
       <div className={styles.compactResultBody}>
         <pre className={styles.diffViewer}>
           {lines.map((line, index) => {
-            const isMeta = isDiffMetadataLine(line);
+            const isMeta = metadataFlags[index];
             return (
               <div
                 className={cx(
@@ -5194,15 +5308,33 @@ function DiffViewer({ diff, defaultOpen }: { diff: string; defaultOpen?: boolean
   );
 }
 
-function diffSummary(lines: string[]) {
-  const added = lines.filter((line) => !isDiffMetadataLine(line) && line.startsWith('+')).length;
-  const removed = lines.filter((line) => !isDiffMetadataLine(line) && line.startsWith('-')).length;
+function diffSummary(lines: string[], metadataFlags: boolean[]) {
+  const added = lines.filter((line, index) => !metadataFlags[index] && line.startsWith('+')).length;
+  const removed = lines.filter((line, index) => !metadataFlags[index] && line.startsWith('-')).length;
   const hunks = lines.filter((line) => line.startsWith('@@')).length;
   return summaryLine([
     'Diff',
     hunks > 0 ? formatLabeledCount(hunks, 'hunk', 'hunks') : undefined,
     added > 0 || removed > 0 ? `+${formatCount(added)} / -${formatCount(removed)}` : undefined,
   ]);
+}
+
+// `---`/`+++` are file headers only in the preamble before the first hunk;
+// inside a hunk they are removed/added lines whose content starts with dashes
+// or pluses and must be colored and counted as changes.
+function diffMetadataFlags(lines: string[]): boolean[] {
+  let preamble = true;
+  return lines.map((line) => {
+    if (line.startsWith('@@')) {
+      preamble = false;
+      return true;
+    }
+    if (line.startsWith('Index:') || line.startsWith('diff ')) {
+      preamble = true;
+      return true;
+    }
+    return preamble && (line.startsWith('---') || line.startsWith('+++'));
+  });
 }
 
 function optimizedUnifiedDiffLines(diff: string) {
@@ -5241,11 +5373,15 @@ function optimizeFullReplacementHunk(header: string, hunkLines: string[]) {
   const patch = structuredPatch('', '', diffLinesToText(oldLines), diffLinesToText(newLines), '', '', {
     context: 3,
   });
+  // Without a parseable original header the true positions are unknown; keep
+  // the original header instead of asserting fabricated line numbers.
   const optimizedHunkLines = patch.hunks.flatMap((hunk) => [
-    `@@ -${formatUnifiedDiffRange((range?.oldStart ?? 1) + hunk.oldStart - 1, hunk.oldLines)} +${formatUnifiedDiffRange(
-      (range?.newStart ?? 1) + hunk.newStart - 1,
-      hunk.newLines
-    )} @@`,
+    range
+      ? `@@ -${formatUnifiedDiffRange(range.oldStart + hunk.oldStart - 1, hunk.oldLines)} +${formatUnifiedDiffRange(
+          range.newStart + hunk.newStart - 1,
+          hunk.newLines
+        )} @@`
+      : header,
     ...hunk.lines,
   ]);
 
@@ -5290,20 +5426,43 @@ function formatUnifiedDiffRange(start: number, lines: number) {
   return lines === 1 ? String(start) : `${start},${lines}`;
 }
 
+// `---`/`+++` are intentionally not boundaries: inside a hunk they are
+// removed/added lines whose content starts with dashes or pluses.
 function isDiffBoundaryLine(line: string) {
-  return line.startsWith('@@') || line.startsWith('---') || line.startsWith('+++') || line.startsWith('Index:');
+  return line.startsWith('@@') || line.startsWith('Index:') || line.startsWith('diff ');
 }
 
-function isDiffMetadataLine(line: string) {
-  return line.startsWith('@@') || line.startsWith('---') || line.startsWith('+++') || line.startsWith('Index:');
-}
-
+// Details come from persisted or imported sessions, so every field the
+// renderer dereferences must be normalized here rather than trusted.
 function asSubagentDetails(details: unknown): SubagentRunDetails | undefined {
-  if (!details || typeof details !== 'object') {
+  if (!isRecord(details) || details.type !== 'subagent') {
     return undefined;
   }
-  const record = details as Record<string, unknown>;
-  return record.type === 'subagent' ? (details as SubagentRunDetails) : undefined;
+
+  const usage = isRecord(details.usage) ? details.usage : {};
+  const toolCalls = Array.isArray(details.toolCalls) ? details.toolCalls.filter(isRecord) : [];
+  return {
+    ...details,
+    type: 'subagent',
+    agent: typeof details.agent === 'string' ? details.agent : 'specialist',
+    status: typeof details.status === 'string' ? details.status : 'completed',
+    task: typeof details.task === 'string' ? details.task : '',
+    toolCalls: toolCalls.map((call, index) => ({
+      ...call,
+      id: typeof call.id === 'string' && call.id ? call.id : `call-${index + 1}`,
+      name: typeof call.name === 'string' && call.name ? call.name : 'tool',
+      status: typeof call.status === 'string' ? call.status : 'completed',
+    })),
+    usage: {
+      turns: numberField(usage, 'turns') ?? 0,
+      input: numberField(usage, 'input') ?? 0,
+      output: numberField(usage, 'output') ?? 0,
+      cacheRead: numberField(usage, 'cacheRead') ?? 0,
+      cacheWrite: numberField(usage, 'cacheWrite') ?? 0,
+      totalTokens: numberField(usage, 'totalTokens') ?? 0,
+      cost: numberField(usage, 'cost') ?? 0,
+    },
+  } as SubagentRunDetails;
 }
 
 function asArtifactResult(details: unknown): { ref: ArtifactRef; preview?: ArtifactPreview } | undefined {
@@ -5479,19 +5638,40 @@ function asLineListBatchResult(
     return undefined;
   }
 
-  const record = parseJsonRecord(content);
-  if (!record) {
-    return undefined;
-  }
-
-  const groups = recordsField(record, 'results').map(metricListBatchGroupFromRecord);
-  if (groups.length === 0) {
-    return undefined;
-  }
-
   const detailRecord = isRecord(details) ? details : {};
-  const groupCount = numberField(record, 'prefixCount') ?? groups.length;
-  const totalCount = numberField(detailRecord, 'count') ?? groups.reduce((sum, group) => sum + group.count, 0);
+  const record = parseJsonRecord(content);
+  const groups = record ? recordsField(record, 'results').map(metricListBatchGroupFromRecord) : [];
+  if (record && groups.length > 0) {
+    const groupCount = numberField(record, 'prefixCount') ?? groups.length;
+    const totalCount = numberField(detailRecord, 'count') ?? groups.reduce((sum, group) => sum + group.count, 0);
+
+    return {
+      groupLabel: 'metric prefix',
+      groupLabelPlural: 'metric prefixes',
+      groupIndexLabel: 'Prefix',
+      itemLabel: 'metric',
+      itemLabelPlural: 'metrics',
+      datasourceUid: stringField(record, 'datasourceUid') ?? stringField(detailRecord, 'datasourceUid'),
+      groupCount,
+      totalCount,
+      truncated: booleanField(detailRecord, 'truncated') ?? groups.some((group) => group.truncated),
+      groups,
+      contentAvailable: true,
+    };
+  }
+
+  // Batch content over the truncation limit does not parse as JSON. Fall back
+  // to the batch details so the truncated JSON is never rendered line-by-line
+  // as metric names by the single-list view.
+  if (booleanField(detailRecord, 'batch') !== true) {
+    return undefined;
+  }
+
+  const prefixes = stringArrayField(detailRecord, 'prefixes') ?? [];
+  const totalCount = numberField(detailRecord, 'count');
+  if (prefixes.length === 0 && totalCount === undefined) {
+    return undefined;
+  }
 
   return {
     groupLabel: 'metric prefix',
@@ -5499,11 +5679,12 @@ function asLineListBatchResult(
     groupIndexLabel: 'Prefix',
     itemLabel: 'metric',
     itemLabelPlural: 'metrics',
-    datasourceUid: stringField(record, 'datasourceUid') ?? stringField(detailRecord, 'datasourceUid'),
-    groupCount,
-    totalCount,
-    truncated: booleanField(detailRecord, 'truncated') ?? groups.some((group) => group.truncated),
-    groups,
+    datasourceUid: stringField(detailRecord, 'datasourceUid'),
+    groupCount: prefixes.length,
+    totalCount: totalCount ?? 0,
+    truncated: booleanField(detailRecord, 'truncated') ?? false,
+    groups: [],
+    contentAvailable: false,
   };
 }
 
@@ -6393,7 +6574,7 @@ function stringRecord(record: Record<string, unknown> | undefined): Record<strin
 
   return Object.fromEntries(
     Object.entries(record)
-      .filter(([, value]) => value !== undefined && value !== null)
+      .filter(([, value]) => typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean')
       .map(([key, value]) => [key, String(value)])
   );
 }
