@@ -509,9 +509,9 @@ available): `rename_live_dashboard_panel`, `update_live_dashboard_panel_query`,
 
 Safety flow:
 
-- Every live write tool is in `PERSISTENT_WRITE_TOOLS`, so `beforeToolCall`
-  requires explicit user approval with a typed confirmation card before the
-  mutation executes.
+- Live write tools execute without an Assistant approval prompt because they
+  change only the currently open unsaved dashboard state. Persisting those
+  changes still goes through Grafana's normal dashboard save flow.
 - Layout-affecting edits (`add_live_dashboard_panel`,
   `move_or_resize_live_dashboard_panel`) attach screenshot verification: after
   a successful mutation the tool renders the current dashboard through the
@@ -787,7 +787,7 @@ Use these patterns when extending the app:
   specialist agents.
 - Keep specialist agents narrow. Give them only the tools needed for the task.
 - Prefer Jsonnet-backed dashboards for durable dashboard changes; keep live
-  edits typed, approved, and verified.
+  edits typed and verified.
 - Keep custom skills non-secret and small enough to fit into model context.
 - Regenerate bundled skills after changing `.agents/skills`.
 - Use Grafana source or official docs when Grafana API behavior is unclear.

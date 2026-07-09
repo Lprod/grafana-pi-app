@@ -33,7 +33,6 @@ import {
   createGrafanaSupervisorTools,
   createGrafanaToolsForSkillGroups,
   createSkillTools,
-  LIVE_DASHBOARD_WRITE_TOOLS,
   artifactByteSize,
   artifactizeToolResult,
   normalizeJsonnetPath,
@@ -156,7 +155,6 @@ const PERSISTENT_WRITE_TOOLS = new Set([
   'delete_dashboard',
   'save_changes',
   'submit_changes',
-  ...LIVE_DASHBOARD_WRITE_TOOLS,
 ]);
 const ACTIVE_CHAT_LEAVE_MESSAGE =
   'The assistant is still working. Leaving now will stop the run and discard any partial response.';
@@ -2291,58 +2289,6 @@ function buildToolConfirmation(toolCallId: string, toolName: string, args: unkno
     };
   }
 
-  if (LIVE_DASHBOARD_WRITE_TOOLS.has(toolName) && toolName !== 'apply_live_dashboard_mutation') {
-    return {
-      id,
-      toolCallId,
-      toolName,
-      title: 'Approve live dashboard edit',
-      description:
-        'The assistant wants to change the currently open dashboard using Grafana live dashboard editing. Approve only if this is the dashboard edit you requested.',
-      fields: compactConfirmationFields([
-        confirmationField('Action', liveDashboardToolAction(toolName)),
-        confirmationField('Element', stringValue(record.elementName)),
-        confirmationField('Title', stringValue(record.title)),
-        confirmationField('Variable', stringValue(record.name)),
-        confirmationField('New variable', stringValue(record.newName)),
-        confirmationField('Parent path', stringValue(record.parentPath)),
-        confirmationField(
-          'Query',
-          truncateConfirmationValue(stringValue(record.queryExpression) ?? stringValue(record.query))
-        ),
-        confirmationField('Grid', liveDashboardGridSummary(record)),
-        confirmationField('Tags', stringArrayValue(record.tags)),
-      ]),
-      args,
-    };
-  }
-
-  if (toolName === 'apply_live_dashboard_mutation') {
-    const payload = record.payload;
-    const payloadRecord = isRecord(payload) ? payload : {};
-    const element = isRecord(payloadRecord.element) ? payloadRecord.element : undefined;
-    const panel = isRecord(payloadRecord.panel) ? payloadRecord.panel : undefined;
-    const panelSpec = isRecord(panel?.spec) ? panel.spec : undefined;
-    const elements = Array.isArray(payloadRecord.elements) ? payloadRecord.elements.length : undefined;
-
-    return {
-      id,
-      toolCallId,
-      toolName,
-      title: 'Approve live dashboard edit',
-      description:
-        'The assistant wants to change the currently open dashboard using Grafana live dashboard editing. Approve only if this is the dashboard edit you requested.',
-      fields: compactConfirmationFields([
-        confirmationField('Command', stringValue(record.type)),
-        confirmationField('Element', stringValue(element?.name)),
-        confirmationField('Panel title', stringValue(panelSpec?.title)),
-        confirmationField('Parent path', stringValue(payloadRecord.parentPath)),
-        confirmationField('Affected panels', elements),
-      ]),
-      args,
-    };
-  }
-
   return {
     id,
     toolCallId,
@@ -2385,41 +2331,6 @@ function confirmationField(label: string, value: unknown) {
 
 function compactConfirmationFields(fields: Array<{ label: string; value: string } | undefined>) {
   return fields.filter((field): field is { label: string; value: string } => Boolean(field));
-}
-
-function liveDashboardToolAction(toolName: string) {
-  switch (toolName) {
-    case 'rename_live_dashboard_panel':
-      return 'Rename panel';
-    case 'update_live_dashboard_panel_query':
-      return 'Update panel query';
-    case 'add_live_dashboard_panel':
-      return 'Add panel';
-    case 'move_or_resize_live_dashboard_panel':
-      return 'Move or resize panel';
-    case 'update_live_dashboard_settings':
-      return 'Update dashboard settings';
-    case 'add_live_dashboard_variable':
-      return 'Add variable';
-    case 'update_live_dashboard_variable':
-      return 'Update variable';
-    default:
-      return toolName;
-  }
-}
-
-function liveDashboardGridSummary(record: Record<string, unknown>) {
-  const fields = ['x', 'y', 'width', 'height']
-    .map((field) => {
-      const value = record[field];
-      return typeof value === 'number' ? `${field}=${value}` : undefined;
-    })
-    .filter(Boolean);
-  return fields.length > 0 ? fields.join(', ') : undefined;
-}
-
-function truncateConfirmationValue(value: string | undefined) {
-  return value && value.length > 140 ? `${value.slice(0, 140)}...` : value;
 }
 
 function stringValue(value: unknown) {
