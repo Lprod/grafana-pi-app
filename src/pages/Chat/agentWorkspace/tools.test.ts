@@ -21,11 +21,17 @@ jest.mock('./shell', () => ({
   runAgentWorkspaceBash: jest.fn(),
 }));
 
+jest.mock('./events', () => ({
+  publishAgentWorkspaceSaved: jest.fn(),
+}));
+
 import type { AgentTool, AgentToolResult } from '@earendil-works/pi-agent-core';
 import { AgentWorkspaceVFS } from './vfs';
 import { createAgentWorkspaceTools } from './tools';
 import type { AgentWorkspaceRuntime, AgentWorkspaceState } from './types';
 import { runAgentWorkspaceBash } from './shell';
+import { publishAgentWorkspaceSaved } from './events';
+import { saveAgentWorkspace } from './providerClient';
 
 describe('agent workspace tools', () => {
   it('edits through the browser VFS and reports pending changes', async () => {
@@ -104,6 +110,25 @@ describe('agent workspace tools', () => {
     };
 
     expect(createAgentWorkspaceTools(runtime).all.some((tool) => tool.name === 'bash')).toBe(false);
+  });
+
+  it('publishes a workspace-saved event after a successful provider save', async () => {
+    const state = sampleState();
+    const runtime: AgentWorkspaceRuntime = {
+      getState: () => state,
+      setState: jest.fn(),
+    };
+    const saveResult = {
+      status: 'valid',
+      savedVersion: 'draft:portal/user/example:abc123',
+      changedFiles: [{ path: 'platform/shop/prod/virtual-machines.json' }],
+    };
+    jest.mocked(saveAgentWorkspace).mockResolvedValueOnce(saveResult);
+
+    const save = getTool(createAgentWorkspaceTools(runtime).all, 'save_changes');
+    await save.execute('call-save', {}, undefined);
+
+    expect(publishAgentWorkspaceSaved).toHaveBeenCalledWith(state.launch, saveResult);
   });
 });
 

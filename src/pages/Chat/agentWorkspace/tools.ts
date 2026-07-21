@@ -18,6 +18,7 @@ import type {
   AgentWorkspaceValidationResult,
 } from './types';
 import { runAgentWorkspaceBash, type AgentWorkspaceBashParams } from './shell';
+import { publishAgentWorkspaceSaved } from './events';
 
 type ReadParams = {
   path: string;
@@ -374,6 +375,7 @@ function makeSaveTool(runtime: AgentWorkspaceRuntime): AgentTool {
       const result = await saveAgentWorkspace(state);
       const committable = state.vfs as { commitOverlay?: (baseVersion?: string) => void };
       committable.commitOverlay?.(result.savedVersion);
+      publishAgentWorkspaceSaved(state.launch, result);
       return textResult(JSON.stringify(result, null, 2), result);
     },
   };
