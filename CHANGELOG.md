@@ -1,3 +1,10 @@
+# [2.16.0](https://github.com/elohmeier/grafana-pi-app/compare/v2.15.1...v2.16.0) (2026-07-21)
+
+
+### Features
+
+* notify agent workspaces ([f05cfa2](https://github.com/elohmeier/grafana-pi-app/commit/f05cfa20494babfea1663e21ab718a34a53b2558))
+
 ## [2.15.1](https://github.com/elohmeier/grafana-pi-app/compare/v2.15.0...v2.15.1) (2026-07-03)
 
 
