@@ -1,3 +1,15 @@
+# [2.17.0](https://github.com/elohmeier/grafana-pi-app/compare/v2.16.0...v2.17.0) (2026-07-26)
+
+
+### Bug Fixes
+
+* auto-approve live dashboard edits ([c2262c3](https://github.com/elohmeier/grafana-pi-app/commit/c2262c3e5091384efc92a74305c6d3f869144889))
+
+
+### Features
+
+* **dashboard:** add batch query edits ([f80411f](https://github.com/elohmeier/grafana-pi-app/commit/f80411fd3261a082982dbceea3df2702b199c456))
+
 # [2.16.0](https://github.com/elohmeier/grafana-pi-app/compare/v2.15.1...v2.16.0) (2026-07-21)
 
 
