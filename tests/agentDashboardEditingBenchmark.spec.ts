@@ -54,6 +54,78 @@ test.describe.configure({ mode: 'serial' });
 test.setTimeout(readPositiveInteger(process.env.BENCH_TEST_TIMEOUT_MS, DEFAULT_TIMEOUT_MS + 90_000));
 
 test.describe('dashboard live editing benchmark', () => {
+  test('adds an env variable and filters every panel on a large dashboard', async ({ page }, testInfo) => {
+    const timeoutMs = readPositiveInteger(process.env.BENCH_TIMEOUT_MS, 480_000);
+    const suffix = Date.now().toString(36);
+    const uid = `batch-live-edit-${suffix}`;
+    const dashboardTitle = `Batch Live Edit Benchmark ${suffix}`;
+    const panelCount = readPositiveInteger(process.env.BENCH_BATCH_PANEL_COUNT, 18);
+
+    await seedLargeDashboard(page, uid, dashboardTitle, panelCount);
+
+    try {
+      await page.goto(`/d/${uid}/batch-live-edit-benchmark?orgId=1&piAgentBenchmark=1`);
+      await expect(page.getByText('Batch panel 01').first()).toBeVisible();
+      await installBenchmarkRecorder(page);
+      await openAssistantSidebar(page, uid);
+      await expect(page.getByTestId(testIds.chat.composer)).toBeVisible();
+
+      const prompt = [
+        'This benchmark validates multi-panel live dashboard editing on a larger dashboard.',
+        `The current dashboard has exactly ${panelCount} Prometheus panels titled Batch panel 01 through Batch panel ${String(
+          panelCount
+        ).padStart(2, '0')}.`,
+        'Use the typed dashboard-wide batch operation, not individual panel edits.',
+        'Call apply_live_dashboard_prometheus_label_filter exactly once with variableName env, variableLabel Environment, variableQueryExpression label_values(http_requests_total, env), matcherLabel env, matcherOperator =~, includeAll=true, multi=true, current prod, allValue .*, existingMatcher replace, and dryRun=false.',
+        `The tool must report a successful verification with the env variable present, ${panelCount} matching queries, and no mismatches.`,
+        'Do not call list_live_dashboard_panels, list_live_dashboard_variables, add_live_dashboard_variable, update_live_dashboard_variable, update_live_dashboard_panel_query, update_live_dashboard_panel_queries, apply_live_dashboard_mutation, write_jsonnet, render_dashboard, save_dashboard, upload_dashboard, or delete_dashboard.',
+        'Do not answer until the dashboard-wide operation has succeeded.',
+        'After verification succeeds, answer exactly: BATCH_LIVE_EDIT_DONE.',
+      ].join(' ');
+
+      const run = await runPrompt({
+        page,
+        prompt,
+        timeoutMs,
+        finishTexts: ['BATCH_LIVE_EDIT_DONE'],
+      });
+      await assertBenchmarkRun({
+        run,
+        testInfo,
+        reportIds: { uid },
+        quality: {
+          requiredTools: ['apply_live_dashboard_prometheus_label_filter'],
+          forbiddenTools: [
+            'list_live_dashboard_panels',
+            'list_live_dashboard_variables',
+            'add_live_dashboard_variable',
+            'update_live_dashboard_variable',
+            'update_live_dashboard_panel_query',
+            'update_live_dashboard_panel_queries',
+            'apply_live_dashboard_mutation',
+            'write_jsonnet',
+            'render_dashboard',
+            'save_dashboard',
+            'upload_dashboard',
+            'delete_dashboard',
+          ],
+          requiredTranscript: ['BATCH_LIVE_EDIT_DONE'],
+        },
+      });
+
+      const panelExpressions = readPrometheusLabelFilterExpressions(run);
+      const missingEnvFilter = panelExpressions.filter((expr) => !expr.includes('env=~"$env"'));
+      if (panelExpressions.length < panelCount) {
+        throw new Error(`Expected at least ${panelCount} live panel expressions, got ${panelExpressions.length}.`);
+      }
+      if (missingEnvFilter.length > 0) {
+        throw new Error(`Panel expressions missing env filter: ${missingEnvFilter.slice(0, 5).join(' | ')}`);
+      }
+    } finally {
+      await page.request.delete(`/api/dashboards/uid/${encodeURIComponent(uid)}`).catch(() => undefined);
+    }
+  });
+
   test('performs typed multi-step live edits from the assistant sidebar', async ({ page }, testInfo) => {
     const timeoutMs = readPositiveInteger(process.env.BENCH_TIMEOUT_MS, DEFAULT_TIMEOUT_MS);
     const suffix = Date.now().toString(36);
@@ -212,6 +284,8 @@ test.describe('dashboard live editing benchmark', () => {
           'get_live_dashboard_layout',
           'rename_live_dashboard_panel',
           'update_live_dashboard_panel_query',
+          'update_live_dashboard_panel_queries',
+          'apply_live_dashboard_prometheus_label_filter',
           'add_live_dashboard_panel',
           'move_or_resize_live_dashboard_panel',
           'update_live_dashboard_settings',
@@ -269,6 +343,73 @@ async function seedDashboard(page: Page, uid: string, title: string, panelTitle:
     },
   });
   expect(response).toBeOK();
+}
+
+async function seedLargeDashboard(page: Page, uid: string, title: string, panelCount: number) {
+  const panels = Array.from({ length: panelCount }, (_, index) => {
+    const id = index + 1;
+    const titleSuffix = String(id).padStart(2, '0');
+    const metric = BATCH_PANEL_METRICS[index % BATCH_PANEL_METRICS.length];
+    const expr = batchPanelExpression(index, metric);
+    return {
+      id,
+      title: `Batch panel ${titleSuffix}`,
+      type: index % 5 === 0 ? 'stat' : 'timeseries',
+      datasource: { uid: 'prometheus', type: 'prometheus' },
+      gridPos: { x: (index % 3) * 8, y: Math.floor(index / 3) * 7, w: 8, h: 7 },
+      fieldConfig: { defaults: { unit: index % 4 === 0 ? 'percentunit' : 'short' }, overrides: [] },
+      targets: [
+        {
+          refId: 'A',
+          datasource: { uid: 'prometheus', type: 'prometheus' },
+          expr,
+          legendFormat: `batch ${titleSuffix}`,
+        },
+      ],
+    };
+  });
+
+  const response = await page.request.post('/api/dashboards/db', {
+    data: {
+      dashboard: {
+        uid,
+        title,
+        tags: ['dashboard-editing-benchmark', 'batch-live-edit'],
+        timezone: 'browser',
+        schemaVersion: 41,
+        time: { from: 'now-6h', to: 'now' },
+        panels,
+      },
+      overwrite: true,
+    },
+  });
+  expect(response).toBeOK();
+}
+
+const BATCH_PANEL_METRICS = [
+  'http_requests_total',
+  'http_request_duration_seconds_count',
+  'http_request_duration_seconds_sum',
+  'process_cpu_seconds_total',
+  'node_network_receive_bytes_total',
+  'node_network_transmit_bytes_total',
+];
+
+function batchPanelExpression(index: number, metric: string) {
+  const route = `/api/${(index % 6) + 1}`;
+  const method = index % 2 === 0 ? 'GET' : 'POST';
+  const window = index % 3 === 0 ? '$__rate_interval' : '5m';
+
+  if (index % 4 === 0) {
+    return `sum by (job) (rate(${metric}{job=~"api|web", route="${route}"}[${window}]))`;
+  }
+  if (index % 4 === 1) {
+    return `sum(rate(${metric}{status=~"${index % 2 === 0 ? '2..' : '5..'}"}[${window}]))`;
+  }
+  if (index % 4 === 2) {
+    return `avg by (method) (rate(${metric}{method="${method}"}[${window}]))`;
+  }
+  return `max(rate(${metric}[${window}]))`;
 }
 
 async function openAssistantSidebar(page: Page, dashboardUid: string) {
@@ -571,6 +712,22 @@ function observedToolNames(run: BenchmarkRun) {
     .map((event) => event.toolName)
     .filter((name): name is string => typeof name === 'string');
   return eventToolNames.length > 0 ? eventToolNames : run.domToolNames;
+}
+
+function readPrometheusLabelFilterExpressions(run: BenchmarkRun) {
+  const result = [...run.events]
+    .reverse()
+    .find(
+      (event) =>
+        event.type === 'tool_execution_end' && event.toolName === 'apply_live_dashboard_prometheus_label_filter'
+    )?.result;
+  if (!isRecord(result) || !isRecord(result.details) || !Array.isArray(result.details.expectedQueries)) {
+    return [];
+  }
+  return result.details.expectedQueries
+    .filter(isRecord)
+    .map((query) => query.expression)
+    .filter((expression): expression is string => typeof expression === 'string');
 }
 
 function transcriptAfterPrompt(run: BenchmarkRun) {

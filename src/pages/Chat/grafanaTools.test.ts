@@ -2428,6 +2428,8 @@ d.dashboard.new(
       'get_live_dashboard_mutation_schema',
       'rename_live_dashboard_panel',
       'update_live_dashboard_panel_query',
+      'update_live_dashboard_panel_queries',
+      'apply_live_dashboard_prometheus_label_filter',
       'add_live_dashboard_panel',
       'move_or_resize_live_dashboard_panel',
       'update_live_dashboard_settings',

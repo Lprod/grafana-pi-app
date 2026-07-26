@@ -26,9 +26,9 @@ Use this skill when the user asks for a dashboard, panel, row, variable, live da
 
 1. Use live edits only for the currently open dashboard and only when live dashboard editing tools are available.
 2. Call `list_live_dashboard_panels`, `get_live_dashboard_layout`, `get_live_dashboard_info`, or `list_live_dashboard_variables` before applying changes when you need exact element names, layout paths, dashboard UID, or variable names.
-3. Prefer typed live tools: `rename_live_dashboard_panel`, `update_live_dashboard_panel_query`, `add_live_dashboard_panel`, `move_or_resize_live_dashboard_panel`, `update_live_dashboard_settings`, `add_live_dashboard_variable`, and `update_live_dashboard_variable`.
+3. Prefer typed live tools: `rename_live_dashboard_panel`, `update_live_dashboard_panel_query`, `update_live_dashboard_panel_queries`, `apply_live_dashboard_prometheus_label_filter`, `add_live_dashboard_panel`, `move_or_resize_live_dashboard_panel`, `update_live_dashboard_settings`, `add_live_dashboard_variable`, and `update_live_dashboard_variable`.
 4. Use `apply_live_dashboard_mutation` only for advanced commands that do not have a typed tool.
-5. Apply one small live edit at a time.
+5. Use `apply_live_dashboard_prometheus_label_filter` for dashboard-wide Prometheus variable filters and `update_live_dashboard_panel_queries` for known multi-panel expression replacements. Use focused single-edit tools for heterogeneous changes.
 6. Verify with `list_live_dashboard_panels`, `get_live_dashboard_layout`, `get_live_dashboard_info`, `list_live_dashboard_variables`, or the screenshot attached by layout-affecting live edit tools.
 7. If a live mutation fails, inspect panels/layout/variables again and retry with corrected element names or paths before giving up.
 8. Do not call `write_jsonnet`, `render_dashboard`, or `save_dashboard` for a live-edit request unless the user asks for a durable Jsonnet dashboard.

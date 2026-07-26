@@ -657,6 +657,10 @@ function asSimpleToolCallSummary(
       return liveDashboardToolCallSummary('Rename live dashboard panel', record);
     case 'update_live_dashboard_panel_query':
       return liveDashboardToolCallSummary('Update live dashboard panel query', record);
+    case 'update_live_dashboard_panel_queries':
+      return liveDashboardToolCallSummary('Update live dashboard panel queries', record);
+    case 'apply_live_dashboard_prometheus_label_filter':
+      return liveDashboardToolCallSummary('Apply Prometheus dashboard label filter', record);
     case 'add_live_dashboard_panel':
       return liveDashboardToolCallSummary('Add live dashboard panel', record);
     case 'move_or_resize_live_dashboard_panel':
@@ -1572,6 +1576,8 @@ const TOOL_ICONS: Record<string, IconName> = {
   get_live_dashboard_mutation_schema: 'book',
   rename_live_dashboard_panel: 'edit',
   update_live_dashboard_panel_query: 'search',
+  update_live_dashboard_panel_queries: 'search',
+  apply_live_dashboard_prometheus_label_filter: 'filter',
   add_live_dashboard_panel: 'plus',
   move_or_resize_live_dashboard_panel: 'dashboard',
   update_live_dashboard_settings: 'cog',
@@ -6147,6 +6153,8 @@ const LIVE_DASHBOARD_TOOL_NAMES = new Set([
   'get_live_dashboard_mutation_schema',
   'rename_live_dashboard_panel',
   'update_live_dashboard_panel_query',
+  'update_live_dashboard_panel_queries',
+  'apply_live_dashboard_prometheus_label_filter',
   'add_live_dashboard_panel',
   'move_or_resize_live_dashboard_panel',
   'update_live_dashboard_settings',

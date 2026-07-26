@@ -2,6 +2,7 @@ import type { AgentTool, AgentToolResult } from '@earendil-works/pi-agent-core';
 import type { DashboardMutationAPI, DashboardMutationResult } from '@grafana/data';
 import { Type } from 'typebox';
 import { renderDashboardScreenshot } from './dashboards';
+import { addPromqlLabelFilter, type ExistingPromqlMatcherStrategy } from './promqlLabelFilter';
 import { textResult, throwIfAborted, truncateText } from './result';
 
 const MAX_MUTATION_RESULT_TEXT = 20000;
@@ -20,6 +21,8 @@ const READ_COMMANDS = new Set([
 export const LIVE_DASHBOARD_WRITE_TOOLS = new Set([
   'rename_live_dashboard_panel',
   'update_live_dashboard_panel_query',
+  'update_live_dashboard_panel_queries',
+  'apply_live_dashboard_prometheus_label_filter',
   'add_live_dashboard_panel',
   'move_or_resize_live_dashboard_panel',
   'update_live_dashboard_settings',
@@ -70,6 +73,53 @@ type UpdateLiveDashboardPanelQueryParams = {
   datasourceName?: string;
   refId?: string;
   hidden?: boolean;
+};
+
+type BatchLiveDashboardPanelQueryUpdate = {
+  elementName: string;
+  refId?: string;
+  queryExpression: string;
+};
+
+type UpdateLiveDashboardPanelQueriesParams = {
+  updates: BatchLiveDashboardPanelQueryUpdate[];
+  dryRun?: boolean;
+};
+
+type ApplyLiveDashboardPrometheusLabelFilterParams = {
+  variableName: string;
+  variableLabel?: string;
+  variableQueryExpression: string;
+  matcherLabel?: string;
+  matcherOperator?: '=~' | '=' | '!=' | '!~';
+  current?: string;
+  multi?: boolean;
+  includeAll?: boolean;
+  allValue?: string;
+  datasourceName?: string;
+  elements?: string[];
+  refIds?: string[];
+  existingMatcher?: ExistingPromqlMatcherStrategy;
+  dryRun?: boolean;
+};
+
+type LivePanelSnapshot = {
+  elementName: string;
+  queries: Array<Record<string, unknown>>;
+};
+
+type PlannedPanelQueryChange = {
+  refId: string;
+  previousExpression: string;
+  expression: string;
+  selectorCount?: number;
+  changedSelectorCount?: number;
+};
+
+type PlannedPanelUpdate = {
+  elementName: string;
+  queries: Array<Record<string, unknown>>;
+  changes: PlannedPanelQueryChange[];
 };
 
 type LiveDashboardPanelQueryInput = Omit<UpdateLiveDashboardPanelQueryParams, 'elementName'>;
@@ -163,6 +213,16 @@ export function createLiveDashboardMutationTools(dashboardMutation?: DashboardMu
       : undefined,
     commandAvailable(availableCommands, 'UPDATE_PANEL')
       ? makeUpdateLiveDashboardPanelQueryTool(dashboardMutation)
+      : undefined,
+    commandAvailable(availableCommands, 'UPDATE_PANEL') && commandAvailable(availableCommands, 'LIST_PANELS')
+      ? makeUpdateLiveDashboardPanelQueriesTool(dashboardMutation)
+      : undefined,
+    commandAvailable(availableCommands, 'UPDATE_PANEL') &&
+    commandAvailable(availableCommands, 'LIST_PANELS') &&
+    commandAvailable(availableCommands, 'LIST_VARIABLES') &&
+    commandAvailable(availableCommands, 'ADD_VARIABLE') &&
+    commandAvailable(availableCommands, 'UPDATE_VARIABLE')
+      ? makeApplyLiveDashboardPrometheusLabelFilterTool(dashboardMutation)
       : undefined,
     commandAvailable(availableCommands, 'ADD_PANEL') ? makeAddLiveDashboardPanelTool(dashboardMutation) : undefined,
     commandAvailable(availableCommands, 'MOVE_PANEL')
@@ -395,6 +455,96 @@ function makeUpdateLiveDashboardPanelQueryTool(dashboardMutation: DashboardMutat
       };
       const result = await dashboardMutation.execute({ type: 'UPDATE_PANEL', payload });
       return mutationResult('UPDATE_PANEL', result, dashboardMutation, payload);
+    },
+  };
+}
+
+function makeUpdateLiveDashboardPanelQueriesTool(dashboardMutation: DashboardMutationAPI): AgentTool {
+  return {
+    name: 'update_live_dashboard_panel_queries',
+    label: 'Update live dashboard panel queries',
+    description:
+      'Batch-update query expressions across many panels in the currently loaded dashboard. Reads panel state once, preserves datasource metadata and untouched queries, and groups updates into one Grafana command per panel. Use dryRun to preview.',
+    executionMode: 'sequential',
+    parameters: Type.Object({
+      updates: Type.Array(
+        Type.Object({
+          elementName: Type.String({ description: 'Panel element name from list_live_dashboard_panels.' }),
+          refId: Type.Optional(Type.String({ description: 'Query refId. Defaults to A.' })),
+          queryExpression: Type.String({ description: 'Complete replacement expression for this query.' }),
+        }),
+        { description: 'Query updates to validate and apply together.', minItems: 1, maxItems: 100 }
+      ),
+      dryRun: Type.Optional(Type.Boolean({ description: 'Preview all changes without mutating the dashboard.' })),
+    }),
+    async execute(_toolCallId, params, signal) {
+      throwIfAborted(signal);
+      const args = params as UpdateLiveDashboardPanelQueriesParams;
+      const updates = validateBatchQueryUpdates(args.updates);
+      const panels = await readLivePanelSnapshots(
+        dashboardMutation,
+        [...new Set(updates.map((update) => update.elementName))],
+        signal
+      );
+      const plan = planExplicitPanelQueryUpdates(panels, updates);
+      return executePanelUpdatePlan(
+        dashboardMutation,
+        'BATCH_UPDATE_PANEL_QUERIES',
+        plan,
+        Boolean(args.dryRun),
+        signal
+      );
+    },
+  };
+}
+
+function makeApplyLiveDashboardPrometheusLabelFilterTool(dashboardMutation: DashboardMutationAPI): AgentTool {
+  return {
+    name: 'apply_live_dashboard_prometheus_label_filter',
+    label: 'Apply Prometheus dashboard label filter',
+    description:
+      'Add or update one Prometheus query variable and inject its label matcher into every selected PromQL vector selector across the currently loaded dashboard. The operation prevalidates all queries, preserves query metadata, batches panel writes internally, and verifies the final variable and expressions. Use this for dashboard-wide variable filtering instead of editing panels one at a time.',
+    executionMode: 'sequential',
+    parameters: Type.Object({
+      variableName: Type.String({ description: 'Dashboard query variable name, for example env.' }),
+      variableLabel: Type.Optional(Type.String({ description: 'Optional display label, for example Environment.' })),
+      variableQueryExpression: Type.String({
+        description: 'Prometheus variable query, for example label_values(http_requests_total, env).',
+      }),
+      matcherLabel: Type.Optional(
+        Type.String({ description: 'Prometheus label to filter. Defaults to variableName.' })
+      ),
+      matcherOperator: Type.Optional(
+        Type.Union([Type.Literal('=~'), Type.Literal('='), Type.Literal('!='), Type.Literal('!~')], {
+          description: 'PromQL matcher operator. Defaults to =~ for multi-value variables.',
+        })
+      ),
+      current: Type.Optional(Type.String({ description: 'Initial/current variable value.' })),
+      multi: Type.Optional(Type.Boolean({ description: 'Allow multiple values. Defaults to true.' })),
+      includeAll: Type.Optional(Type.Boolean({ description: 'Include All. Defaults to true.' })),
+      allValue: Type.Optional(Type.String({ description: 'Custom All value. Defaults to .*.' })),
+      datasourceName: Type.Optional(Type.String({ description: 'Optional Prometheus datasource name.' })),
+      elements: Type.Optional(
+        Type.Array(Type.String(), { description: 'Optional panel element names. Omit to update all panels.' })
+      ),
+      refIds: Type.Optional(
+        Type.Array(Type.String(), {
+          description: 'Optional query refIds to update. Omit to update all Prometheus queries.',
+        })
+      ),
+      existingMatcher: Type.Optional(
+        Type.Union([Type.Literal('replace'), Type.Literal('keep'), Type.Literal('error')], {
+          description: 'How to handle an existing matcher for the label. Defaults to replace.',
+        })
+      ),
+      dryRun: Type.Optional(
+        Type.Boolean({ description: 'Preview the variable and query changes without mutating the dashboard.' })
+      ),
+    }),
+    async execute(_toolCallId, params, signal) {
+      throwIfAborted(signal);
+      const args = params as ApplyLiveDashboardPrometheusLabelFilterParams;
+      return applyLiveDashboardPrometheusLabelFilter(dashboardMutation, args, signal);
     },
   };
 }
@@ -700,6 +850,502 @@ async function mutationResult(
       visualVerification: { status: 'skipped', error: verification.error },
     }
   );
+}
+
+function validateBatchQueryUpdates(updates: BatchLiveDashboardPanelQueryUpdate[]) {
+  if (!Array.isArray(updates) || updates.length === 0) {
+    throw new Error('update_live_dashboard_panel_queries requires at least one update.');
+  }
+  if (updates.length > 100) {
+    throw new Error('update_live_dashboard_panel_queries accepts at most 100 updates.');
+  }
+
+  const seen = new Set<string>();
+  return updates.map((update) => {
+    const elementName = stringValue(update?.elementName, 'elementName');
+    const refId = stringValue(update?.refId, 'refId', 'A');
+    const queryExpression = stringValue(update?.queryExpression, 'queryExpression');
+    const key = `${elementName}\u0000${refId}`;
+    if (seen.has(key)) {
+      throw new Error(`Duplicate batch query update for ${elementName} refId ${refId}.`);
+    }
+    seen.add(key);
+    return { elementName, refId, queryExpression };
+  });
+}
+
+async function readLivePanelSnapshots(
+  dashboardMutation: DashboardMutationAPI,
+  elements: string[] | undefined,
+  signal?: AbortSignal
+) {
+  throwIfAborted(signal);
+  const payload = elements?.length ? { elements } : {};
+  const result = await dashboardMutation.execute({ type: 'LIST_PANELS', payload });
+  if (!result.success) {
+    throw new Error(`Could not read live dashboard panels: ${result.error ?? 'LIST_PANELS failed.'}`);
+  }
+
+  const data = isRecord(result.data) ? result.data : undefined;
+  const entries = Array.isArray(data?.elements) ? data.elements.filter(isRecord) : [];
+  return entries.map((entry, index) => livePanelSnapshot(entry, elements?.[index])).filter(isLivePanelSnapshot);
+}
+
+function livePanelSnapshot(
+  entry: Record<string, unknown>,
+  fallbackElementName?: string
+): LivePanelSnapshot | undefined {
+  const element = recordField(entry, 'element');
+  const spec = recordField(element, 'spec');
+  const data = recordField(spec, 'data');
+  const dataSpec = recordField(data, 'spec');
+  const layoutItem = recordField(entry, 'layoutItem');
+  const layoutSpec = recordField(layoutItem, 'spec');
+  const layoutElement = recordField(layoutSpec, 'element');
+  const elementName =
+    stringField(entry, 'name') ?? stringField(layoutElement, 'name') ?? optionalStringValue(fallbackElementName);
+  if (!elementName) {
+    return undefined;
+  }
+
+  return {
+    elementName,
+    queries: recordsField(dataSpec, 'queries'),
+  };
+}
+
+function isLivePanelSnapshot(value: LivePanelSnapshot | undefined): value is LivePanelSnapshot {
+  return Boolean(value);
+}
+
+function planExplicitPanelQueryUpdates(
+  panels: LivePanelSnapshot[],
+  updates: Array<Required<BatchLiveDashboardPanelQueryUpdate>>
+) {
+  const panelMap = new Map(panels.map((panel) => [panel.elementName, panel]));
+  const updatesByPanel = new Map<string, Array<Required<BatchLiveDashboardPanelQueryUpdate>>>();
+  for (const update of updates) {
+    const current = updatesByPanel.get(update.elementName) ?? [];
+    current.push(update);
+    updatesByPanel.set(update.elementName, current);
+  }
+
+  return [...updatesByPanel].map(([elementName, panelUpdates]) => {
+    const panel = panelMap.get(elementName);
+    if (!panel) {
+      throw new Error(`Live dashboard panel not found: ${elementName}.`);
+    }
+
+    let queries = panel.queries;
+    const changes: PlannedPanelQueryChange[] = [];
+    for (const update of panelUpdates) {
+      const queryIndex = queries.findIndex((query) => panelQueryRefId(query) === update.refId);
+      if (queryIndex < 0) {
+        throw new Error(`Live dashboard panel ${elementName} has no query with refId ${update.refId}.`);
+      }
+      const previousExpression = panelQueryExpression(queries[queryIndex]);
+      if (previousExpression === undefined) {
+        throw new Error(`Live dashboard panel ${elementName} refId ${update.refId} has no expression.`);
+      }
+      if (previousExpression === update.queryExpression) {
+        continue;
+      }
+
+      queries = queries.map((query, index) =>
+        index === queryIndex ? withPanelQueryExpression(query, update.queryExpression) : query
+      );
+      changes.push({
+        refId: update.refId,
+        previousExpression,
+        expression: update.queryExpression,
+      });
+    }
+
+    return { elementName, queries, changes };
+  });
+}
+
+function panelQueryExpression(query: Record<string, unknown>) {
+  const spec = recordField(query, 'spec');
+  const dataQuery = recordField(spec, 'query');
+  const querySpec = recordField(dataQuery, 'spec');
+  return stringField(querySpec, 'expr');
+}
+
+function panelQueryDatasourceType(query: Record<string, unknown>) {
+  const spec = recordField(query, 'spec');
+  const dataQuery = recordField(spec, 'query');
+  return stringField(dataQuery, 'group');
+}
+
+function withPanelQueryExpression(query: Record<string, unknown>, expression: string) {
+  const spec = recordField(query, 'spec');
+  const dataQuery = recordField(spec, 'query');
+  const querySpec = recordField(dataQuery, 'spec');
+  if (!spec || !dataQuery || !querySpec) {
+    throw new Error(`Query ${panelQueryRefId(query) ?? 'unknown'} does not have a mutable DataQuery spec.`);
+  }
+
+  return {
+    ...query,
+    spec: {
+      ...spec,
+      query: {
+        ...dataQuery,
+        spec: {
+          ...querySpec,
+          expr: expression,
+        },
+      },
+    },
+  };
+}
+
+async function executePanelUpdatePlan(
+  dashboardMutation: DashboardMutationAPI,
+  command: string,
+  plan: PlannedPanelUpdate[],
+  dryRun: boolean,
+  signal?: AbortSignal
+) {
+  const applied = dryRun ? [] : await applyPanelUpdatePlan(dashboardMutation, plan, signal);
+  const failures = applied.filter(({ result }) => !result.success);
+  const changedPanels = plan.filter((panel) => panel.changes.length > 0);
+  const success = dryRun || failures.length === 0;
+  const summary = {
+    dryRun,
+    success,
+    panelCount: plan.length,
+    changedPanelCount: changedPanels.length,
+    queryChangeCount: changedPanels.reduce((count, panel) => count + panel.changes.length, 0),
+    appliedPanelCount: applied.filter(({ result }) => result.success).length,
+    failures: failures.map(({ panel, result }) => ({ elementName: panel.elementName, error: result.error })),
+    updates: changedPanels.map((panel) => ({ elementName: panel.elementName, queries: panel.changes })),
+  };
+
+  return textResult(
+    truncateText(
+      `${dryRun ? 'Live dashboard batch query preview' : 'Live dashboard batch query update'} ${
+        success ? 'succeeded' : 'failed'
+      }.\n${JSON.stringify(summary, null, 2)}`,
+      MAX_MUTATION_RESULT_TEXT
+    ),
+    {
+      command,
+      ...summary,
+      changes: applied.flatMap(({ result }) => result.changes),
+      warnings: applied.flatMap(({ result }) => result.warnings ?? []),
+      availableCommands: safeAvailableCommands(dashboardMutation),
+    }
+  );
+}
+
+async function applyPanelUpdatePlan(
+  dashboardMutation: DashboardMutationAPI,
+  plan: PlannedPanelUpdate[],
+  signal?: AbortSignal
+) {
+  const results: Array<{ panel: PlannedPanelUpdate; result: DashboardMutationResult }> = [];
+  for (const panel of plan) {
+    if (panel.changes.length === 0) {
+      continue;
+    }
+    throwIfAborted(signal);
+    const payload = {
+      element: elementReference(panel.elementName),
+      panel: panelPatch({ data: queryGroup(panel.queries) }),
+    };
+    const result = await dashboardMutation.execute({ type: 'UPDATE_PANEL', payload });
+    results.push({ panel, result });
+  }
+  return results;
+}
+
+async function applyLiveDashboardPrometheusLabelFilter(
+  dashboardMutation: DashboardMutationAPI,
+  args: ApplyLiveDashboardPrometheusLabelFilterParams,
+  signal?: AbortSignal
+) {
+  const variableName = stringValue(args.variableName, 'variableName');
+  const matcherLabel = stringValue(args.matcherLabel, 'matcherLabel', variableName);
+  const matcherOperator = args.matcherOperator ?? '=~';
+  const existingMatcher = args.existingMatcher ?? 'replace';
+  const variableQueryExpression = stringValue(args.variableQueryExpression, 'variableQueryExpression');
+  const requestedElements = normalizeOptionalStringList(args.elements, 'elements');
+  const requestedRefIds = normalizeOptionalStringList(args.refIds, 'refIds');
+  const refIdSet = requestedRefIds ? new Set(requestedRefIds) : undefined;
+
+  const [panels, variables] = await Promise.all([
+    readLivePanelSnapshots(dashboardMutation, requestedElements, signal),
+    readLiveDashboardVariables(dashboardMutation, signal),
+  ]);
+  if (requestedElements?.length && panels.length !== requestedElements.length) {
+    const found = new Set(panels.map((panel) => panel.elementName));
+    const missing = requestedElements.filter((element) => !found.has(element));
+    throw new Error(`Live dashboard panels not found: ${missing.join(', ')}.`);
+  }
+
+  const plan: PlannedPanelUpdate[] = [];
+  const expectedQueries: Array<{ elementName: string; refId: string; expression: string }> = [];
+  for (const panel of panels) {
+    let queries = panel.queries;
+    const changes: PlannedPanelQueryChange[] = [];
+    for (let queryIndex = 0; queryIndex < panel.queries.length; queryIndex += 1) {
+      const query = panel.queries[queryIndex];
+      const refId = panelQueryRefId(query) ?? 'A';
+      if (panelQueryDatasourceType(query) !== 'prometheus' || (refIdSet && !refIdSet.has(refId))) {
+        continue;
+      }
+      const previousExpression = panelQueryExpression(query);
+      if (!previousExpression) {
+        throw new Error(`Live dashboard panel ${panel.elementName} refId ${refId} has no PromQL expression.`);
+      }
+
+      let filtered;
+      try {
+        filtered = addPromqlLabelFilter(
+          previousExpression,
+          matcherLabel,
+          matcherOperator,
+          `$${variableName}`,
+          existingMatcher
+        );
+      } catch (error) {
+        throw new Error(
+          `Could not plan ${panel.elementName} refId ${refId}: ${error instanceof Error ? error.message : String(error)}`
+        );
+      }
+      if (filtered.selectorCount === 0) {
+        throw new Error(`Could not plan ${panel.elementName} refId ${refId}: expression has no vector selectors.`);
+      }
+
+      expectedQueries.push({ elementName: panel.elementName, refId, expression: filtered.expression });
+      if (!filtered.changed) {
+        continue;
+      }
+      queries = queries.map((candidate, index) =>
+        index === queryIndex ? withPanelQueryExpression(candidate, filtered.expression) : candidate
+      );
+      changes.push({
+        refId,
+        previousExpression,
+        expression: filtered.expression,
+        selectorCount: filtered.selectorCount,
+        changedSelectorCount: filtered.changedSelectorCount,
+      });
+    }
+    plan.push({ elementName: panel.elementName, queries, changes });
+  }
+  if (expectedQueries.length === 0) {
+    throw new Error('No Prometheus panel queries matched the requested dashboard filter scope.');
+  }
+
+  const variableExists = variables.some((variable) => liveVariableName(variable) === variableName);
+  const variableArgs: LiveDashboardVariableParams = {
+    name: variableName,
+    variableType: 'query',
+    label: args.variableLabel,
+    queryExpression: variableQueryExpression,
+    datasourceType: 'prometheus',
+    datasourceName: args.datasourceName,
+    current: args.current,
+    multi: args.multi ?? true,
+    includeAll: args.includeAll ?? true,
+    allValue: args.allValue ?? '.*',
+  };
+  const variableCommand = variableExists ? 'UPDATE_VARIABLE' : 'ADD_VARIABLE';
+  const variablePayload = variableExists
+    ? compactDeep({ name: variableName, variable: variableKind(variableArgs, variableName) })
+    : compactDeep({ variable: variableKind(variableArgs) });
+
+  if (args.dryRun) {
+    return prometheusLabelFilterResult(dashboardMutation, {
+      dryRun: true,
+      success: true,
+      variableName,
+      matcherLabel,
+      matcherOperator,
+      variableAction: variableExists ? 'update' : 'add',
+      expectedQueries,
+      plan,
+      mutationResults: [],
+      verification: { variablePresent: variableExists, matchingQueryCount: expectedQueries.length, mismatches: [] },
+    });
+  }
+
+  throwIfAborted(signal);
+  const variableResult = await dashboardMutation.execute({ type: variableCommand, payload: variablePayload });
+  if (!variableResult.success) {
+    return prometheusLabelFilterResult(dashboardMutation, {
+      dryRun: false,
+      success: false,
+      error: variableResult.error ?? `${variableCommand} failed.`,
+      variableName,
+      matcherLabel,
+      matcherOperator,
+      variableAction: variableExists ? 'update' : 'add',
+      expectedQueries,
+      plan,
+      mutationResults: [variableResult],
+    });
+  }
+
+  const panelResults = await applyPanelUpdatePlan(dashboardMutation, plan, signal);
+  const mutationResults = [variableResult, ...panelResults.map(({ result }) => result)];
+  const mutationFailure = panelResults.find(({ result }) => !result.success);
+  let verification:
+    | {
+        variablePresent: boolean;
+        matchingQueryCount: number;
+        mismatches: Array<{ elementName: string; refId: string }>;
+      }
+    | undefined;
+  let verificationError: string | undefined;
+  if (!mutationFailure) {
+    try {
+      verification = await verifyPrometheusLabelFilter(
+        dashboardMutation,
+        variableName,
+        expectedQueries,
+        requestedElements,
+        signal
+      );
+    } catch (error) {
+      verificationError = error instanceof Error ? error.message : String(error);
+    }
+  }
+
+  const success =
+    !mutationFailure &&
+    !verificationError &&
+    Boolean(verification?.variablePresent) &&
+    verification?.mismatches.length === 0;
+  return prometheusLabelFilterResult(dashboardMutation, {
+    dryRun: false,
+    success,
+    error:
+      mutationFailure?.result.error ??
+      verificationError ??
+      (verification && !verification.variablePresent
+        ? `Variable ${variableName} was not present after mutation.`
+        : undefined) ??
+      (verification?.mismatches.length ? `${verification.mismatches.length} queries failed verification.` : undefined),
+    variableName,
+    matcherLabel,
+    matcherOperator,
+    variableAction: variableExists ? 'update' : 'add',
+    expectedQueries,
+    plan,
+    mutationResults,
+    verification,
+  });
+}
+
+async function readLiveDashboardVariables(dashboardMutation: DashboardMutationAPI, signal?: AbortSignal) {
+  throwIfAborted(signal);
+  const result = await dashboardMutation.execute({ type: 'LIST_VARIABLES', payload: {} });
+  if (!result.success) {
+    throw new Error(`Could not read live dashboard variables: ${result.error ?? 'LIST_VARIABLES failed.'}`);
+  }
+  const data = isRecord(result.data) ? result.data : undefined;
+  return Array.isArray(data?.variables) ? data.variables.filter(isRecord) : [];
+}
+
+function liveVariableName(variable: Record<string, unknown>) {
+  return stringField(recordField(variable, 'spec') ?? variable, 'name');
+}
+
+async function verifyPrometheusLabelFilter(
+  dashboardMutation: DashboardMutationAPI,
+  variableName: string,
+  expectedQueries: Array<{ elementName: string; refId: string; expression: string }>,
+  requestedElements: string[] | undefined,
+  signal?: AbortSignal
+) {
+  const [panels, variables] = await Promise.all([
+    readLivePanelSnapshots(dashboardMutation, requestedElements, signal),
+    readLiveDashboardVariables(dashboardMutation, signal),
+  ]);
+  const panelMap = new Map(panels.map((panel) => [panel.elementName, panel]));
+  const mismatches = expectedQueries
+    .filter((expected) => {
+      const query = panelMap
+        .get(expected.elementName)
+        ?.queries.find((candidate) => panelQueryRefId(candidate) === expected.refId);
+      return !query || panelQueryExpression(query) !== expected.expression;
+    })
+    .map(({ elementName, refId }) => ({ elementName, refId }));
+
+  return {
+    variablePresent: variables.some((variable) => liveVariableName(variable) === variableName),
+    matchingQueryCount: expectedQueries.length - mismatches.length,
+    mismatches,
+  };
+}
+
+function prometheusLabelFilterResult(
+  dashboardMutation: DashboardMutationAPI,
+  result: {
+    dryRun: boolean;
+    success: boolean;
+    error?: string;
+    variableName: string;
+    matcherLabel: string;
+    matcherOperator: string;
+    variableAction: 'add' | 'update';
+    expectedQueries: Array<{ elementName: string; refId: string; expression: string }>;
+    plan: PlannedPanelUpdate[];
+    mutationResults: DashboardMutationResult[];
+    verification?: { variablePresent: boolean; matchingQueryCount: number; mismatches: unknown[] };
+  }
+) {
+  const changedPanels = result.plan.filter((panel) => panel.changes.length > 0);
+  const summary = {
+    dryRun: result.dryRun,
+    success: result.success,
+    error: result.error,
+    variable: {
+      name: result.variableName,
+      action: result.variableAction,
+    },
+    filter: {
+      label: result.matcherLabel,
+      operator: result.matcherOperator,
+      value: `$${result.variableName}`,
+    },
+    matchedPanelCount: result.plan.length,
+    changedPanelCount: changedPanels.length,
+    matchedQueryCount: result.expectedQueries.length,
+    changedQueryCount: changedPanels.reduce((count, panel) => count + panel.changes.length, 0),
+    verification: result.verification,
+    updates: changedPanels.map((panel) => ({ elementName: panel.elementName, queries: panel.changes })),
+  };
+  return textResult(
+    truncateText(
+      `${result.dryRun ? 'Prometheus dashboard label filter preview' : 'Prometheus dashboard label filter'} ${
+        result.success ? 'succeeded' : 'failed'
+      }.\n${JSON.stringify(summary, null, 2)}`,
+      MAX_MUTATION_RESULT_TEXT
+    ),
+    {
+      command: 'APPLY_PROMETHEUS_LABEL_FILTER',
+      ...summary,
+      expectedQueries: result.expectedQueries,
+      changes: result.mutationResults.flatMap((mutation) => mutation.changes),
+      warnings: result.mutationResults.flatMap((mutation) => mutation.warnings ?? []),
+      availableCommands: safeAvailableCommands(dashboardMutation),
+    }
+  );
+}
+
+function normalizeOptionalStringList(values: string[] | undefined, field: string) {
+  if (values === undefined) {
+    return undefined;
+  }
+  if (!Array.isArray(values) || values.length === 0) {
+    throw new Error(`${field} must contain at least one value when provided.`);
+  }
+  return [...new Set(values.map((value) => stringValue(value, field)))];
 }
 
 function normalizeCommand(command: unknown) {
@@ -1278,11 +1924,12 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 const COMMON_COMMAND_GUIDANCE = {
   workflow: [
-    'Prefer typed tools for common edits: rename_live_dashboard_panel, update_live_dashboard_panel_query, add_live_dashboard_panel, move_or_resize_live_dashboard_panel, update_live_dashboard_settings, add_live_dashboard_variable, update_live_dashboard_variable.',
+    'Prefer typed tools for common edits: rename_live_dashboard_panel, update_live_dashboard_panel_query, update_live_dashboard_panel_queries, apply_live_dashboard_prometheus_label_filter, add_live_dashboard_panel, move_or_resize_live_dashboard_panel, update_live_dashboard_settings, add_live_dashboard_variable, update_live_dashboard_variable.',
+    'Use apply_live_dashboard_prometheus_label_filter for dashboard-wide Prometheus variable filters and update_live_dashboard_panel_queries for known expression replacements.',
     'Use apply_live_dashboard_mutation only for advanced commands without a typed tool.',
     'Call list_live_dashboard_panels, get_live_dashboard_layout, get_live_dashboard_info, or list_live_dashboard_variables first when you need current names, layout paths, dashboard UID, or variables.',
     'Use element names such as panel-1 from LIST_PANELS when updating, moving, or removing panels.',
-    'Apply one small mutation at a time, then verify with LIST_PANELS, GET_LAYOUT, GET_DASHBOARD_INFO, LIST_VARIABLES, or the screenshot attached by layout-affecting typed tools.',
+    'Batch homogeneous query changes with typed batch tools; otherwise apply focused mutations and verify with LIST_PANELS, GET_LAYOUT, GET_DASHBOARD_INFO, LIST_VARIABLES, or the screenshot attached by layout-affecting typed tools.',
     'Do not use live mutations unless the user requested an on-the-fly dashboard edit.',
   ],
   commonCommands: [

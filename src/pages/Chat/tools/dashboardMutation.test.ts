@@ -185,7 +185,198 @@ describe('live dashboard mutation tools', () => {
       data,
     });
   });
+
+  it('batch-updates panel expressions while preserving untouched queries and datasource metadata', async () => {
+    const panelData = livePanelData([
+      livePanel('panel-1', [
+        liveQuery('A', 'sum(rate(old_metric[5m]))', { hidden: true, datasourceName: 'prom-prod' }),
+        liveQuery('B', 'sum(rate(untouched_metric[5m]))', { datasourceName: 'prom-prod' }),
+      ]),
+    ]);
+    const dashboardMutation = {
+      execute: jest.fn(async ({ type, payload }: { type: string; payload: any }) => {
+        if (type === 'LIST_PANELS') {
+          return mutationResult({ data: panelData });
+        }
+        if (type === 'UPDATE_PANEL') {
+          return mutationResult({
+            data: payload,
+            changes: [{ path: '/elements/panel-1/spec/data', previousValue: null, newValue: payload.panel }],
+          });
+        }
+        throw new Error(`Unexpected dashboard mutation command: ${type}`);
+      }),
+      getAvailableCommands: jest.fn(() => ['LIST_PANELS', 'UPDATE_PANEL']),
+    } as unknown as DashboardMutationAPI;
+    const tool = getTool(createLiveDashboardMutationTools(dashboardMutation), 'update_live_dashboard_panel_queries');
+
+    const result = await tool.execute(
+      'call-1',
+      {
+        updates: [{ elementName: 'panel-1', refId: 'A', queryExpression: 'sum(rate(new_metric[5m]))' }],
+      },
+      undefined
+    );
+
+    expect(dashboardMutation.execute).toHaveBeenCalledTimes(2);
+    const updatePayload = (dashboardMutation.execute as jest.Mock).mock.calls[1][0].payload;
+    expect(updatePayload.panel.spec.data.spec.queries).toEqual([
+      liveQuery('A', 'sum(rate(new_metric[5m]))', { hidden: true, datasourceName: 'prom-prod' }),
+      liveQuery('B', 'sum(rate(untouched_metric[5m]))', { datasourceName: 'prom-prod' }),
+    ]);
+    expect(result.details).toMatchObject({
+      command: 'BATCH_UPDATE_PANEL_QUERIES',
+      success: true,
+      changedPanelCount: 1,
+      queryChangeCount: 1,
+      appliedPanelCount: 1,
+    });
+  });
+
+  it('previews batch query updates without writing', async () => {
+    const dashboardMutation = createDashboardMutationApi({
+      LIST_PANELS: mutationResult({
+        data: livePanelData([livePanel('panel-1', [liveQuery('A', 'up')])]),
+      }),
+    });
+    const tool = getTool(createLiveDashboardMutationTools(dashboardMutation), 'update_live_dashboard_panel_queries');
+
+    const result = await tool.execute(
+      'call-1',
+      { updates: [{ elementName: 'panel-1', queryExpression: 'up == 1' }], dryRun: true },
+      undefined
+    );
+
+    expect(dashboardMutation.execute).toHaveBeenCalledTimes(1);
+    expect(result.details).toMatchObject({ dryRun: true, success: true, queryChangeCount: 1, appliedPanelCount: 0 });
+  });
+
+  it('adds a Prometheus variable, filters all panel selectors, and verifies the result', async () => {
+    let variables: Array<Record<string, unknown>> = [];
+    let panels = [
+      livePanel('panel-1', [liveQuery('A', 'sum(rate(http_requests_total{status=~"5.."}[5m]))')]),
+      livePanel('panel-2', [liveQuery('A', 'max(rate(process_cpu_seconds_total[$__rate_interval]))')]),
+    ];
+    const dashboardMutation = {
+      execute: jest.fn(async ({ type, payload }: { type: string; payload: any }) => {
+        if (type === 'LIST_PANELS') {
+          return mutationResult({ data: livePanelData(panels) });
+        }
+        if (type === 'LIST_VARIABLES') {
+          return mutationResult({ data: { variables } });
+        }
+        if (type === 'ADD_VARIABLE') {
+          variables = [payload.variable];
+          return mutationResult({
+            data: payload,
+            changes: [{ path: '/variables/env', previousValue: null, newValue: payload.variable }],
+          });
+        }
+        if (type === 'UPDATE_PANEL') {
+          const elementName = payload.element.name;
+          panels = panels.map((panel) =>
+            panel.name === elementName
+              ? {
+                  ...panel,
+                  element: { ...panel.element, spec: { ...panel.element.spec, data: payload.panel.spec.data } },
+                }
+              : panel
+          );
+          return mutationResult({
+            data: payload,
+            changes: [{ path: `/elements/${elementName}/spec/data`, previousValue: null, newValue: payload.panel }],
+          });
+        }
+        throw new Error(`Unexpected dashboard mutation command: ${type}`);
+      }),
+      getAvailableCommands: jest.fn(() => [
+        'ADD_VARIABLE',
+        'LIST_PANELS',
+        'LIST_VARIABLES',
+        'UPDATE_PANEL',
+        'UPDATE_VARIABLE',
+      ]),
+    } as unknown as DashboardMutationAPI;
+    const tool = getTool(
+      createLiveDashboardMutationTools(dashboardMutation),
+      'apply_live_dashboard_prometheus_label_filter'
+    );
+
+    const result = await tool.execute(
+      'call-1',
+      {
+        variableName: 'env',
+        variableLabel: 'Environment',
+        variableQueryExpression: 'label_values(http_requests_total, env)',
+        current: 'prod',
+      },
+      undefined
+    );
+
+    expect(result.details).toMatchObject({
+      command: 'APPLY_PROMETHEUS_LABEL_FILTER',
+      success: true,
+      variable: { name: 'env', action: 'add' },
+      matchedPanelCount: 2,
+      changedPanelCount: 2,
+      matchedQueryCount: 2,
+      changedQueryCount: 2,
+      verification: { variablePresent: true, matchingQueryCount: 2, mismatches: [] },
+    });
+    expect(panelQueryExpressions(panels)).toEqual([
+      'sum(rate(http_requests_total{status=~"5..", env=~"$env"}[5m]))',
+      'max(rate(process_cpu_seconds_total{env=~"$env"}[$__rate_interval]))',
+    ]);
+    expect((dashboardMutation.execute as jest.Mock).mock.calls.map(([call]) => call.type)).toEqual([
+      'LIST_PANELS',
+      'LIST_VARIABLES',
+      'ADD_VARIABLE',
+      'UPDATE_PANEL',
+      'UPDATE_PANEL',
+      'LIST_PANELS',
+      'LIST_VARIABLES',
+    ]);
+  });
 });
+
+function livePanelData(panels: Array<Record<string, any>>) {
+  return { elements: panels };
+}
+
+function livePanel(name: string, queries: Array<Record<string, unknown>>) {
+  return {
+    name,
+    element: {
+      kind: 'Panel',
+      spec: {
+        title: name,
+        data: { kind: 'QueryGroup', spec: { queries } },
+      },
+    },
+  };
+}
+
+function liveQuery(refId: string, expression: string, options: { hidden?: boolean; datasourceName?: string } = {}) {
+  return {
+    kind: 'PanelQuery',
+    spec: {
+      refId,
+      ...(options.hidden === undefined ? {} : { hidden: options.hidden }),
+      query: {
+        kind: 'DataQuery',
+        group: 'prometheus',
+        ...(options.datasourceName ? { datasource: { name: options.datasourceName } } : {}),
+        spec: { expr: expression },
+      },
+    },
+  };
+}
+
+function panelQueryExpressions(panels: Array<Record<string, any>>) {
+  return panels.flatMap((panel) =>
+    panel.element.spec.data.spec.queries.map((query: Record<string, any>) => query.spec.query.spec.expr)
+  );
+}
 
 function createDashboardMutationApi(results: Record<string, DashboardMutationResult>): DashboardMutationAPI {
   return {
