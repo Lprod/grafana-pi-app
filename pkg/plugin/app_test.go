@@ -82,6 +82,25 @@ func TestLoadSettingsNormalizesThinkingSettings(t *testing.T) {
 	}
 }
 
+func TestLoadSettingsNormalizesOpenAIProtocol(t *testing.T) {
+	for _, test := range []struct {
+		configured string
+		expected   string
+	}{
+		{configured: "", expected: openAIProtocolAuto},
+		{configured: openAIProtocolAuto, expected: openAIProtocolAuto},
+		{configured: openAIProtocolChatCompletions, expected: openAIProtocolChatCompletions},
+		{configured: openAIProtocolResponses, expected: openAIProtocolResponses},
+		{configured: "legacy", expected: openAIProtocolAuto},
+	} {
+		jsonData, _ := json.Marshal(map[string]any{"openAIProtocol": test.configured})
+		settings := loadSettings(backend.AppInstanceSettings{JSONData: jsonData})
+		if settings.OpenAIProtocol != test.expected {
+			t.Fatalf("configured %q: expected %q, got %q", test.configured, test.expected, settings.OpenAIProtocol)
+		}
+	}
+}
+
 func TestLoadSettingsDefaultsToAllAccess(t *testing.T) {
 	settings := loadSettings(backend.AppInstanceSettings{})
 

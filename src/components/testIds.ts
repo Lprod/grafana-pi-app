@@ -3,6 +3,7 @@ export const testIds = {
     container: 'data-testid ac-container',
     openAIAPIKey: 'data-testid ac-openai-api-key',
     openAIBaseUrl: 'data-testid ac-openai-base-url',
+    openAIProtocol: 'data-testid ac-openai-protocol',
     defaultModel: 'data-testid ac-default-model',
     thinkingLevel: 'data-testid ac-thinking-level',
     thinkingFormat: 'data-testid ac-thinking-format',

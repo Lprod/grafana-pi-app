@@ -211,14 +211,21 @@ The backend:
 - ignores the client model ID and uses `settings.DefaultModel`,
 - appends the admin-configured `systemPromptAddendum` as an
   `## Instance instructions` section the client cannot remove,
-- translates Pi proxy messages into OpenAI-compatible chat-completions
-  messages,
-- translates Pi tool schemas into OpenAI-compatible function tools,
-- applies the configured thinking level and format:
+- selects the configured OpenAI-compatible protocol (`auto`, Chat Completions,
+  or Responses),
+- in `auto` mode, retries with Responses only for the exact upstream
+  `reasoning_effort` validation error that directs the caller to
+  `/v1/responses`, then remembers that protocol for the plugin instance,
+- translates Pi proxy messages and tool schemas into the selected protocol,
+- preserves Responses `call_id`/item IDs and encrypted reasoning items across
+  tool turns while keeping `store: false`,
+- applies the configured thinking level using Responses `reasoning.effort`, or
+  the configured Chat Completions format:
   - OpenAI: `reasoning_effort`,
   - Qwen: `enable_thinking`,
   - Qwen chat template: `chat_template_kwargs.enable_thinking`,
-- relays upstream server-sent events back to Pi proxy events and records
+- relays Chat Completions chunks or typed Responses server-sent events back to
+  Pi proxy events and records
   Prometheus metrics for requests, tokens, and proposed tool calls.
 
 This is the main secret boundary. The OpenAI-compatible API key lives in

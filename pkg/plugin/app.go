@@ -28,17 +28,20 @@ var (
 // App is an example app plugin with a backend which can respond to data queries.
 type App struct {
 	backend.CallResourceHandler
-	settings     appSettings
-	httpClient   *http.Client
-	jsonnetFiles *virtualJsonnetFileStore
-	agentSample  *agentContractSampleStore
-	authzMu      sync.Mutex
-	authzToken   string
-	authzClient  authz.EnforcementClient
+	settings            appSettings
+	httpClient          *http.Client
+	jsonnetFiles        *virtualJsonnetFileStore
+	agentSample         *agentContractSampleStore
+	llmProtocolMu       sync.RWMutex
+	resolvedLLMProtocol string
+	authzMu             sync.Mutex
+	authzToken          string
+	authzClient         authz.EnforcementClient
 }
 
 type appSettings struct {
 	OpenAIBaseURL                   string   `json:"openAIBaseUrl"`
+	OpenAIProtocol                  string   `json:"openAIProtocol"`
 	DefaultModel                    string   `json:"defaultModel"`
 	ThinkingLevel                   string   `json:"thinkingLevel"`
 	ThinkingFormat                  string   `json:"thinkingFormat"`
@@ -52,6 +55,10 @@ type appSettings struct {
 }
 
 const (
+	openAIProtocolAuto            = "auto"
+	openAIProtocolChatCompletions = "chat-completions"
+	openAIProtocolResponses       = "responses"
+
 	thinkingLevelOff    = "off"
 	thinkingLevelLow    = "low"
 	thinkingLevelMedium = "medium"
@@ -118,6 +125,7 @@ func loadSettings(settings backend.AppInstanceSettings) appSettings {
 		loaded.OpenAIBaseURL = "https://api.openai.com/v1"
 	}
 	loaded.OpenAIBaseURL = strings.TrimRight(loaded.OpenAIBaseURL, "/")
+	loaded.OpenAIProtocol = normalizeOpenAIProtocol(loaded.OpenAIProtocol)
 	if loaded.DefaultModel == "" {
 		loaded.DefaultModel = "gpt-4.1"
 	}
@@ -141,6 +149,15 @@ func loadSettings(settings backend.AppInstanceSettings) appSettings {
 	}
 
 	return loaded
+}
+
+func normalizeOpenAIProtocol(value string) string {
+	switch value {
+	case openAIProtocolChatCompletions, openAIProtocolResponses:
+		return value
+	default:
+		return openAIProtocolAuto
+	}
 }
 
 func normalizeThinkingLevel(value string) string {

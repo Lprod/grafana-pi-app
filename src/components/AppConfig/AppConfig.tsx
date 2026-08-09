@@ -20,11 +20,16 @@ import type {
   PiAppAccessMode,
   PiAppCustomSkill,
   PiAppJsonData,
+  PiAppOpenAIProtocol,
   PiAppThinkingFormat,
   PiAppThinkingLevel,
 } from '../../types';
 import { GRAFANA_SKILLS } from '../../pages/Chat/skills/catalog';
-import { getConfiguredThinkingFormat, getConfiguredThinkingLevel } from '../../pages/Chat/model';
+import {
+  getConfiguredOpenAIProtocol,
+  getConfiguredThinkingFormat,
+  getConfiguredThinkingLevel,
+} from '../../pages/Chat/model';
 import {
   APP_ACCESS_ACTION,
   accessModeOptions,
@@ -41,6 +46,7 @@ import {
 
 type State = {
   openAIBaseUrl: string;
+  openAIProtocol: PiAppOpenAIProtocol;
   defaultModel: string;
   thinkingLevel: PiAppThinkingLevel;
   thinkingFormat: PiAppThinkingFormat;
@@ -60,6 +66,7 @@ const AppConfig = ({ plugin }: AppConfigProps) => {
   const { enabled, pinned, jsonData } = plugin.meta;
   const [state, setState] = useState<State>({
     openAIBaseUrl: jsonData?.openAIBaseUrl || 'https://api.openai.com/v1',
+    openAIProtocol: getConfiguredOpenAIProtocol(jsonData),
     defaultModel: jsonData?.defaultModel || 'gpt-4.1',
     thinkingLevel: getConfiguredThinkingLevel(jsonData),
     thinkingFormat: getConfiguredThinkingFormat(jsonData),
@@ -124,6 +131,13 @@ const AppConfig = ({ plugin }: AppConfigProps) => {
     });
   };
 
+  const onChangeOpenAIProtocol = (openAIProtocol: PiAppOpenAIProtocol) => {
+    setState({
+      ...state,
+      openAIProtocol,
+    });
+  };
+
   const onChangeThinkingLevel = (thinkingLevel: PiAppThinkingLevel) => {
     setState({
       ...state,
@@ -182,6 +196,7 @@ const AppConfig = ({ plugin }: AppConfigProps) => {
       pinned,
       jsonData: {
         openAIBaseUrl: state.openAIBaseUrl,
+        openAIProtocol: state.openAIProtocol,
         defaultModel: state.defaultModel,
         thinkingLevel: state.thinkingLevel,
         thinkingFormat: state.thinkingFormat,
@@ -251,7 +266,7 @@ const AppConfig = ({ plugin }: AppConfigProps) => {
 
         <Field
           label="Base URL"
-          description="OpenAI-compatible API root, without /chat/completions."
+          description="OpenAI-compatible API root, without /chat/completions or /responses."
           className={s.marginTop}
         >
           <Input
@@ -262,6 +277,20 @@ const AppConfig = ({ plugin }: AppConfigProps) => {
             placeholder="https://api.openai.com/v1"
             onChange={onChangeOpenAIBaseUrl}
           />
+        </Field>
+
+        <Field
+          label="API protocol"
+          description="Select the upstream OpenAI-compatible request and streaming format."
+          className={s.marginTop}
+        >
+          <div data-testid={testIds.appConfig.openAIProtocol}>
+            <RadioButtonGroup<PiAppOpenAIProtocol>
+              options={openAIProtocolOptions}
+              value={state.openAIProtocol}
+              onChange={onChangeOpenAIProtocol}
+            />
+          </div>
         </Field>
 
         <Field
@@ -293,19 +322,21 @@ const AppConfig = ({ plugin }: AppConfigProps) => {
           </div>
         </Field>
 
-        <Field
-          label="Thinking format"
-          description="Provider-specific OpenAI-compatible request field used when thinking is enabled."
-          className={s.marginTop}
-        >
-          <div data-testid={testIds.appConfig.thinkingFormat}>
-            <RadioButtonGroup<PiAppThinkingFormat>
-              options={thinkingFormatOptions}
-              value={state.thinkingFormat}
-              onChange={onChangeThinkingFormat}
-            />
-          </div>
-        </Field>
+        {state.openAIProtocol !== 'responses' && (
+          <Field
+            label="Thinking format"
+            description="Provider-specific Chat Completions request field used when thinking is enabled."
+            className={s.marginTop}
+          >
+            <div data-testid={testIds.appConfig.thinkingFormat}>
+              <RadioButtonGroup<PiAppThinkingFormat>
+                options={thinkingFormatOptions}
+                value={state.thinkingFormat}
+                onChange={onChangeThinkingFormat}
+              />
+            </div>
+          </Field>
+        )}
 
         <Field
           label="System prompt addendum"
@@ -389,10 +420,24 @@ const thinkingLevelOptions: Array<{ label: string; value: PiAppThinkingLevel; de
   { label: 'High', value: 'high', description: 'Higher reasoning budget.' },
 ];
 
+const openAIProtocolOptions: Array<{ label: string; value: PiAppOpenAIProtocol; description: string }> = [
+  {
+    label: 'Auto',
+    value: 'auto',
+    description: 'Use Chat Completions unless the provider explicitly requires Responses.',
+  },
+  { label: 'Responses', value: 'responses', description: 'Always use /responses.' },
+  { label: 'Chat Completions', value: 'chat-completions', description: 'Always use /chat/completions.' },
+];
+
 const thinkingFormatOptions: Array<{ label: string; value: PiAppThinkingFormat; description: string }> = [
-  { label: 'OpenAI', value: 'openai', description: 'Send reasoning_effort.' },
-  { label: 'Qwen', value: 'qwen', description: 'Send enable_thinking.' },
-  { label: 'Qwen template', value: 'qwen-chat-template', description: 'Send chat_template_kwargs.enable_thinking.' },
+  { label: 'OpenAI', value: 'openai', description: 'Send reasoning_effort with Chat Completions.' },
+  { label: 'Qwen', value: 'qwen', description: 'Send enable_thinking with Chat Completions.' },
+  {
+    label: 'Qwen template',
+    value: 'qwen-chat-template',
+    description: 'Send chat_template_kwargs.enable_thinking with Chat Completions.',
+  },
 ];
 
 const updatePluginAndReload = async (pluginId: string, data: Partial<PluginMeta<PiAppJsonData>>) => {

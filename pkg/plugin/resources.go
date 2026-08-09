@@ -2,7 +2,6 @@ package plugin
 
 import (
 	"bufio"
-	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -172,52 +171,51 @@ func (a *App) handleLLMStream(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	upstreamBody, err := json.Marshal(a.openAIRequest(body))
+	protocol := a.openAIProtocolForRequest()
+	upstreamRes, err := a.doOpenAIUpstreamRequest(req.Context(), body, protocol)
 	if err != nil {
-		reason = "bad_request"
-		writeJSONError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-
-	upstreamReq, err := http.NewRequestWithContext(req.Context(), http.MethodPost, a.settings.OpenAIBaseURL+"/chat/completions", bytes.NewReader(upstreamBody))
-	if err != nil {
-		writeJSONError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	upstreamReq.Header.Set("Authorization", "Bearer "+a.settings.OpenAIAPIKey)
-	upstreamReq.Header.Set("Content-Type", "application/json")
-	upstreamReq.Header.Set("Accept", "text/event-stream")
-
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("Connection", "keep-alive")
-	w.Header().Set("X-Accel-Buffering", "no")
-	w.WriteHeader(http.StatusOK)
-	flusher, _ := w.(http.Flusher)
-
-	stream := newProxyEventWriter(w, flusher)
-	if err := stream.write(map[string]interface{}{"type": "start"}); err != nil {
-		return
-	}
-
-	upstreamRes, err := a.httpClient.Do(upstreamReq)
-	if err != nil {
+		stream := startProxyStream(w)
 		_ = stream.write(errorEvent(err.Error()))
 		return
+	}
+
+	var upstreamError []byte
+	if normalizeOpenAIProtocol(a.settings.OpenAIProtocol) == openAIProtocolAuto && protocol == openAIProtocolChatCompletions && !isHTTPSuccess(upstreamRes.StatusCode) {
+		upstreamError, _ = io.ReadAll(io.LimitReader(upstreamRes.Body, 32_768))
+		_ = upstreamRes.Body.Close()
+		if shouldRetryWithResponses(upstreamRes.StatusCode, upstreamError) {
+			protocol = openAIProtocolResponses
+			a.rememberOpenAIProtocol(protocol)
+			upstreamRes, err = a.doOpenAIUpstreamRequest(req.Context(), body, protocol)
+			upstreamError = nil
+			if err != nil {
+				stream := startProxyStream(w)
+				_ = stream.write(errorEvent(err.Error()))
+				return
+			}
+		}
 	}
 	defer func() {
 		_ = upstreamRes.Body.Close()
 	}()
 
-	if upstreamRes.StatusCode < 200 || upstreamRes.StatusCode >= 300 {
+	stream := startProxyStream(w)
+
+	if !isHTTPSuccess(upstreamRes.StatusCode) {
 		reason = "upstream_error"
-		message, _ := io.ReadAll(io.LimitReader(upstreamRes.Body, 32_768))
-		_ = stream.write(errorEvent(string(message)))
+		if upstreamError == nil {
+			upstreamError, _ = io.ReadAll(io.LimitReader(upstreamRes.Body, 32_768))
+		}
+		_ = stream.write(errorEvent(string(upstreamError)))
 		return
 	}
 
 	var relayErr error
-	usage, reason, relayErr = a.relayOpenAIStream(upstreamRes.Body, stream)
+	if protocol == openAIProtocolResponses {
+		usage, reason, relayErr = a.relayOpenAIResponsesStream(upstreamRes.Body, stream)
+	} else {
+		usage, reason, relayErr = a.relayOpenAIChatStream(upstreamRes.Body, stream)
+	}
 	if relayErr != nil {
 		_ = stream.write(errorEvent(relayErr.Error()))
 		return
@@ -225,7 +223,7 @@ func (a *App) handleLLMStream(w http.ResponseWriter, req *http.Request) {
 	status = "completed"
 }
 
-func (a *App) openAIRequest(req proxyStreamRequest) openAIChatRequest {
+func (a *App) buildOpenAIChatRequest(req proxyStreamRequest) openAIChatRequest {
 	model := a.settings.DefaultModel
 
 	messages := make([]openAIMessage, 0, len(req.Context.Messages)+1)
@@ -290,7 +288,7 @@ func (a *App) effectiveSystemPrompt(systemPrompt string) string {
 	return systemPrompt + "\n\n## Instance instructions\n" + addendum
 }
 
-func (a *App) relayOpenAIStream(body io.Reader, stream proxyEventWriter) (proxyUsage, string, error) {
+func (a *App) relayOpenAIChatStream(body io.Reader, stream proxyEventWriter) (proxyUsage, string, error) {
 	scanner := bufio.NewScanner(body)
 	scanner.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
 
@@ -588,6 +586,18 @@ func assistantContent(raw json.RawMessage) (string, []openAIToolCall) {
 type proxyEventWriter struct {
 	w       http.ResponseWriter
 	flusher http.Flusher
+}
+
+func startProxyStream(w http.ResponseWriter) proxyEventWriter {
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("X-Accel-Buffering", "no")
+	w.WriteHeader(http.StatusOK)
+	flusher, _ := w.(http.Flusher)
+	stream := newProxyEventWriter(w, flusher)
+	_ = stream.write(map[string]interface{}{"type": "start"})
+	return stream
 }
 
 func newProxyEventWriter(w http.ResponseWriter, flusher http.Flusher) proxyEventWriter {

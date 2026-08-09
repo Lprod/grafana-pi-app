@@ -21,11 +21,13 @@ export type PiAppCustomSkill = {
 };
 
 export type PiAppAccessMode = 'all' | 'admins' | 'users' | 'rbac';
+export type PiAppOpenAIProtocol = 'auto' | 'chat-completions' | 'responses';
 export type PiAppThinkingLevel = 'off' | 'low' | 'medium' | 'high';
 export type PiAppThinkingFormat = 'openai' | 'qwen' | 'qwen-chat-template';
 
 export type PiAppJsonData = {
   openAIBaseUrl?: string;
+  openAIProtocol?: PiAppOpenAIProtocol;
   defaultModel?: string;
   thinkingLevel?: PiAppThinkingLevel;
   thinkingFormat?: PiAppThinkingFormat;

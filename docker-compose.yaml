@@ -74,6 +74,7 @@ services:
       GF_RENDERING_CALLBACK_URL: http://grafana:3000/
       OPENAI_API_KEY: ${OPENAI_API_KEY:-local-dev-key}
       PI_OPENAI_BASE_URL: ${PI_OPENAI_BASE_URL:-http://host.docker.internal:8080/v1}
+      PI_OPENAI_PROTOCOL: ${PI_OPENAI_PROTOCOL:-auto}
       PI_DEFAULT_MODEL: ${PI_DEFAULT_MODEL:-unsloth/Qwen3.6-35B-A3B-MTP-GGUF:UD-Q4_K_XL}
       PI_THINKING_LEVEL: ${PI_THINKING_LEVEL:-medium}
       PI_THINKING_FORMAT: ${PI_THINKING_FORMAT:-qwen-chat-template}
@@ -124,6 +125,7 @@ services:
       GF_RENDERING_CALLBACK_URL: http://grafana-assistant-variant:3000/
       OPENAI_API_KEY: ${OPENAI_API_KEY:-local-dev-key}
       PI_OPENAI_BASE_URL: ${PI_OPENAI_BASE_URL:-http://host.docker.internal:8080/v1}
+      PI_OPENAI_PROTOCOL: ${PI_OPENAI_PROTOCOL:-auto}
       PI_DEFAULT_MODEL: ${PI_DEFAULT_MODEL:-unsloth/Qwen3.6-35B-A3B-MTP-GGUF:UD-Q4_K_XL}
       PI_THINKING_LEVEL: ${PI_THINKING_LEVEL:-medium}
       PI_THINKING_FORMAT: ${PI_THINKING_FORMAT:-qwen-chat-template}

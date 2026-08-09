@@ -375,7 +375,7 @@ func TestLLMStreamRelaysOpenAICompatibleChunks(t *testing.T) {
 func TestOpenAIRequestAppendsConfiguredSystemPromptAddendum(t *testing.T) {
 	app := App{settings: appSettings{DefaultModel: "gpt-default", SystemPromptAddendum: "Prefer concise incident summaries."}}
 
-	payload := app.openAIRequest(proxyStreamRequest{
+	payload := app.buildOpenAIChatRequest(proxyStreamRequest{
 		Context: proxyContext{
 			SystemPrompt: "You help.",
 			Messages: []proxyMessage{
@@ -400,7 +400,7 @@ func TestOpenAIRequestAppendsConfiguredSystemPromptAddendum(t *testing.T) {
 func TestOpenAIRequestOmitsThinkingFieldsByDefault(t *testing.T) {
 	app := App{settings: appSettings{DefaultModel: "gpt-default"}}
 
-	payload := app.openAIRequest(proxyStreamRequest{
+	payload := app.buildOpenAIChatRequest(proxyStreamRequest{
 		Context: proxyContext{
 			Messages: []proxyMessage{
 				{Role: "user", Content: json.RawMessage(`"Hello"`)},
@@ -480,7 +480,7 @@ func TestOpenAIRequestAppliesConfiguredThinkingFormat(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			app := App{settings: appSettings{DefaultModel: "gpt-default", ThinkingLevel: thinkingLevelMedium, ThinkingFormat: tt.format}}
 
-			payload := app.openAIRequest(proxyStreamRequest{
+			payload := app.buildOpenAIChatRequest(proxyStreamRequest{
 				Context: proxyContext{
 					Messages: []proxyMessage{
 						{Role: "user", Content: json.RawMessage(`"Hello"`)},
@@ -559,7 +559,7 @@ func TestLLMStreamRelaysReasoningDeltas(t *testing.T) {
 			"data: [DONE]\n\n",
 	)
 
-	if _, _, err := app.relayOpenAIStream(body, newProxyEventWriter(recorder, nil)); err != nil {
+	if _, _, err := app.relayOpenAIChatStream(body, newProxyEventWriter(recorder, nil)); err != nil {
 		t.Fatalf("relay stream: %s", err)
 	}
 
@@ -647,7 +647,7 @@ func TestTelemetryEndpointAcceptsAggregateEvents(t *testing.T) {
 func TestOpenAIRequestKeepsUserAndToolContentNonEmpty(t *testing.T) {
 	app := App{settings: appSettings{DefaultModel: "gpt-default"}}
 
-	payload := app.openAIRequest(proxyStreamRequest{
+	payload := app.buildOpenAIChatRequest(proxyStreamRequest{
 		Context: proxyContext{
 			Messages: []proxyMessage{
 				{Role: "user", Content: json.RawMessage(`""`)},
@@ -682,7 +682,7 @@ func TestOpenAIRequestKeepsUserAndToolContentNonEmpty(t *testing.T) {
 func TestOpenAIRequestSerializesEmptyAssistantContentAsString(t *testing.T) {
 	app := App{settings: appSettings{DefaultModel: "gpt-default"}}
 
-	payload := app.openAIRequest(proxyStreamRequest{
+	payload := app.buildOpenAIChatRequest(proxyStreamRequest{
 		Context: proxyContext{
 			Messages: []proxyMessage{
 				{Role: "user", Content: json.RawMessage(`"first request"`)},
@@ -718,7 +718,7 @@ func TestOpenAIRequestSerializesEmptyAssistantContentAsString(t *testing.T) {
 func TestOpenAIRequestPrefixesFailedToolResults(t *testing.T) {
 	app := App{settings: appSettings{DefaultModel: "gpt-default"}}
 
-	payload := app.openAIRequest(proxyStreamRequest{
+	payload := app.buildOpenAIChatRequest(proxyStreamRequest{
 		Context: proxyContext{
 			Messages: []proxyMessage{
 				{
