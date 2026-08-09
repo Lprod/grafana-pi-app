@@ -1,3 +1,11 @@
+## [2.17.2](https://github.com/elohmeier/grafana-pi-app/compare/v2.17.1...v2.17.2) (2026-08-09)
+
+
+### Bug Fixes
+
+* bump vulnerable transitive dependencies ([7397e7d](https://github.com/elohmeier/grafana-pi-app/commit/7397e7d4d3a7473a9a4bb280feb81352f005c2fd))
+* sync package-lock with js-cookie override for npm ci ([3f0d061](https://github.com/elohmeier/grafana-pi-app/commit/3f0d06113e84d0d60c839ec3db2849662e1e5b2c))
+
 ## [2.17.1](https://github.com/elohmeier/grafana-pi-app/compare/v2.17.0...v2.17.1) (2026-08-09)
 
 
