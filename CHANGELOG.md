@@ -1,3 +1,10 @@
+## [2.17.1](https://github.com/elohmeier/grafana-pi-app/compare/v2.17.0...v2.17.1) (2026-08-09)
+
+
+### Bug Fixes
+
+* support OpenAI Responses API ([8e56c76](https://github.com/elohmeier/grafana-pi-app/commit/8e56c76bccaa0952db834c1264d33096e1fc875b))
+
 # [2.17.0](https://github.com/elohmeier/grafana-pi-app/compare/v2.16.0...v2.17.0) (2026-07-26)
 
 
