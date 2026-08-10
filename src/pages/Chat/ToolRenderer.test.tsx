@@ -3,7 +3,7 @@ import { fireEvent, render, screen } from '@testing-library/react';
 import { config } from '@grafana/runtime';
 import { structuredPatch } from 'diff';
 import { highlightJsonnetLines } from './jsonnetRendering';
-import { ContentBlocks, ToolResultMessageBody } from './ToolRenderer';
+import { ContentBlocks, ToolActivityPanel, ToolResultMessageBody } from './ToolRenderer';
 
 jest.mock('./jsonnetRendering', () => {
   const actual = jest.requireActual<typeof import('./jsonnetRendering')>('./jsonnetRendering');
@@ -717,6 +717,51 @@ describe('ToolRenderer', () => {
 
     expect(result.open).toBe(true);
     expect(screen.getByTestId('angle-down')).toBeInTheDocument();
+  });
+
+  it('keeps active specialist calls visible and collapses completed activity', () => {
+    render(
+      <ToolActivityPanel
+        elapsed="1m 37s"
+        runs={[
+          {
+            id: 'run-1',
+            name: 'run_investigation_agent',
+            args: {},
+            status: 'running',
+            updatedAt: 1,
+            partialResult: {
+              content: [],
+              details: {
+                type: 'subagent',
+                agent: 'investigation',
+                status: 'running',
+                task: 'Investigate latency.',
+                toolCalls: [
+                  { id: 'completed-1', name: 'inspect_dashboard_context', args: {}, status: 'completed' },
+                  { id: 'running-1', name: 'query_prometheus', args: {}, status: 'running' },
+                ],
+                usage: {
+                  turns: 2,
+                  input: 10,
+                  output: 4,
+                  cacheRead: 0,
+                  cacheWrite: 0,
+                  totalTokens: 14,
+                  cost: 0,
+                },
+              },
+            },
+          },
+        ]}
+      />
+    );
+
+    expect(screen.getByText('1m 37s')).toBeInTheDocument();
+    expect(screen.getByText('query_prometheus')).toBeVisible();
+    const history = screen.getByText('1 completed tool call').closest('details') as HTMLDetailsElement;
+    expect(history).not.toBeNull();
+    expect(history.open).toBe(false);
   });
 
   it('renders nested query-agent Prometheus results with the structured renderer', () => {

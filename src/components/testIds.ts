@@ -42,5 +42,6 @@ export const testIds = {
     toolConfirmationApprove: 'data-testid oa-chat-tool-confirmation-approve',
     toolConfirmationDeny: 'data-testid oa-chat-tool-confirmation-deny',
     investigationReport: 'data-testid oa-chat-investigation-report',
+    investigationReportScroll: 'data-testid oa-chat-investigation-report-scroll',
   },
 };

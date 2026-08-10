@@ -166,7 +166,7 @@ export function ToolResultMessageBody({
   );
 }
 
-export function ToolActivityPanel({ runs }: { runs: ToolRunView[] }) {
+export function ToolActivityPanel({ runs, elapsed }: { runs: ToolRunView[]; elapsed?: string }) {
   const styles = useStyles2(getToolStyles);
   if (runs.length === 0) {
     return null;
@@ -175,8 +175,11 @@ export function ToolActivityPanel({ runs }: { runs: ToolRunView[] }) {
   return (
     <section className={styles.activity} aria-label="Tool activity">
       <div className={styles.activityTitle}>
-        <Spinner size="sm" />
-        <span>Tool activity</span>
+        <span className={styles.activityTitleLabel}>
+          <Spinner size="sm" />
+          <span>Tool activity</span>
+        </span>
+        {elapsed && <span className={styles.activityElapsed}>{elapsed}</span>}
       </div>
       <div className={styles.activityList}>
         {runs.map((run) => {
@@ -1379,7 +1382,7 @@ function ToolHeader({
 
   return (
     <div className={cx(styles.toolHeader, compact && styles.toolHeaderCompact)}>
-      {status === 'running' && <Spinner size="sm" />}
+      {status === 'running' && !compact && <Spinner size="sm" />}
       {badge}
       {icon && <Icon aria-hidden className={styles.toolTypeIcon} name={icon} />}
       <strong>{name}</strong>
@@ -1643,12 +1646,19 @@ function SubagentDetailsView({
   onOpenDashboard?: DashboardOpenHandler;
 }) {
   const styles = useStyles2(getToolStyles);
+  const prominentCalls = compact
+    ? details.toolCalls.filter((call) => call.status === 'running' || call.status === 'failed' || call.isError)
+    : details.toolCalls;
+  const completedCalls = compact
+    ? details.toolCalls.filter((call) => call.status === 'completed' && !call.isError)
+    : [];
+
   return (
     <div className={styles.subagent}>
       <div className={styles.subagentMeta}>
         <span>{subagentLabel(details.agent)}</span>
         <span>{formatUsage(details.usage)}</span>
-        <span>{details.toolCalls.length} tool calls</span>
+        {!compact && <span>{details.toolCalls.length} tool calls</span>}
       </div>
       {!compact && (
         <details className={styles.collapsible}>
@@ -1657,7 +1667,7 @@ function SubagentDetailsView({
         </details>
       )}
       <div className={styles.toolTimeline}>
-        {details.toolCalls.map((call, index) => (
+        {prominentCalls.map((call, index) => (
           <SubagentToolCallRow
             agent={details.agent}
             call={call}
@@ -1665,6 +1675,23 @@ function SubagentDetailsView({
             onOpenDashboard={onOpenDashboard}
           />
         ))}
+        {compact && completedCalls.length > 0 && (
+          <details className={styles.toolHistory}>
+            <summary>
+              {completedCalls.length} completed tool {completedCalls.length === 1 ? 'call' : 'calls'}
+            </summary>
+            <div className={styles.toolTimeline}>
+              {completedCalls.map((call, index) => (
+                <SubagentToolCallRow
+                  agent={details.agent}
+                  call={call}
+                  key={`${call.id}:${index}`}
+                  onOpenDashboard={onOpenDashboard}
+                />
+              ))}
+            </div>
+          </details>
+        )}
       </div>
     </div>
   );
@@ -7434,6 +7461,8 @@ const getToolStyles = (theme: GrafanaTheme2) => ({
     },
   }),
   activity: css({
+    width: '100%',
+    minWidth: 0,
     maxWidth: 980,
     display: 'grid',
     gap: theme.spacing(1),
@@ -7445,14 +7474,29 @@ const getToolStyles = (theme: GrafanaTheme2) => ({
   activityTitle: css({
     display: 'flex',
     alignItems: 'center',
+    justifyContent: 'space-between',
     gap: theme.spacing(1),
     color: theme.colors.text.secondary,
     fontSize: theme.typography.bodySmall.fontSize,
     textTransform: 'uppercase',
   }),
+  activityTitleLabel: css({
+    display: 'flex',
+    alignItems: 'center',
+    minWidth: 0,
+    gap: theme.spacing(1),
+  }),
+  activityElapsed: css({
+    flex: '0 0 auto',
+    color: theme.colors.text.secondary,
+    fontVariantNumeric: 'tabular-nums',
+    textTransform: 'none',
+    whiteSpace: 'nowrap',
+  }),
   activityList: css({
     display: 'grid',
     gap: theme.spacing(1),
+    minWidth: 0,
   }),
   activityItem: css({
     display: 'grid',
@@ -7462,6 +7506,7 @@ const getToolStyles = (theme: GrafanaTheme2) => ({
   subagent: css({
     display: 'grid',
     gap: theme.spacing(1),
+    minWidth: 0,
   }),
   subagentMeta: css({
     display: 'flex',
@@ -7512,8 +7557,20 @@ const getToolStyles = (theme: GrafanaTheme2) => ({
   toolTimeline: css({
     display: 'grid',
     gap: theme.spacing(0.75),
+    minWidth: 0,
+  }),
+  toolHistory: css({
+    minWidth: 0,
+    '& > summary': {
+      cursor: 'pointer',
+      color: theme.colors.text.secondary,
+      fontSize: theme.typography.bodySmall.fontSize,
+      marginBottom: theme.spacing(0.75),
+    },
   }),
   toolStep: css({
+    minWidth: 0,
+    maxWidth: '100%',
     padding: theme.spacing(0.75, 1),
     borderLeft: `3px solid ${theme.colors.success.border}`,
     background: theme.colors.background.primary,
@@ -7522,8 +7579,18 @@ const getToolStyles = (theme: GrafanaTheme2) => ({
       display: 'flex',
       alignItems: 'center',
       gap: theme.spacing(1),
+      minWidth: 0,
       color: theme.colors.text.secondary,
       fontSize: theme.typography.bodySmall.fontSize,
+      '& span': {
+        flex: '0 0 auto',
+      },
+      '& strong': {
+        minWidth: 0,
+        overflow: 'hidden',
+        textOverflow: 'ellipsis',
+        whiteSpace: 'nowrap',
+      },
     },
   }),
   toolStepError: css({

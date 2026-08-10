@@ -13,15 +13,15 @@ describe('publishAgentWorkspaceSaved', () => {
     publishAgentWorkspaceSaved(
       {
         contractVersion: '1',
-        sourcePluginId: 'debeka-cloud-portal-app',
+        sourcePluginId: 'cloud-portal-app',
         workspaceKind: 'resource-workspace',
-        workspaceRef: { org: 'axon', repo: 'axon_infra', application: 'Axon', substage: 'PROD' },
+        workspaceRef: { org: 'foo', repo: 'foo_infra', application: 'foo', substage: 'PROD' },
         capabilitiesPath: '/agent/capabilities',
       },
       {
         status: 'valid',
         savedVersion: 'draft:portal/admin/example:abc123',
-        changedFiles: [{ path: 'applications/Axon/PROD/rbac.yml' }],
+        changedFiles: [{ path: 'applications/foo/PROD/rbac.yml' }],
       }
     );
 
@@ -29,11 +29,11 @@ describe('publishAgentWorkspaceSaved', () => {
     expect(publish.mock.calls[0][0]).toMatchObject({
       type: 'agent-workspace-saved',
       payload: {
-        sourcePluginId: 'debeka-cloud-portal-app',
+        sourcePluginId: 'cloud-portal-app',
         workspaceKind: 'resource-workspace',
-        workspaceRef: { org: 'axon', repo: 'axon_infra', application: 'Axon', substage: 'PROD' },
+        workspaceRef: { org: 'foo', repo: 'foo_infra', application: 'foo', substage: 'PROD' },
         savedVersion: 'draft:portal/admin/example:abc123',
-        changedFiles: [{ path: 'applications/Axon/PROD/rbac.yml' }],
+        changedFiles: [{ path: 'applications/foo/PROD/rbac.yml' }],
       },
     });
   });

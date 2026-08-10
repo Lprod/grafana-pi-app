@@ -1,4 +1,14 @@
-import React, { FormEvent, memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import React, {
+  FormEvent,
+  memo,
+  useCallback,
+  useEffect,
+  useId,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import { css, cx } from '@emotion/css';
 import {
   Agent,
@@ -1874,7 +1884,13 @@ export function ChatApp({
           </Alert>
         )}
 
-        <div className={cx(styles.messagesFrame, investigationReport && styles.messagesFrameWithReport)}>
+        <div
+          className={cx(
+            styles.messagesFrame,
+            investigationReport && styles.messagesFrameWithReport,
+            investigationReport && isSidebarVariant && styles.messagesFrameWithReportSidebar
+          )}
+        >
           <section
             aria-label="Chat messages"
             className={styles.messages}
@@ -1907,8 +1923,8 @@ export function ChatApp({
                 />
               ))
             )}
-            <ToolActivityPanel runs={activeToolRuns} />
-            {isStreaming && (
+            <ToolActivityPanel elapsed={formatRunElapsed(runElapsedMs)} runs={activeToolRuns} />
+            {isStreaming && activeToolRuns.length === 0 && (
               <div className={styles.streaming} role="status" aria-live="polite">
                 <Spinner />
                 <span className={styles.streamingLabel}>{streamingStatusText}</span>
@@ -1916,7 +1932,9 @@ export function ChatApp({
               </div>
             )}
           </section>
-          {investigationReport && <InvestigationReportPanel report={investigationReport} />}
+          {investigationReport && (
+            <InvestigationReportPanel collapsible={isSidebarVariant} report={investigationReport} />
+          )}
           {isAutoScrollPaused && visibleMessages.length > 0 && (
             <Button
               className={styles.jumpToLatest}
@@ -1932,11 +1950,14 @@ export function ChatApp({
           )}
         </div>
 
-        <form className={cx(styles.composer, isSidebarVariant && styles.composerSidebar)} onSubmit={submitPrompt}>
+        <form
+          className={cx(styles.composer, isSidebarVariant ? styles.composerSidebar : styles.composerPage)}
+          onSubmit={submitPrompt}
+        >
           <div className={styles.composerInputGroup}>
             <TextArea
               data-testid={testIds.chat.composer}
-              rows={3}
+              rows={isSidebarVariant ? 2 : 3}
               value={input}
               disabled={!agent || isBusy || !hasLLMConfig}
               placeholder="Ask about metrics, PromQL, or dashboards..."
@@ -2106,21 +2127,50 @@ const INVESTIGATION_REPORT_SECTIONS: Array<{ key: InvestigationReportArraySectio
   { key: 'remediation', title: 'Remediation' },
 ];
 
-function InvestigationReportPanel({ report }: { report: InvestigationReport }) {
+function InvestigationReportPanel({
+  report,
+  collapsible = false,
+}: {
+  report: InvestigationReport;
+  collapsible?: boolean;
+}) {
   const styles = useStyles2(getStyles);
+  const [isOpen, setIsOpen] = useState(true);
+  const bodyId = useId();
 
-  return (
-    <aside className={styles.investigationReport} data-testid={testIds.chat.investigationReport}>
-      <div className={styles.investigationReportHeader}>
-        <div className={styles.investigationReportTitleGroup}>
+  const header = (
+    <span className={styles.investigationReportHeader}>
+      {collapsible && (
+        <Icon
+          aria-hidden
+          className={styles.investigationReportDisclosureIcon}
+          name={isOpen ? 'angle-down' : 'angle-right'}
+        />
+      )}
+      <span className={styles.investigationReportHeaderContent}>
+        <span className={styles.investigationReportTitleGroup}>
           <Icon name="search" />
-          <h3>{report.title}</h3>
-        </div>
+          <span aria-level={3} role="heading">
+            {report.title}
+          </span>
+        </span>
         <Badge
           text={report.status === 'complete' ? 'Complete' : 'Active'}
           color={report.status === 'complete' ? 'green' : 'blue'}
         />
-      </div>
+      </span>
+    </span>
+  );
+
+  const body = (
+    <div
+      aria-label="Investigation report details"
+      className={cx(styles.investigationReportBody, collapsible && styles.investigationReportBodyCollapsible)}
+      data-testid={testIds.chat.investigationReportScroll}
+      id={bodyId}
+      role="region"
+      tabIndex={0}
+    >
       <div className={styles.investigationReportUpdated}>Updated {formatDate(report.updatedAt)}</div>
       <div className={styles.investigationReportSections}>
         {INVESTIGATION_REPORT_SECTIONS.map((section) => {
@@ -2141,6 +2191,34 @@ function InvestigationReportPanel({ report }: { report: InvestigationReport }) {
           );
         })}
       </div>
+    </div>
+  );
+
+  if (collapsible) {
+    return (
+      <section
+        className={cx(styles.investigationReport, styles.investigationReportCollapsible)}
+        data-open={isOpen}
+        data-testid={testIds.chat.investigationReport}
+      >
+        <button
+          aria-controls={bodyId}
+          aria-expanded={isOpen}
+          className={styles.investigationReportDisclosure}
+          type="button"
+          onClick={() => setIsOpen((open) => !open)}
+        >
+          {header}
+        </button>
+        {isOpen && body}
+      </section>
+    );
+  }
+
+  return (
+    <aside className={styles.investigationReport} data-testid={testIds.chat.investigationReport}>
+      {header}
+      {body}
     </aside>
   );
 }
@@ -3337,6 +3415,7 @@ const getStyles = (theme: GrafanaTheme2) => ({
   main: css({
     display: 'flex',
     flexDirection: 'column',
+    containerType: 'inline-size',
     minWidth: 0,
     minHeight: 0,
     overflow: 'hidden',
@@ -3427,15 +3506,20 @@ const getStyles = (theme: GrafanaTheme2) => ({
   }),
   messagesFrameWithReport: css({
     gridTemplateColumns: 'minmax(0, 1fr) minmax(280px, 360px)',
-    '@media (max-width: 1050px)': {
+    '@container (max-width: 760px)': {
       gridTemplateColumns: '1fr',
       gridTemplateRows: 'minmax(0, 1fr) auto',
     },
   }),
+  messagesFrameWithReportSidebar: css({
+    gridTemplateColumns: '1fr',
+    gridTemplateRows: 'minmax(120px, 1fr) minmax(0, 360px)',
+  }),
   messages: css({
     height: '100%',
     minHeight: 0,
-    overflow: 'auto',
+    overflowX: 'hidden',
+    overflowY: 'auto',
     overscrollBehavior: 'contain',
     padding: theme.spacing(2, 2, 7),
     display: 'flex',
@@ -3448,7 +3532,7 @@ const getStyles = (theme: GrafanaTheme2) => ({
   }),
   investigationReport: css({
     display: 'grid',
-    gridTemplateRows: 'auto auto minmax(0, 1fr)',
+    gridTemplateRows: 'auto minmax(0, 1fr)',
     gap: theme.spacing(1.5),
     minWidth: 0,
     minHeight: 0,
@@ -3456,44 +3540,105 @@ const getStyles = (theme: GrafanaTheme2) => ({
     borderLeft: `1px solid ${theme.colors.border.weak}`,
     background: theme.colors.background.secondary,
     padding: theme.spacing(2),
-    '@media (max-width: 1050px)': {
+    '@container (max-width: 760px)': {
       borderLeft: 0,
       borderTop: `1px solid ${theme.colors.border.weak}`,
       maxHeight: 360,
     },
   }),
+  investigationReportCollapsible: css({
+    alignSelf: 'end',
+    gap: 0,
+    maxHeight: 360,
+    width: '100%',
+    padding: 0,
+    borderLeft: 0,
+    borderTop: `1px solid ${theme.colors.border.weak}`,
+    '&[data-open="false"]': {
+      maxHeight: 'none',
+    },
+    '&[data-open="true"]': {
+      alignSelf: 'stretch',
+      height: '100%',
+    },
+  }),
+  investigationReportDisclosure: css({
+    appearance: 'none',
+    width: '100%',
+    minWidth: 0,
+    padding: theme.spacing(1.5),
+    border: 0,
+    background: 'transparent',
+    color: 'inherit',
+    cursor: 'pointer',
+    font: 'inherit',
+    textAlign: 'left',
+    '&:focus-visible': {
+      outline: `2px solid ${theme.colors.primary.border}`,
+      outlineOffset: -2,
+    },
+  }),
   investigationReportHeader: css({
     display: 'flex',
     alignItems: 'center',
-    justifyContent: 'space-between',
     gap: theme.spacing(1),
     minWidth: 0,
   }),
+  investigationReportHeaderContent: css({
+    display: 'flex',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    gap: theme.spacing(1),
+    minWidth: 0,
+    width: '100%',
+  }),
+  investigationReportDisclosureIcon: css({
+    flex: '0 0 auto',
+    color: theme.colors.text.secondary,
+  }),
   investigationReportTitleGroup: css({
     display: 'flex',
-    alignItems: 'center',
+    alignItems: 'flex-start',
     gap: theme.spacing(0.75),
     minWidth: 0,
-    '& h3': {
-      margin: 0,
+    '& > svg': {
+      flex: '0 0 auto',
+      marginTop: theme.spacing(0.25),
+    },
+    '& [role="heading"]': {
       minWidth: 0,
+      display: '-webkit-box',
       overflow: 'hidden',
-      textOverflow: 'ellipsis',
-      whiteSpace: 'nowrap',
+      WebkitBoxOrient: 'vertical',
+      WebkitLineClamp: 2,
       fontSize: theme.typography.h5.fontSize,
       fontWeight: theme.typography.fontWeightMedium,
     },
   }),
+  investigationReportBody: css({
+    minHeight: 0,
+    overflowX: 'hidden',
+    overflowY: 'auto',
+    overscrollBehavior: 'contain',
+    scrollbarGutter: 'stable',
+    touchAction: 'pan-y',
+    '&:focus-visible': {
+      outline: `2px solid ${theme.colors.primary.border}`,
+      outlineOffset: -2,
+    },
+  }),
+  investigationReportBodyCollapsible: css({
+    padding: theme.spacing(0, 1.5, 1.5),
+  }),
   investigationReportUpdated: css({
     color: theme.colors.text.secondary,
     fontSize: theme.typography.bodySmall.fontSize,
+    marginBottom: theme.spacing(1.5),
   }),
   investigationReportSections: css({
     display: 'grid',
     alignContent: 'start',
     gap: theme.spacing(1.5),
-    minHeight: 0,
-    overflow: 'auto',
     paddingRight: theme.spacing(0.5),
   }),
   investigationReportSection: css({
@@ -3575,12 +3720,17 @@ const getStyles = (theme: GrafanaTheme2) => ({
     },
   }),
   streaming: css({
-    display: 'flex',
+    display: 'grid',
+    gridTemplateColumns: 'auto minmax(0, 1fr) auto',
     alignItems: 'center',
     gap: theme.spacing(1),
     color: theme.colors.text.secondary,
   }),
   streamingLabel: css({
+    minWidth: 0,
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
     color: theme.colors.text.primary,
     fontWeight: theme.typography.fontWeightMedium,
   }),
@@ -3588,6 +3738,7 @@ const getStyles = (theme: GrafanaTheme2) => ({
     color: theme.colors.text.secondary,
     fontSize: theme.typography.bodySmall.fontSize,
     fontVariantNumeric: 'tabular-nums',
+    whiteSpace: 'nowrap',
   }),
   jumpToLatest: css({
     position: 'absolute',
@@ -3603,13 +3754,18 @@ const getStyles = (theme: GrafanaTheme2) => ({
     gap: theme.spacing(1),
     padding: theme.spacing(2),
     borderTop: `1px solid ${theme.colors.border.weak}`,
-    '@media (max-width: 700px)': {
+  }),
+  composerPage: css({
+    '@container (max-width: 700px)': {
       gridTemplateColumns: '1fr',
     },
   }),
   composerSidebar: css({
-    gridTemplateColumns: '1fr',
+    gridTemplateColumns: 'minmax(0, 1fr) auto',
     padding: theme.spacing(1.5),
+    '@container (max-width: 340px)': {
+      gridTemplateColumns: '1fr',
+    },
   }),
   composerInputGroup: css({
     display: 'grid',
