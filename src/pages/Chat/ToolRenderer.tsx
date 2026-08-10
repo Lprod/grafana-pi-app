@@ -137,7 +137,11 @@ export function ToolResultMessageBody({
   if (subagentDetails) {
     return (
       <div className={cx(styles.toolFrame, subagentDetails.status === 'failed' && styles.toolFrameError)}>
-        <ToolHeader name={toolName ?? subagentDetails.agent} status={subagentDetails.status} />
+        <ToolHeader
+          label={subagentLabel(subagentDetails.agent)}
+          name={toolName ?? subagentDetails.agent}
+          status={subagentDetails.status}
+        />
         {subagentDetails.status === 'failed' && <ToolErrorView error={extractToolError(toolName, details, content)} />}
         <SubagentResultView content={content} details={subagentDetails} />
         <SubagentDetailsView details={subagentDetails} onOpenDashboard={onOpenDashboard} />
@@ -186,7 +190,12 @@ export function ToolActivityPanel({ runs, elapsed }: { runs: ToolRunView[]; elap
           const subagentDetails = asSubagentDetails(run.partialResult?.details);
           return (
             <div className={styles.activityItem} key={run.id}>
-              <ToolHeader name={run.name} status={run.status} compact />
+              <ToolHeader
+                label={subagentDetails ? subagentLabel(subagentDetails.agent) : undefined}
+                name={run.name}
+                status={run.status}
+                compact
+              />
               {subagentDetails ? (
                 <SubagentDetailsView details={subagentDetails} compact />
               ) : (
@@ -1364,10 +1373,12 @@ function ToolHeader({
   name,
   status,
   compact,
+  label,
 }: {
   name: string;
   status: 'running' | 'completed' | 'failed';
   compact?: boolean;
+  label?: string;
 }) {
   const styles = useStyles2(getToolStyles);
   const icon = toolIconName(name);
@@ -1385,7 +1396,7 @@ function ToolHeader({
       {status === 'running' && !compact && <Spinner size="sm" />}
       {badge}
       {icon && <Icon aria-hidden className={styles.toolTypeIcon} name={icon} />}
-      <strong>{name}</strong>
+      <strong>{label ?? name}</strong>
     </div>
   );
 }
@@ -1605,6 +1616,7 @@ function toolIconName(name: string): IconName | undefined {
 function SubagentResultView({ content, details }: { content: unknown; details: SubagentRunDetails }) {
   const styles = useStyles2(getToolStyles);
   const [isOpen, setIsOpen] = useState(false);
+  const preview = subagentResultPreview(content, details);
   return (
     <details className={styles.subagentResult} data-testid="subagent-result" open={isOpen}>
       <summary
@@ -1616,13 +1628,28 @@ function SubagentResultView({ content, details }: { content: unknown; details: S
         }}
       >
         <Icon aria-hidden className={styles.queryResultChevron} name={isOpen ? 'angle-down' : 'angle-right'} />
-        <span>{subagentResultLabel(details)}</span>
+        <span className={styles.subagentResultSummaryText}>
+          <span>{subagentResultLabel(details)}</span>
+          {!isOpen && preview && (
+            <span className={styles.subagentResultPreview} data-testid="subagent-result-preview">
+              {preview}
+            </span>
+          )}
+        </span>
       </summary>
       <div className={styles.subagentResultBody}>
         <ContentBlocks content={content} />
       </div>
     </details>
   );
+}
+
+function subagentResultPreview(content: unknown, details: SubagentRunDetails) {
+  const text = extractToolText(content) ?? details.finalOutput;
+  if (!text?.trim()) {
+    return undefined;
+  }
+  return truncateInline(text.replace(/\s+/g, ' ').trim(), 240);
 }
 
 function subagentResultLabel(details: SubagentRunDetails) {
@@ -1647,22 +1674,27 @@ function SubagentDetailsView({
 }) {
   const styles = useStyles2(getToolStyles);
   const recoveredCallIds = recoveredSubagentToolCallIds(details.toolCalls);
+  const latestCompletedCall = lastSuccessfulSubagentToolCall(details.toolCalls);
   const prominentCalls = compact
     ? details.toolCalls.filter(
         (call) =>
-          call.status === 'running' || ((call.status === 'failed' || call.isError) && !recoveredCallIds.has(call.id))
+          call.status === 'running' ||
+          call.id === latestCompletedCall?.id ||
+          ((call.status === 'failed' || call.isError) && !recoveredCallIds.has(call.id))
       )
     : details.toolCalls;
   const historyCalls = compact
     ? details.toolCalls.filter(
-        (call) => (call.status === 'completed' && !call.isError) || recoveredCallIds.has(call.id)
+        (call) =>
+          ((call.status === 'completed' && !call.isError) || recoveredCallIds.has(call.id)) &&
+          call.id !== latestCompletedCall?.id
       )
     : [];
 
   return (
     <div className={styles.subagent}>
+      {compact && <SubagentLiveStatus details={details} />}
       <div className={styles.subagentMeta}>
-        <span>{subagentLabel(details.agent)}</span>
         <span>{formatUsage(details.usage)}</span>
         {!compact && <span>{details.toolCalls.length} tool calls</span>}
       </div>
@@ -1677,7 +1709,7 @@ function SubagentDetailsView({
           <SubagentToolCallRow
             agent={details.agent}
             call={call}
-            key={`${call.id}:${index}`}
+            key={call.id || String(index)}
             onOpenDashboard={onOpenDashboard}
             recovered={recoveredCallIds.has(call.id)}
           />
@@ -1690,7 +1722,7 @@ function SubagentDetailsView({
                 <SubagentToolCallRow
                   agent={details.agent}
                   call={call}
-                  key={`${call.id}:${index}`}
+                  key={call.id || String(index)}
                   onOpenDashboard={onOpenDashboard}
                   recovered={recoveredCallIds.has(call.id)}
                 />
@@ -1701,6 +1733,47 @@ function SubagentDetailsView({
       </div>
     </div>
   );
+}
+
+function SubagentLiveStatus({ details }: { details: SubagentRunDetails }) {
+  const styles = useStyles2(getToolStyles);
+  return (
+    <div aria-atomic="true" aria-live="polite" className={styles.subagentLiveStatus} role="status">
+      <span className={styles.subagentLiveStatusLabel}>Now</span>
+      <span className={styles.subagentLiveStatusText}>{subagentLiveStatus(details)}</span>
+    </div>
+  );
+}
+
+function subagentLiveStatus(details: SubagentRunDetails) {
+  const runningCall = [...details.toolCalls].reverse().find((call) => call.status === 'running');
+  if (runningCall) {
+    return subagentToolCallLabel(runningCall);
+  }
+  if (details.finalOutput?.trim()) {
+    return 'Drafting response';
+  }
+  const recoveredCallIds = recoveredSubagentToolCallIds(details.toolCalls);
+  const latestFailedCall = [...details.toolCalls]
+    .reverse()
+    .find((call) => (call.status === 'failed' || call.isError) && !recoveredCallIds.has(call.id));
+  if (latestFailedCall) {
+    return `Reviewing failed step: ${subagentToolCallLabel(latestFailedCall)}`;
+  }
+  if (lastSuccessfulSubagentToolCall(details.toolCalls)) {
+    return 'Preparing the next step';
+  }
+  return 'Starting specialist';
+}
+
+function lastSuccessfulSubagentToolCall(toolCalls: SubagentToolCall[]) {
+  for (let index = toolCalls.length - 1; index >= 0; index -= 1) {
+    const call = toolCalls[index];
+    if (call.status === 'completed' && !call.isError) {
+      return call;
+    }
+  }
+  return undefined;
 }
 
 function subagentLabel(agent: SubagentRunDetails['agent']) {
@@ -1744,6 +1817,7 @@ function SubagentToolCallRow({
   const artifactResult = call.isError ? undefined : asArtifactResult(resultDetails);
   const showArtifactCard = Boolean(artifactResult && !isArtifactReadResult(call.name, resultDetails));
   const error = call.isError ? extractToolError(call.name, resultDetails, resultContent) : undefined;
+  const callLabel = subagentToolCallLabel(call);
 
   return (
     <details
@@ -1766,10 +1840,11 @@ function SubagentToolCallRow({
                 ? 'Failed'
                 : 'Done'}
         </span>
-        <strong>{call.name}</strong>
+        <strong title={call.name}>{callLabel}</strong>
       </summary>
       {isOpen && (
         <div className={styles.toolStepBody}>
+          <code className={styles.toolStepTechnicalName}>{call.name}</code>
           {renderStructuredToolCall(call.name, call.args, undefined, isStreaming) ?? (
             <pre className={styles.toolCallJson}>{formatJson(call.args)}</pre>
           )}
@@ -1802,6 +1877,32 @@ function SubagentToolCallRow({
   );
 }
 
+function subagentToolCallLabel(call: SubagentToolCall) {
+  if (call.name === 'query_prometheus' || call.name === 'query_prometheus_raw') {
+    return 'Query Prometheus';
+  }
+  if (call.name === 'write_dashboard_plan') {
+    return 'Create dashboard plan';
+  }
+  if (call.name === 'write_jsonnet' || call.name === 'grafana_write_jsonnet_file') {
+    return 'Write Jsonnet source';
+  }
+
+  const summary = asSimpleToolCallSummary(call.name, call.args, undefined, false)?.summary;
+  if (summary) {
+    return summary;
+  }
+
+  return call.name
+    .split('_')
+    .filter(Boolean)
+    .map((word, index) => {
+      const normalized = word === 'jsonnet' ? 'Jsonnet' : word === 'prometheus' ? 'Prometheus' : word;
+      return index === 0 ? normalized.charAt(0).toUpperCase() + normalized.slice(1) : normalized;
+    })
+    .join(' ');
+}
+
 function shouldExpandSubagentToolCall(call: SubagentToolCall, agent: SubagentRunDetails['agent'], recovered = false) {
   return (
     (!recovered && (call.status === 'failed' || call.isError)) ||
@@ -1830,9 +1931,8 @@ function recoveredSubagentToolCallIds(toolCalls: SubagentToolCall[]) {
 
 function subagentToolHistoryLabel(toolCalls: SubagentToolCall[], recoveredCallIds: Set<string>) {
   const recoveredCount = toolCalls.filter((call) => recoveredCallIds.has(call.id)).length;
-  const completedCount = toolCalls.length - recoveredCount;
   const labels = [
-    `${completedCount} completed tool ${completedCount === 1 ? 'call' : 'calls'}`,
+    `${toolCalls.length} earlier ${toolCalls.length === 1 ? 'step' : 'steps'}`,
     recoveredCount > 0 ? `${recoveredCount} recovered ${recoveredCount === 1 ? 'attempt' : 'attempts'}` : undefined,
   ];
   return labels.filter(Boolean).join(' · ');
@@ -7561,6 +7661,28 @@ const getToolStyles = (theme: GrafanaTheme2) => ({
     color: theme.colors.text.secondary,
     fontSize: theme.typography.bodySmall.fontSize,
   }),
+  subagentLiveStatus: css({
+    display: 'grid',
+    gridTemplateColumns: 'auto minmax(0, 1fr)',
+    alignItems: 'center',
+    gap: theme.spacing(1),
+    minWidth: 0,
+    minHeight: theme.spacing(3),
+  }),
+  subagentLiveStatusLabel: css({
+    color: theme.colors.text.secondary,
+    fontSize: theme.typography.bodySmall.fontSize,
+    fontWeight: theme.typography.fontWeightMedium,
+    textTransform: 'uppercase',
+  }),
+  subagentLiveStatusText: css({
+    minWidth: 0,
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
+    color: theme.colors.text.primary,
+    fontWeight: theme.typography.fontWeightMedium,
+  }),
   subagentResult: css({
     display: 'grid',
     gap: theme.spacing(1),
@@ -7577,7 +7699,8 @@ const getToolStyles = (theme: GrafanaTheme2) => ({
     },
   }),
   subagentResultSummary: css({
-    display: 'flex',
+    display: 'grid',
+    gridTemplateColumns: 'auto minmax(0, 1fr)',
     alignItems: 'center',
     gap: theme.spacing(1),
     minWidth: 0,
@@ -7596,6 +7719,21 @@ const getToolStyles = (theme: GrafanaTheme2) => ({
       outlineOffset: theme.spacing(0.5),
       borderRadius: theme.shape.radius.default,
     },
+  }),
+  subagentResultSummaryText: css({
+    display: 'grid',
+    gap: theme.spacing(0.25),
+    minWidth: 0,
+  }),
+  subagentResultPreview: css({
+    display: '-webkit-box',
+    minWidth: 0,
+    overflow: 'hidden',
+    color: theme.colors.text.primary,
+    fontSize: theme.typography.body.fontSize,
+    lineHeight: theme.typography.body.lineHeight,
+    WebkitBoxOrient: 'vertical',
+    WebkitLineClamp: 3,
   }),
   subagentResultBody: css({
     minWidth: 0,
@@ -7647,6 +7785,16 @@ const getToolStyles = (theme: GrafanaTheme2) => ({
     gap: theme.spacing(1),
     minWidth: 0,
     marginTop: theme.spacing(1),
+  }),
+  toolStepTechnicalName: css({
+    width: 'fit-content',
+    maxWidth: '100%',
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
+    color: theme.colors.text.secondary,
+    fontFamily: theme.typography.fontFamilyMonospace,
+    fontSize: theme.typography.bodySmall.fontSize,
   }),
   toolStepResult: css({
     minWidth: 0,

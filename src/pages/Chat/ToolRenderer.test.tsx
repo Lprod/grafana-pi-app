@@ -670,7 +670,7 @@ describe('ToolRenderer', () => {
     expect(container.textContent).not.toContain('"content"');
   });
 
-  it('collapses completed query-agent output by default', () => {
+  it('shows a completed query-agent result preview before the full output is expanded', () => {
     const details = {
       type: 'subagent',
       agent: 'query',
@@ -709,17 +709,20 @@ describe('ToolRenderer', () => {
     const result = screen.getByTestId('subagent-result') as HTMLDetailsElement;
     expect(result.open).toBe(false);
     expect(screen.getByText('Query agent result')).toBeInTheDocument();
+    expect(screen.getByTestId('subagent-result-preview')).toHaveTextContent('Use up for availability.');
+    expect(screen.getByTestId('subagent-result-preview')).toBeVisible();
     expect(screen.getByTestId('angle-right')).toBeInTheDocument();
     expect(container.textContent).toContain('Query agent');
-    expect(container.textContent).toContain('list_metrics');
+    expect(container.textContent).toContain('List metric names');
 
     fireEvent.click(screen.getByText('Query agent result'));
 
     expect(result.open).toBe(true);
     expect(screen.getByTestId('angle-down')).toBeInTheDocument();
+    expect(screen.queryByTestId('subagent-result-preview')).not.toBeInTheDocument();
   });
 
-  it('keeps active specialist calls visible and collapses completed activity', () => {
+  it('keeps the active and latest completed specialist steps visible while collapsing older activity', () => {
     render(
       <ToolActivityPanel
         elapsed="1m 37s"
@@ -738,6 +741,7 @@ describe('ToolRenderer', () => {
                 status: 'running',
                 task: 'Investigate latency.',
                 toolCalls: [
+                  { id: 'completed-0', name: 'list_dashboards', args: {}, status: 'completed' },
                   { id: 'completed-1', name: 'inspect_dashboard_context', args: {}, status: 'completed' },
                   { id: 'running-1', name: 'query_prometheus', args: {}, status: 'running' },
                 ],
@@ -758,10 +762,100 @@ describe('ToolRenderer', () => {
     );
 
     expect(screen.getByText('1m 37s')).toBeInTheDocument();
-    expect(screen.getByText('query_prometheus')).toBeVisible();
-    const history = screen.getByText('1 completed tool call').closest('details') as HTMLDetailsElement;
+    expect(screen.getByRole('status')).toHaveTextContent('NowQuery Prometheus');
+    expect(screen.getByText('Inspect dashboard context')).toBeVisible();
+    expect(screen.getAllByText('Query Prometheus').some((element) => element.closest('summary'))).toBe(true);
+    const history = screen.getByText('1 earlier step').closest('details') as HTMLDetailsElement;
     expect(history).not.toBeNull();
     expect(history.open).toBe(false);
+  });
+
+  it('keeps meaningful specialist feedback visible between nested tool calls', () => {
+    render(
+      <ToolActivityPanel
+        runs={[
+          {
+            id: 'run-1',
+            name: 'run_dashboard_agent',
+            args: {},
+            status: 'running',
+            updatedAt: 1,
+            partialResult: {
+              content: [{ type: 'text', text: 'Dashboard agent running. 3 tool calls so far.' }],
+              details: {
+                type: 'subagent',
+                agent: 'dashboard',
+                status: 'running',
+                task: 'Create a service dashboard.',
+                toolCalls: [
+                  { id: 'completed-0', name: 'list_metrics', args: {}, status: 'completed' },
+                  { id: 'completed-1', name: 'inspect_metric_series', args: {}, status: 'completed' },
+                  { id: 'completed-2', name: 'query_prometheus', args: {}, status: 'completed' },
+                ],
+                usage: {
+                  turns: 2,
+                  input: 10,
+                  output: 4,
+                  cacheRead: 0,
+                  cacheWrite: 0,
+                  totalTokens: 14,
+                  cost: 0,
+                },
+              },
+            },
+          },
+        ]}
+      />
+    );
+
+    expect(screen.getByText('Dashboard agent')).toBeVisible();
+    expect(screen.queryByText('run_dashboard_agent')).not.toBeInTheDocument();
+    expect(screen.getByRole('status')).toHaveTextContent('NowPreparing the next step');
+    expect(screen.getByText('Query Prometheus')).toBeVisible();
+    const history = screen.getByText('2 earlier steps').closest('details') as HTMLDetailsElement;
+    expect(history.open).toBe(false);
+  });
+
+  it('shows when a specialist is drafting after its nested calls complete', () => {
+    render(
+      <ToolActivityPanel
+        runs={[
+          {
+            id: 'run-1',
+            name: 'run_dashboard_agent',
+            args: {},
+            status: 'running',
+            updatedAt: 1,
+            partialResult: {
+              content: [{ type: 'text', text: 'Dashboard agent drafting a response.' }],
+              details: {
+                type: 'subagent',
+                agent: 'dashboard',
+                status: 'running',
+                task: 'Review a dashboard.',
+                toolCalls: [{ id: 'completed-1', name: 'inspect_dashboard_context', args: {}, status: 'completed' }],
+                usage: {
+                  turns: 1,
+                  input: 10,
+                  output: 4,
+                  cacheRead: 0,
+                  cacheWrite: 0,
+                  totalTokens: 14,
+                  cost: 0,
+                },
+                finalOutput: 'The dashboard review is ready.',
+              },
+            },
+          },
+        ]}
+      />
+    );
+
+    const status = screen.getByRole('status');
+    expect(status).toHaveAttribute('aria-live', 'polite');
+    expect(status).toHaveAttribute('aria-atomic', 'true');
+    expect(status).toHaveTextContent('NowDrafting response');
+    expect(screen.getByText('Inspect dashboard context')).toBeVisible();
   });
 
   it('labels a failed specialist call as recovered after a successful retry', () => {
@@ -815,9 +909,7 @@ describe('ToolRenderer', () => {
       />
     );
 
-    const history = screen
-      .getByText('1 completed tool call · 1 recovered attempt')
-      .closest('details') as HTMLDetailsElement;
+    const history = screen.getByText('1 earlier step · 1 recovered attempt').closest('details') as HTMLDetailsElement;
     const recovered = screen.getByText('Recovered').closest('details') as HTMLDetailsElement;
 
     expect(history.open).toBe(false);
@@ -925,7 +1017,7 @@ describe('ToolRenderer', () => {
 
     expect(screen.queryByTestId('prometheus-timeseries-panel')).not.toBeInTheDocument();
 
-    fireEvent.click(screen.getByText('query_prometheus'));
+    fireEvent.click(screen.getByText('Query Prometheus'));
 
     expect(container.textContent).toContain('2 of 2 Prometheus queries summarized');
     expect(container.textContent).toContain('Query 1');
@@ -1060,7 +1152,7 @@ describe('ToolRenderer', () => {
 
     expect(screen.queryByTestId('prometheus-timeseries-panel')).not.toBeInTheDocument();
 
-    fireEvent.click(screen.getByText('query_prometheus'));
+    fireEvent.click(screen.getByText('Query Prometheus'));
 
     expect(screen.getByTestId('artifact-result')).toBeInTheDocument();
     expect(container.textContent).toContain('2 of 2 Prometheus queries summarized');
@@ -1154,7 +1246,7 @@ describe('ToolRenderer', () => {
       />
     );
 
-    fireEvent.click(screen.getByText('query_prometheus'));
+    fireEvent.click(screen.getByText('Query Prometheus'));
 
     expect(container.textContent).toContain('1 of 1 Prometheus queries summarized');
     expect(container.textContent).toContain('instant | 1 series | 1m');
@@ -1519,10 +1611,10 @@ describe('ToolRenderer', () => {
       />
     );
 
-    const row = screen.getByText('inspect_dashboard_context').closest('details') as HTMLDetailsElement | null;
+    const row = screen.getByTitle('inspect_dashboard_context').closest('details') as HTMLDetailsElement | null;
 
     expect(row?.open).toBe(false);
-    expect(container.textContent).toContain('inspect_dashboard_context');
+    expect(container.textContent).toContain('Inspect dashboard context');
     expect(container.textContent).not.toContain('HTTP requests');
   });
 
@@ -1568,7 +1660,7 @@ describe('ToolRenderer', () => {
       />
     );
 
-    const row = screen.getByText('inspect_metric_series').closest('details') as HTMLDetailsElement | null;
+    const row = screen.getByTitle('inspect_metric_series').closest('details') as HTMLDetailsElement | null;
 
     expect(row?.open).toBe(true);
     expect(container.textContent).toContain('http_server_requests_seconds_bucket');
@@ -2654,7 +2746,7 @@ describe('ToolRenderer hardening', () => {
     );
 
     expect(container.textContent).toContain('2 tool calls');
-    expect(container.textContent).toContain('list_metrics');
+    expect(container.textContent).toContain('List metric names');
   });
 
   it('renders non-string thinking blocks without crashing', () => {
