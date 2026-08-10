@@ -29,6 +29,7 @@
     "benchmark:dashboard-metric-discovery": "node scripts/benchmark-dashboard-metric-discovery.mjs",
     "benchmark:agent-contract-sample": "node scripts/benchmark-agent-contract-sample.mjs",
     "benchmark:explore-metrics": "node scripts/benchmark-explore-metrics.mjs",
+    "dev:import:skills": "node scripts/sync-dev-plugin-provisioning.mjs",
     "dev:seed:samples": "node scripts/seed-dev-samples.mjs",
     "dev:import:dashboard": "node scripts/import-dashboard.mjs",
     "package:variant": "node scripts/package-plugin-variant.mjs",
@@ -83,7 +84,8 @@
     "webpack-cli": "^7.0.2",
     "webpack-livereload-plugin": "^3.0.2",
     "webpack-subresource-integrity": "^5.1.0",
-    "webpack-virtual-modules": "^0.6.2"
+    "webpack-virtual-modules": "^0.6.2",
+    "yaml": "2.9.0"
   },
   "engines": {
     "node": ">=22"

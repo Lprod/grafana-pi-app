@@ -173,6 +173,28 @@ mise run dev:reload:variant
 
 This runs `npm run package:variant`, mounts `dist` as `grafana-assistant-app`, starts the `assistant-variant` Compose profile, and reloads the `grafana-assistant-variant` service. Open the variant at http://localhost:3001.
 
+### Import custom skills into the local plugin configuration
+
+The manual import command can copy `jsonData.customSkills` from either a Grafana app provisioning YAML file or a Helm ConfigMap template containing one. Set the private source and generated provisioning file in the repository `.env` file:
+
+```dotenv
+PI_SKILLS_CONFIG_SOURCE=/absolute/path/to/configmap-grafana-app-plugin-provisioning.yaml
+PI_PLUGIN_PROVISIONING_FILE=./work/dev-provisioning/plugins/app.yaml
+```
+
+Import the skills explicitly, then run the normal sidebar development task:
+
+```bash
+npm run dev:import:skills
+mise run dev:reload:variant
+```
+
+The import command extracts the `grafana-assistant-app.yaml` ConfigMap entry, validates its `grafana-assistant-app` custom skill catalog, and merges only `customSkills` into the ignored generated file. Because `PI_PLUGIN_PROVISIONING_FILE` points Compose at that file, the next Grafana start or restart loads the imported catalog. Local model, API key, datasource, and access settings continue to come from `provisioning/plugins/app.yaml` and `.env`.
+
+The import is never run by `npm run server` or a `mise` reload task. Re-run it manually when the source changes. Use `PI_SKILLS_CONFIG_MAP_KEY` or `PI_SKILLS_SOURCE_PLUGIN_ID` when the source uses different names. Remove `PI_PLUGIN_PROVISIONING_FILE` from `.env` to return to the checked-in plugin provisioning on the next reload.
+
+Grafana interpolates dollar expressions in provisioning string values. Escape every literal `$` in source skill content as `$$`, including Grafana macros such as `$$__rate_interval`.
+
 To reload the sidebar-capable variant and seed stable manual-test samples:
 
 ```bash
