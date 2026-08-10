@@ -138,6 +138,14 @@ npm run build
 npm run dev
 ```
 
+Build the sidebar-capable `grafana-assistant-app` frontend instead:
+
+```bash
+npm run build:variant
+```
+
+Use the variant build whenever `dist` is mounted into the port-3001 Grafana instance. A plain `npm run build` produces the default `g42-pi-app` manifest.
+
 Build the backend after Go changes:
 
 ```bash
@@ -171,7 +179,7 @@ To build and run the sidebar-capable variant locally on port 3001:
 mise run dev:reload:variant
 ```
 
-This runs `npm run package:variant`, mounts `dist` as `grafana-assistant-app`, starts the `assistant-variant` Compose profile, and reloads the `grafana-assistant-variant` service. Open the variant at http://localhost:3001.
+This runs `npm run build:variant`, builds the Linux ARM64 backend for `grafana-assistant-app`, mounts `dist` as `grafana-assistant-app`, starts the `assistant-variant` Compose profile, and reloads the `grafana-assistant-variant` service. Open the variant at http://localhost:3001.
 
 ### Import custom skills into the local plugin configuration
 

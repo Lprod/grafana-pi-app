@@ -5,6 +5,7 @@
     "generate:skills": "node scripts/generate-bundled-skills.mjs",
     "frontend:build": "npm run generate:skills && webpack -c ./webpack.config.ts --env production",
     "build": "npm run frontend:build",
+    "build:variant": "node scripts/package-plugin-variant.mjs --build-only",
     "backend:build:linux-amd64": "go run github.com/magefile/mage -v build:linux",
     "backend:build:linux-arm64": "go run github.com/magefile/mage -v build:linuxARM64",
     "build:linux-amd64": "npm run frontend:build && npm run backend:build:linux-amd64",

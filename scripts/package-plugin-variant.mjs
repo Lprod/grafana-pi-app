@@ -20,6 +20,17 @@ function fail(message) {
   process.exit(1);
 }
 
+function parseOptions(args) {
+  const unsupportedArgs = args.filter((arg) => arg !== '--build-only');
+  if (unsupportedArgs.length > 0) {
+    fail(`Unsupported argument: ${unsupportedArgs[0]}`);
+  }
+
+  return {
+    buildOnly: args.includes('--build-only'),
+  };
+}
+
 function run(command, args, options = {}) {
   const result = spawnSync(command, args, {
     cwd: repoRoot,
@@ -91,6 +102,8 @@ async function exists(filePath) {
 }
 
 async function main() {
+  const options = parseOptions(process.argv.slice(2));
+
   if (!/^[a-z0-9][a-z0-9._-]*[a-z0-9]$/.test(variantPluginId)) {
     fail(`Invalid variant plugin ID: ${variantPluginId}`);
   }
@@ -101,13 +114,14 @@ async function main() {
 
   try {
     await rm(distDir, { recursive: true, force: true });
-    await rm(packageDir, { recursive: true, force: true });
+    if (!options.buildOnly) {
+      await rm(packageDir, { recursive: true, force: true });
+    }
 
     const variantPluginJson = createVariantPluginJson(originalPluginJson);
     await writeFile(pluginJsonPath, `${JSON.stringify(variantPluginJson, null, 2)}\n`);
 
     run('npm', ['run', 'build']);
-    run('go', ['run', 'github.com/magefile/mage', '-v', 'buildAll']);
 
     const builtPluginJson = JSON.parse(await readFile(path.join(distDir, 'plugin.json'), 'utf8'));
     const builtPluginId = builtPluginJson.id;
@@ -118,6 +132,13 @@ async function main() {
     if (!builtVersion || builtVersion === '%VERSION%') {
       throw new Error('Built plugin version was not resolved');
     }
+
+    if (options.buildOnly) {
+      console.log(`Built ${variantPluginId} in dist`);
+      return;
+    }
+
+    run('go', ['run', 'github.com/magefile/mage', '-v', 'buildAll']);
 
     const archive = `${variantPluginId}-${builtVersion}.zip`;
     const archivePath = path.join(repoRoot, archive);
