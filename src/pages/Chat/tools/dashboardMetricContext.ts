@@ -764,29 +764,28 @@ function extractPanelMetricUsages({
       return facts.selectors
         .filter((selector) => selector.metric)
         .map(
-          (selector) =>
-            compactRecord({
-              metric: selector.metric!,
-              selector: selector.selector,
-              datasourceUid: targetDatasourceUid,
-              datasourceType: targetDatasourceType,
-              dashboardUid: uid,
-              dashboardTitle: title,
-              folderTitle: stringField(meta, 'folderTitle'),
-              dashboardUrl: stringField(meta, 'url'),
-              dashboardTags: tags.length > 0 ? tags : undefined,
-              panelId,
-              panelTitle,
-              panelType,
-              rowPath: rowPath.length > 0 ? rowPath : undefined,
-              refId: stringField(target, 'refId'),
-              query,
-              labels: selector.labels,
-              groupingLabels: facts.groupingLabels,
-              functions: facts.functions,
-              legendFormat: stringField(target, 'legendFormat'),
-              unit,
-            }) as DashboardMetricUsage
+          (selector): DashboardMetricUsage => ({
+            metric: selector.metric!,
+            selector: selector.selector,
+            datasourceUid: targetDatasourceUid,
+            datasourceType: targetDatasourceType,
+            dashboardUid: uid,
+            dashboardTitle: title,
+            folderTitle: stringField(meta, 'folderTitle'),
+            dashboardUrl: stringField(meta, 'url'),
+            dashboardTags: tags.length > 0 ? tags : undefined,
+            panelId,
+            panelTitle,
+            panelType,
+            rowPath: rowPath.length > 0 ? rowPath : undefined,
+            refId: stringField(target, 'refId'),
+            query,
+            labels: selector.labels,
+            groupingLabels: facts.groupingLabels,
+            functions: facts.functions,
+            legendFormat: stringField(target, 'legendFormat'),
+            unit,
+          })
         );
     });
 }

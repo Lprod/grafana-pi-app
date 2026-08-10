@@ -3106,6 +3106,49 @@ d.dashboard.new(
     );
   });
 
+  it('preserves empty grouping labels and functions for a labeled selector without aggregation', () => {
+    const result = extractDashboardMetricUsage(
+      makeSingleQueryDashboardMetricUsageFixture('App_Sold_http_transaction_time_sold{DomainName=~"$Sold_Domain"}'),
+      {
+        uid: 'metric-context',
+        allowedPrometheusDatasourceUids: ['prom-a'],
+      }
+    );
+
+    expect(result.usages[0]).toMatchObject({
+      metric: 'App_Sold_http_transaction_time_sold',
+      labels: [{ name: 'DomainName', operator: '=~', value: '$Sold_Domain' }],
+      groupingLabels: [],
+      functions: [],
+    });
+    expect(result.metrics[0]).toMatchObject({
+      metric: 'App_Sold_http_transaction_time_sold',
+      labels: ['DomainName'],
+      groupingLabels: [],
+      functions: [],
+    });
+  });
+
+  it('preserves empty metric facts for a bare metric selector', () => {
+    const result = extractDashboardMetricUsage(makeSingleQueryDashboardMetricUsageFixture('node_load1'), {
+      uid: 'metric-context',
+      allowedPrometheusDatasourceUids: ['prom-a'],
+    });
+
+    expect(result.usages[0]).toMatchObject({
+      metric: 'node_load1',
+      labels: [],
+      groupingLabels: [],
+      functions: [],
+    });
+    expect(result.metrics[0]).toMatchObject({
+      metric: 'node_load1',
+      labels: [],
+      groupingLabels: [],
+      functions: [],
+    });
+  });
+
   it('extracts dashboard metric usage from dashboard.grafana.app v2 specs', () => {
     const result = extractDashboardMetricUsage(makeDashboardMetricUsageV2Fixture('Metric Context V2'), {
       uid: 'metric-context-v2',
@@ -3822,6 +3865,22 @@ function makeDashboardMetricUsageFixture(uid: string, title: string) {
             legendFormat: '{{vm}} {{route}}',
           },
         ],
+      },
+    ],
+  };
+}
+
+function makeSingleQueryDashboardMetricUsageFixture(expr: string) {
+  return {
+    uid: 'metric-context',
+    title: 'Metric Context',
+    panels: [
+      {
+        id: 1,
+        title: 'Single query',
+        type: 'timeseries',
+        datasource: { uid: 'prom-a', type: 'prometheus' },
+        targets: [{ refId: 'A', expr }],
       },
     ],
   };
