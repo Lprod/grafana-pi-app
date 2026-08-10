@@ -203,6 +203,24 @@ The import is never run by `npm run server` or a `mise` reload task. Re-run it m
 
 Grafana interpolates dollar expressions in provisioning string values. Escape every literal `$` in source skill content as `$$`, including Grafana macros such as `$$__rate_interval`.
 
+### Import dashboards into the local Grafana instance
+
+Import one dashboard JSON file into the sidebar-capable Grafana instance:
+
+```bash
+npm run dev:import:dashboard -- /absolute/path/to/dashboard.json
+```
+
+To import an entire dashboard tree, preserving every child directory as a nested Grafana folder, run:
+
+```bash
+npm run dev:import:dashboards -- /absolute/path/to/dashboards
+```
+
+The directory passed to the command is the import root and is not itself created as a Grafana folder. JSON files directly inside it go into General; use `--folder-uid UID` to place the complete tree below an existing folder instead. Existing folders with the same name under the same parent are reused, and dashboard UIDs are overwritten by default. Classic dashboards use `/api/dashboards/db`; stable v2 specs and resources use `/apis/dashboard.grafana.app/v2` and receive a deterministic UID when their resource metadata does not contain one. Use `--dry-run` to validate the complete tree without changing Grafana, or `--no-overwrite` to reject existing dashboard UIDs. The v2 API namespace defaults to `default` and can be changed with `--namespace` or `GRAFANA_NAMESPACE`.
+
+Both commands default to `GRAFANA_URL=http://localhost:3001` and `admin`/`admin`. Set `GRAFANA_URL=http://localhost:3000` only when intentionally targeting the default plugin stack; authentication can also be supplied through `GRAFANA_TOKEN` or `GRAFANA_USER` and `GRAFANA_PASSWORD`.
+
 To reload the sidebar-capable variant and seed stable manual-test samples:
 
 ```bash

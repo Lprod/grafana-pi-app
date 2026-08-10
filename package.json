@@ -33,6 +33,7 @@
     "dev:import:skills": "node scripts/sync-dev-plugin-provisioning.mjs",
     "dev:seed:samples": "node scripts/seed-dev-samples.mjs",
     "dev:import:dashboard": "node scripts/import-dashboard.mjs",
+    "dev:import:dashboards": "node scripts/import-dashboards.mjs",
     "package:variant": "node scripts/package-plugin-variant.mjs",
     "server": "docker compose up --build",
     "sign": "npx --yes @grafana/sign-plugin@latest",
