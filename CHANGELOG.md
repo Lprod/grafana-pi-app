@@ -1,3 +1,20 @@
+# [2.18.0](https://github.com/elohmeier/grafana-pi-app/compare/v2.17.2...v2.18.0) (2026-08-10)
+
+
+### Bug Fixes
+
+* harden live dashboard mutation retries ([26adfba](https://github.com/elohmeier/grafana-pi-app/commit/26adfbaca77dde3dd25a360814a9af2d34bd78e6))
+* improve assistant sidebar layout ([df4d0a2](https://github.com/elohmeier/grafana-pi-app/commit/df4d0a2c1482f09b740598364346565be8ef3d5a))
+* improve specialist activity feedback ([1808159](https://github.com/elohmeier/grafana-pi-app/commit/1808159f5c2db00437cc12805ab19ddcbbd94b7b))
+* preserve empty dashboard metric facts ([6c3e08b](https://github.com/elohmeier/grafana-pi-app/commit/6c3e08b7652901c5cabc01ac50ac068dd0891277))
+* serialize live query variables for Grafana v2 ([fefb30c](https://github.com/elohmeier/grafana-pi-app/commit/fefb30cece11c31da1e4e2301e1deac196512bce))
+
+
+### Features
+
+* import custom skills into local provisioning ([6f0790e](https://github.com/elohmeier/grafana-pi-app/commit/6f0790e8d28c2f053354fa4a745e34d36f540a3d))
+* import dashboard directory trees ([da15ad4](https://github.com/elohmeier/grafana-pi-app/commit/da15ad4b1955ce248e8d0249ffc71b93dd2d606b))
+
 ## [2.17.2](https://github.com/elohmeier/grafana-pi-app/compare/v2.17.1...v2.17.2) (2026-08-09)
 
 
