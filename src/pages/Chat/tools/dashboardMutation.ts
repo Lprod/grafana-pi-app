@@ -9,6 +9,10 @@ const MAX_MUTATION_RESULT_TEXT = 20000;
 const MAX_MUTATION_RESULT_DATA_TEXT = 12000;
 const DEFAULT_VISUAL_VERIFICATION_WIDTH = 1200;
 const DEFAULT_VISUAL_VERIFICATION_HEIGHT = 700;
+// Grafana uses this sentinel to preserve legacy string variable queries in the v2 DataQuery shape.
+const GRAFANA_LEGACY_STRING_VALUE_KEY = '__legacyStringValue';
+// Read payloads created by older plugin builds so they remain inspectable and repairable.
+const LEGACY_PLUGIN_STRING_VALUE_KEY = '__grafana_string_value';
 
 const READ_COMMANDS = new Set([
   'GET_DASHBOARD_INFO',
@@ -1173,6 +1177,8 @@ async function applyLiveDashboardPrometheusLabelFilter(
     : compactDeep({ variable: variableKind(variableArgs) });
 
   if (args.dryRun) {
+    const existingVariable = variables.find((variable) => liveVariableName(variable) === variableName);
+    const existingVariableQuery = validLiveVariableQueryExpression(existingVariable);
     return prometheusLabelFilterResult(dashboardMutation, {
       dryRun: true,
       success: true,
@@ -1183,7 +1189,13 @@ async function applyLiveDashboardPrometheusLabelFilter(
       expectedQueries,
       plan,
       mutationResults: [],
-      verification: { variablePresent: variableExists, matchingQueryCount: expectedQueries.length, mismatches: [] },
+      verification: {
+        variablePresent: variableExists,
+        variableQueryMatches: existingVariableQuery === variableQueryExpression,
+        variableQuery: existingVariableQuery,
+        matchingQueryCount: expectedQueries.length,
+        mismatches: [],
+      },
     });
   }
 
@@ -1210,6 +1222,8 @@ async function applyLiveDashboardPrometheusLabelFilter(
   let verification:
     | {
         variablePresent: boolean;
+        variableQueryMatches: boolean;
+        variableQuery?: string;
         matchingQueryCount: number;
         mismatches: Array<{ elementName: string; refId: string }>;
       }
@@ -1220,6 +1234,7 @@ async function applyLiveDashboardPrometheusLabelFilter(
       verification = await verifyPrometheusLabelFilter(
         dashboardMutation,
         variableName,
+        variableQueryExpression,
         expectedQueries,
         requestedElements,
         signal
@@ -1233,6 +1248,7 @@ async function applyLiveDashboardPrometheusLabelFilter(
     !mutationFailure &&
     !verificationError &&
     Boolean(verification?.variablePresent) &&
+    Boolean(verification?.variableQueryMatches) &&
     verification?.mismatches.length === 0;
   return prometheusLabelFilterResult(dashboardMutation, {
     dryRun: false,
@@ -1242,6 +1258,9 @@ async function applyLiveDashboardPrometheusLabelFilter(
       verificationError ??
       (verification && !verification.variablePresent
         ? `Variable ${variableName} was not present after mutation.`
+        : undefined) ??
+      (verification && !verification.variableQueryMatches
+        ? `Variable ${variableName} did not retain the requested query expression.`
         : undefined) ??
       (verification?.mismatches.length ? `${verification.mismatches.length} queries failed verification.` : undefined),
     variableName,
@@ -1272,6 +1291,7 @@ function liveVariableName(variable: Record<string, unknown>) {
 async function verifyPrometheusLabelFilter(
   dashboardMutation: DashboardMutationAPI,
   variableName: string,
+  expectedVariableQuery: string,
   expectedQueries: Array<{ elementName: string; refId: string; expression: string }>,
   requestedElements: string[] | undefined,
   signal?: AbortSignal
@@ -1280,6 +1300,8 @@ async function verifyPrometheusLabelFilter(
     readLivePanelSnapshots(dashboardMutation, requestedElements, signal),
     readLiveDashboardVariables(dashboardMutation, signal),
   ]);
+  const variable = variables.find((candidate) => liveVariableName(candidate) === variableName);
+  const variableQuery = validLiveVariableQueryExpression(variable);
   const panelMap = new Map(panels.map((panel) => [panel.elementName, panel]));
   const mismatches = expectedQueries
     .filter((expected) => {
@@ -1291,7 +1313,9 @@ async function verifyPrometheusLabelFilter(
     .map(({ elementName, refId }) => ({ elementName, refId }));
 
   return {
-    variablePresent: variables.some((variable) => liveVariableName(variable) === variableName),
+    variablePresent: Boolean(variable),
+    variableQueryMatches: variableQuery === expectedVariableQuery,
+    variableQuery,
     matchingQueryCount: expectedQueries.length - mismatches.length,
     mismatches,
   };
@@ -1310,7 +1334,13 @@ function prometheusLabelFilterResult(
     expectedQueries: Array<{ elementName: string; refId: string; expression: string }>;
     plan: PlannedPanelUpdate[];
     mutationResults: DashboardMutationResult[];
-    verification?: { variablePresent: boolean; matchingQueryCount: number; mismatches: unknown[] };
+    verification?: {
+      variablePresent: boolean;
+      variableQueryMatches: boolean;
+      variableQuery?: string;
+      matchingQueryCount: number;
+      mismatches: unknown[];
+    };
   }
 ) {
   const changedPanels = result.plan.filter((panel) => panel.changes.length > 0);
@@ -1491,7 +1521,8 @@ function compactLiveDashboardPanelQueries(spec: Record<string, unknown> | undefi
       expr:
         stringField(datasourceSpec, 'expr') ??
         stringField(datasourceSpec, 'query') ??
-        stringField(datasourceSpec, '__grafana_string_value'),
+        stringField(datasourceSpec, GRAFANA_LEGACY_STRING_VALUE_KEY) ??
+        stringField(datasourceSpec, LEGACY_PLUGIN_STRING_VALUE_KEY),
     });
   });
 
@@ -1561,12 +1592,11 @@ function compactLiveDashboardInfo(data: Record<string, unknown>) {
 function compactLiveDashboardVariables(data: Record<string, unknown>) {
   const variables = recordsField(data, 'variables').map((variable) => {
     const spec = recordField(variable, 'spec') ?? variable;
-    const query = recordField(spec, 'query');
     return compactDeep({
       kind: stringField(variable, 'kind'),
       name: stringField(spec, 'name'),
       label: stringField(spec, 'label'),
-      query: stringField(spec, 'query') ?? stringField(query, 'query') ?? stringField(query, '__grafana_string_value'),
+      query: liveVariableQueryExpression(variable),
       current: recordField(spec, 'current'),
       multi: booleanField(spec, 'multi'),
       includeAll: booleanField(spec, 'includeAll'),
@@ -1855,7 +1885,7 @@ function variableDataQuery(args: LiveDashboardVariableParams) {
   const spec = isRecord(args.querySpec)
     ? args.querySpec
     : datasourceType === 'prometheus'
-      ? { __grafana_string_value: stringValue(args.queryExpression, 'queryExpression') }
+      ? { [GRAFANA_LEGACY_STRING_VALUE_KEY]: stringValue(args.queryExpression, 'queryExpression') }
       : { query: stringValue(args.queryExpression, 'queryExpression') };
 
   return compactDeep({
@@ -1868,6 +1898,27 @@ function variableDataQuery(args: LiveDashboardVariableParams) {
 
 function variableOption(text: string, value: string) {
   return { text, value };
+}
+
+function validLiveVariableQueryExpression(variable: Record<string, unknown> | undefined) {
+  const spec = recordField(variable, 'spec') ?? variable;
+  const query = recordField(spec, 'query');
+  const querySpec = recordField(query, 'spec');
+
+  return (
+    stringField(spec, 'query') ??
+    stringField(query, 'query') ??
+    stringField(querySpec, 'query') ??
+    stringField(querySpec, GRAFANA_LEGACY_STRING_VALUE_KEY)
+  );
+}
+
+function liveVariableQueryExpression(variable: Record<string, unknown> | undefined) {
+  const spec = recordField(variable, 'spec') ?? variable;
+  const query = recordField(spec, 'query');
+  const querySpec = recordField(query, 'spec');
+
+  return validLiveVariableQueryExpression(variable) ?? stringField(querySpec, LEGACY_PLUGIN_STRING_VALUE_KEY);
 }
 
 function splitCustomVariableValues(query: unknown) {

@@ -336,6 +336,45 @@ describe('live dashboard mutation tools', () => {
     expect(dashboardMutation.execute).toHaveBeenCalledTimes(2);
   });
 
+  it('serializes Prometheus string variables with Grafana v2 legacy string compatibility', async () => {
+    const dashboardMutation = {
+      execute: jest.fn(async ({ payload }: { payload: Record<string, unknown> }) => mutationResult({ data: payload })),
+      getPayloadSchema: jest.fn(() => permissivePayloadSchema()),
+      getAvailableCommands: jest.fn(() => ['ADD_VARIABLE']),
+    } as unknown as DashboardMutationAPI;
+    const tool = getTool(createLiveDashboardMutationTools(dashboardMutation), 'add_live_dashboard_variable');
+
+    await tool.execute(
+      'call-1',
+      {
+        name: 'instance',
+        variableType: 'query',
+        queryExpression: 'label_values(up, instance)',
+        datasourceType: 'prometheus',
+        datasourceName: 'prometheus',
+      },
+      undefined
+    );
+
+    expect(dashboardMutation.execute).toHaveBeenCalledWith({
+      type: 'ADD_VARIABLE',
+      payload: {
+        variable: {
+          kind: 'QueryVariable',
+          spec: {
+            name: 'instance',
+            query: {
+              kind: 'DataQuery',
+              group: 'prometheus',
+              datasource: { name: 'prometheus' },
+              spec: { __legacyStringValue: 'label_values(up, instance)' },
+            },
+          },
+        },
+      },
+    });
+  });
+
   it('adds a Prometheus variable, filters all panel selectors, and verifies the result', async () => {
     let variables: Array<Record<string, unknown>> = [];
     let panels = [
@@ -406,7 +445,20 @@ describe('live dashboard mutation tools', () => {
       changedPanelCount: 2,
       matchedQueryCount: 2,
       changedQueryCount: 2,
-      verification: { variablePresent: true, matchingQueryCount: 2, mismatches: [] },
+      verification: {
+        variablePresent: true,
+        variableQueryMatches: true,
+        variableQuery: 'label_values(http_requests_total, env)',
+        matchingQueryCount: 2,
+        mismatches: [],
+      },
+    });
+    expect(variables[0]).toMatchObject({
+      spec: {
+        query: {
+          spec: { __legacyStringValue: 'label_values(http_requests_total, env)' },
+        },
+      },
     });
     expect(panelQueryExpressions(panels)).toEqual([
       'sum(rate(http_requests_total{status=~"5..", env=~"$env"}[5m]))',
@@ -421,6 +473,80 @@ describe('live dashboard mutation tools', () => {
       'LIST_PANELS',
       'LIST_VARIABLES',
     ]);
+  });
+
+  it('fails label-filter verification when Grafana does not retain an executable variable query', async () => {
+    let variables: Array<Record<string, unknown>> = [];
+    let panels = [livePanel('panel-1', [liveQuery('A', 'up')])];
+    const dashboardMutation = {
+      execute: jest.fn(async ({ type, payload }: { type: string; payload: any }) => {
+        if (type === 'LIST_PANELS') {
+          return mutationResult({ data: livePanelData(panels) });
+        }
+        if (type === 'LIST_VARIABLES') {
+          return mutationResult({ data: { variables } });
+        }
+        if (type === 'ADD_VARIABLE') {
+          variables = [
+            {
+              ...payload.variable,
+              spec: {
+                ...payload.variable.spec,
+                query: {
+                  ...payload.variable.spec.query,
+                  spec: { __grafana_string_value: 'label_values(up, instance)' },
+                },
+              },
+            },
+          ];
+          return mutationResult({ data: payload });
+        }
+        if (type === 'UPDATE_PANEL') {
+          const elementName = payload.element.name;
+          panels = panels.map((panel) =>
+            panel.name === elementName
+              ? {
+                  ...panel,
+                  element: { ...panel.element, spec: { ...panel.element.spec, data: payload.panel.spec.data } },
+                }
+              : panel
+          );
+          return mutationResult({ data: payload });
+        }
+        throw new Error(`Unexpected dashboard mutation command: ${type}`);
+      }),
+      getAvailableCommands: jest.fn(() => [
+        'ADD_VARIABLE',
+        'LIST_PANELS',
+        'LIST_VARIABLES',
+        'UPDATE_PANEL',
+        'UPDATE_VARIABLE',
+      ]),
+    } as unknown as DashboardMutationAPI;
+    const tool = getTool(
+      createLiveDashboardMutationTools(dashboardMutation),
+      'apply_live_dashboard_prometheus_label_filter'
+    );
+
+    const result = await tool.execute(
+      'call-1',
+      {
+        variableName: 'instance',
+        variableQueryExpression: 'label_values(up, instance)',
+      },
+      undefined
+    );
+
+    expect(result.details).toMatchObject({
+      success: false,
+      error: 'Variable instance did not retain the requested query expression.',
+      verification: {
+        variablePresent: true,
+        variableQueryMatches: false,
+        matchingQueryCount: 1,
+        mismatches: [],
+      },
+    });
   });
 });
 

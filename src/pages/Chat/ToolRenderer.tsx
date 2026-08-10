@@ -4005,6 +4005,7 @@ function liveDashboardResultPanelQuery(panelSpec: Record<string, unknown> | unde
   const expression =
     stringField(dataQuerySpec, 'expr') ??
     stringField(dataQuerySpec, 'query') ??
+    stringField(dataQuerySpec, '__legacyStringValue') ??
     stringField(dataQuerySpec, '__grafana_string_value');
 
   return {
