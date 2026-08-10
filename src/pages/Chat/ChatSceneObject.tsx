@@ -57,6 +57,7 @@ import { formatAssistantError, type AssistantErrorView } from './llmErrors';
 import { createOpenAICompatibleModel, getConfiguredThinkingLevel, type PiAppJsonData } from './model';
 import { convertChatMessagesToLlm, hasPersistableMessages } from './chatMessages';
 import { getGrafanaSkills, renderGrafanaSystemPrompt, selectGrafanaSkills } from './skills';
+import { isFailedDashboardMutationResult } from './tools/result';
 import {
   ContentBlocks,
   ToolActivityPanel,
@@ -370,6 +371,9 @@ export function ChatApp({
     async (context: AfterToolCallContext, signal?: AbortSignal): Promise<AfterToolCallResult | undefined> => {
       if (signal?.aborted || context.isError) {
         return undefined;
+      }
+      if (isFailedDashboardMutationResult(context.result)) {
+        return { isError: true };
       }
       try {
         return artifactizeToolResult(artifactRuntime, context.toolCall.name, context.result);

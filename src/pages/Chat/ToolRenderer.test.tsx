@@ -764,6 +764,67 @@ describe('ToolRenderer', () => {
     expect(history.open).toBe(false);
   });
 
+  it('labels a failed specialist call as recovered after a successful retry', () => {
+    render(
+      <ToolActivityPanel
+        runs={[
+          {
+            id: 'run-1',
+            name: 'run_dashboard_agent',
+            args: {},
+            status: 'running',
+            updatedAt: 1,
+            partialResult: {
+              content: [],
+              details: {
+                type: 'subagent',
+                agent: 'dashboard',
+                status: 'running',
+                task: 'Apply a dashboard filter.',
+                toolCalls: [
+                  {
+                    id: 'failed-1',
+                    name: 'apply_live_dashboard_prometheus_label_filter',
+                    args: { refIds: [] },
+                    status: 'failed',
+                    result: { content: [{ type: 'text', text: 'refIds must not be empty.' }], details: {} },
+                    isError: true,
+                  },
+                  {
+                    id: 'completed-1',
+                    name: 'apply_live_dashboard_prometheus_label_filter',
+                    args: { refIds: ['A'] },
+                    status: 'completed',
+                    result: { content: [{ type: 'text', text: 'Filter applied.' }], details: { success: true } },
+                    isError: false,
+                  },
+                ],
+                usage: {
+                  turns: 2,
+                  input: 10,
+                  output: 4,
+                  cacheRead: 0,
+                  cacheWrite: 0,
+                  totalTokens: 14,
+                  cost: 0,
+                },
+              },
+            },
+          },
+        ]}
+      />
+    );
+
+    const history = screen
+      .getByText('1 completed tool call · 1 recovered attempt')
+      .closest('details') as HTMLDetailsElement;
+    const recovered = screen.getByText('Recovered').closest('details') as HTMLDetailsElement;
+
+    expect(history.open).toBe(false);
+    expect(recovered.open).toBe(false);
+    expect(screen.queryByText('Failed')).not.toBeInTheDocument();
+  });
+
   it('renders nested query-agent Prometheus results with the structured renderer', () => {
     const rangeQuery = 'rate(http_requests_total[5m])';
     const instantQuery = 'up';

@@ -251,6 +251,91 @@ describe('live dashboard mutation tools', () => {
     expect(result.details).toMatchObject({ dryRun: true, success: true, queryChangeCount: 1, appliedPanelCount: 0 });
   });
 
+  it('requires non-empty optional filter scope arrays in the tool schema', () => {
+    const dashboardMutation = createDashboardMutationApi({});
+    const tool = getTool(
+      createLiveDashboardMutationTools(dashboardMutation),
+      'apply_live_dashboard_prometheus_label_filter'
+    );
+    const properties = (tool.parameters as any).properties;
+
+    expect(properties.elements.minItems).toBe(1);
+    expect(properties.refIds.minItems).toBe(1);
+  });
+
+  it('omits dashboard-level parentPath for Grafana runtimes without section variables', async () => {
+    const dashboardMutation = {
+      execute: jest.fn(async ({ type, payload }: { type: string; payload: unknown }) => {
+        expect(type).toBe('LIST_VARIABLES');
+        expect(payload).toEqual({});
+        return mutationResult({ data: { variables: [] } });
+      }),
+      getPayloadSchema: jest.fn(() => strictEmptyPayloadSchema()),
+      getAvailableCommands: jest.fn(() => ['LIST_VARIABLES']),
+    } as unknown as DashboardMutationAPI;
+    const tool = getTool(createLiveDashboardMutationTools(dashboardMutation), 'list_live_dashboard_variables');
+
+    await tool.execute('call-1', { parentPath: '/' }, undefined);
+    await tool.execute('call-2', { parentPath: '' }, undefined);
+
+    expect(dashboardMutation.execute).toHaveBeenCalledTimes(2);
+  });
+
+  it('rejects unsupported section-scoped variable operations before mutation', async () => {
+    const dashboardMutation = {
+      execute: jest.fn(),
+      getPayloadSchema: jest.fn(() => strictEmptyPayloadSchema()),
+      getAvailableCommands: jest.fn(() => ['LIST_VARIABLES']),
+    } as unknown as DashboardMutationAPI;
+    const tool = getTool(createLiveDashboardMutationTools(dashboardMutation), 'list_live_dashboard_variables');
+
+    await expect(tool.execute('call-1', { parentPath: '/rows/0' }, undefined)).rejects.toThrow(
+      'The current Grafana runtime does not support section-scoped variables for LIST_VARIABLES.'
+    );
+    expect(dashboardMutation.execute).not.toHaveBeenCalled();
+  });
+
+  it('passes section scope when the Grafana mutation schema supports it', async () => {
+    const dashboardMutation = {
+      execute: jest.fn(async () => mutationResult({ data: { variables: [] } })),
+      getPayloadSchema: jest.fn(() => permissivePayloadSchema()),
+      getAvailableCommands: jest.fn(() => ['LIST_VARIABLES']),
+    } as unknown as DashboardMutationAPI;
+    const tool = getTool(createLiveDashboardMutationTools(dashboardMutation), 'list_live_dashboard_variables');
+
+    await tool.execute('call-1', { parentPath: '/rows/0' }, undefined);
+
+    expect(dashboardMutation.execute).toHaveBeenCalledWith({
+      type: 'LIST_VARIABLES',
+      payload: { parentPath: '/rows/0' },
+    });
+  });
+
+  it('omits dashboard-level parentPath from add and update variable mutations', async () => {
+    const dashboardMutation = {
+      execute: jest.fn(async ({ payload }: { payload: Record<string, unknown> }) => {
+        expect(payload).not.toHaveProperty('parentPath');
+        return mutationResult({ data: payload });
+      }),
+      getPayloadSchema: jest.fn(() => strictEmptyPayloadSchema()),
+      getAvailableCommands: jest.fn(() => ['ADD_VARIABLE', 'LIST_VARIABLES', 'UPDATE_VARIABLE']),
+    } as unknown as DashboardMutationAPI;
+    const tools = createLiveDashboardMutationTools(dashboardMutation);
+
+    await getTool(tools, 'add_live_dashboard_variable').execute(
+      'call-1',
+      { name: 'env', options: ['prod'], parentPath: '/' },
+      undefined
+    );
+    await getTool(tools, 'update_live_dashboard_variable').execute(
+      'call-2',
+      { name: 'env', options: ['prod'], parentPath: '' },
+      undefined
+    );
+
+    expect(dashboardMutation.execute).toHaveBeenCalledTimes(2);
+  });
+
   it('adds a Prometheus variable, filters all panel selectors, and verifies the result', async () => {
     let variables: Array<Record<string, unknown>> = [];
     let panels = [
@@ -388,13 +473,32 @@ function createDashboardMutationApi(results: Record<string, DashboardMutationRes
       return result;
     }),
     getAvailableCommands: jest.fn(() => [
+      'ADD_VARIABLE',
       'GET_DASHBOARD_INFO',
       'GET_LAYOUT',
       'LIST_PANELS',
       'LIST_VARIABLES',
       'UPDATE_PANEL',
+      'UPDATE_VARIABLE',
     ]),
   } as unknown as DashboardMutationAPI;
+}
+
+function strictEmptyPayloadSchema() {
+  return {
+    parse: (data: unknown) => data,
+    safeParse: (data: unknown) =>
+      data && typeof data === 'object' && !Array.isArray(data) && Object.keys(data).length === 0
+        ? { success: true, data }
+        : { success: false, error: new Error('Unrecognized key') },
+  };
+}
+
+function permissivePayloadSchema() {
+  return {
+    parse: (data: unknown) => data,
+    safeParse: (data: unknown) => ({ success: true, data }),
+  };
 }
 
 function mutationResult({

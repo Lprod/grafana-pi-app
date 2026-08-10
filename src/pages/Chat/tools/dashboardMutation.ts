@@ -314,18 +314,19 @@ function makeListLiveDashboardVariablesTool(dashboardMutation: DashboardMutation
     name: 'list_live_dashboard_variables',
     label: 'List live dashboard variables',
     description:
-      'List template variables on the currently loaded dashboard, optionally scoped to a row or tab parent path from get_live_dashboard_layout.',
+      'List template variables on the currently loaded dashboard. Omit parentPath for dashboard-level variables. Section scopes require support from the current Grafana runtime.',
     parameters: Type.Object({
       parentPath: Type.Optional(
         Type.String({
-          description: 'Optional layout path for section variables, for example "/rows/0". Defaults to "/".',
+          description:
+            'Optional layout path for section variables, for example "/rows/0". Omit for dashboard-level variables.',
         })
       ),
     }),
     async execute(_toolCallId, params, signal) {
       throwIfAborted(signal);
       const args = params as LiveDashboardVariableListParams;
-      const payload = compactRecord({ parentPath: args.parentPath });
+      const payload = withSupportedVariableScope(dashboardMutation, 'LIST_VARIABLES', {}, args.parentPath);
       const result = await dashboardMutation.execute({ type: 'LIST_VARIABLES', payload });
       return mutationResult('LIST_VARIABLES', result, dashboardMutation, payload);
     },
@@ -525,11 +526,16 @@ function makeApplyLiveDashboardPrometheusLabelFilterTool(dashboardMutation: Dash
       allValue: Type.Optional(Type.String({ description: 'Custom All value. Defaults to .*.' })),
       datasourceName: Type.Optional(Type.String({ description: 'Optional Prometheus datasource name.' })),
       elements: Type.Optional(
-        Type.Array(Type.String(), { description: 'Optional panel element names. Omit to update all panels.' })
+        Type.Array(Type.String(), {
+          description: 'Optional panel element names. Omit to update all panels; never pass an empty array.',
+          minItems: 1,
+        })
       ),
       refIds: Type.Optional(
         Type.Array(Type.String(), {
-          description: 'Optional query refIds to update. Omit to update all Prometheus queries.',
+          description:
+            'Optional query refIds to update. Omit to update all Prometheus queries; never pass an empty array.',
+          minItems: 1,
         })
       ),
       existingMatcher: Type.Optional(
@@ -712,17 +718,21 @@ function makeAddLiveDashboardVariableTool(dashboardMutation: DashboardMutationAP
     name: 'add_live_dashboard_variable',
     label: 'Add live dashboard variable',
     description:
-      'Add a dashboard-level or section-scoped custom/query variable to the currently loaded dashboard. Use list_live_dashboard_variables to verify.',
+      'Add a dashboard-level custom/query variable, or a section-scoped variable when supported by the current Grafana runtime. Use list_live_dashboard_variables to verify.',
     executionMode: 'sequential',
     parameters: liveDashboardVariableParameters(false),
     async execute(_toolCallId, params, signal) {
       throwIfAborted(signal);
       const args = params as LiveDashboardVariableParams;
-      const payload = compactDeep({
-        variable: variableKind(args),
-        position: args.position,
-        parentPath: args.parentPath,
-      });
+      const payload = withSupportedVariableScope(
+        dashboardMutation,
+        'ADD_VARIABLE',
+        compactDeep({
+          variable: variableKind(args),
+          position: args.position,
+        }) as Record<string, unknown>,
+        args.parentPath
+      );
       const result = await dashboardMutation.execute({ type: 'ADD_VARIABLE', payload });
       return mutationResult('ADD_VARIABLE', result, dashboardMutation, payload);
     },
@@ -734,17 +744,21 @@ function makeUpdateLiveDashboardVariableTool(dashboardMutation: DashboardMutatio
     name: 'update_live_dashboard_variable',
     label: 'Update live dashboard variable',
     description:
-      'Replace an existing custom/query variable definition on the currently loaded dashboard. Use list_live_dashboard_variables first to get the existing name and scope.',
+      'Replace an existing custom/query variable definition on the currently loaded dashboard. Section scopes require runtime support. Use list_live_dashboard_variables first to get the existing name and scope.',
     executionMode: 'sequential',
     parameters: liveDashboardVariableParameters(true),
     async execute(_toolCallId, params, signal) {
       throwIfAborted(signal);
       const args = params as LiveDashboardVariableParams;
-      const payload = compactDeep({
-        name: args.name,
-        variable: variableKind(args, args.newName ?? args.name),
-        parentPath: args.parentPath,
-      });
+      const payload = withSupportedVariableScope(
+        dashboardMutation,
+        'UPDATE_VARIABLE',
+        compactDeep({
+          name: args.name,
+          variable: variableKind(args, args.newName ?? args.name),
+        }) as Record<string, unknown>,
+        args.parentPath
+      );
       const result = await dashboardMutation.execute({ type: 'UPDATE_VARIABLE', payload });
       return mutationResult('UPDATE_VARIABLE', result, dashboardMutation, payload);
     },
@@ -1348,6 +1362,35 @@ function normalizeOptionalStringList(values: string[] | undefined, field: string
   return [...new Set(values.map((value) => stringValue(value, field)))];
 }
 
+function withSupportedVariableScope(
+  dashboardMutation: DashboardMutationAPI,
+  command: 'LIST_VARIABLES' | 'ADD_VARIABLE' | 'UPDATE_VARIABLE',
+  payload: Record<string, unknown>,
+  parentPath: string | undefined
+) {
+  const normalizedParentPath = parentPath?.trim();
+  if (!normalizedParentPath || normalizedParentPath === '/') {
+    return payload;
+  }
+
+  const scopedPayload = { ...payload, parentPath: normalizedParentPath };
+  const schema = safeMutationPayloadSchema(dashboardMutation, command);
+  if (schema && schema.safeParse(payload).success && !schema.safeParse(scopedPayload).success) {
+    throw new Error(
+      `The current Grafana runtime does not support section-scoped variables for ${command}. Omit parentPath to use dashboard scope.`
+    );
+  }
+  return scopedPayload;
+}
+
+function safeMutationPayloadSchema(dashboardMutation: DashboardMutationAPI, command: string) {
+  try {
+    return dashboardMutation.getPayloadSchema(command);
+  } catch {
+    return null;
+  }
+}
+
 function normalizeCommand(command: unknown) {
   return typeof command === 'string' && command.trim() ? command.trim().toUpperCase() : undefined;
 }
@@ -1760,7 +1803,10 @@ function liveDashboardVariableParameters(includeRename: boolean) {
       })
     ),
     parentPath: Type.Optional(
-      Type.String({ description: 'Optional row/tab variable scope path. Defaults to dashboard scope.' })
+      Type.String({
+        description:
+          'Optional row/tab variable scope path when supported by the current Grafana runtime. Omit for dashboard scope.',
+      })
     ),
   });
 }

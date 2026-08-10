@@ -1646,11 +1646,17 @@ function SubagentDetailsView({
   onOpenDashboard?: DashboardOpenHandler;
 }) {
   const styles = useStyles2(getToolStyles);
+  const recoveredCallIds = recoveredSubagentToolCallIds(details.toolCalls);
   const prominentCalls = compact
-    ? details.toolCalls.filter((call) => call.status === 'running' || call.status === 'failed' || call.isError)
+    ? details.toolCalls.filter(
+        (call) =>
+          call.status === 'running' || ((call.status === 'failed' || call.isError) && !recoveredCallIds.has(call.id))
+      )
     : details.toolCalls;
-  const completedCalls = compact
-    ? details.toolCalls.filter((call) => call.status === 'completed' && !call.isError)
+  const historyCalls = compact
+    ? details.toolCalls.filter(
+        (call) => (call.status === 'completed' && !call.isError) || recoveredCallIds.has(call.id)
+      )
     : [];
 
   return (
@@ -1673,20 +1679,20 @@ function SubagentDetailsView({
             call={call}
             key={`${call.id}:${index}`}
             onOpenDashboard={onOpenDashboard}
+            recovered={recoveredCallIds.has(call.id)}
           />
         ))}
-        {compact && completedCalls.length > 0 && (
+        {compact && historyCalls.length > 0 && (
           <details className={styles.toolHistory}>
-            <summary>
-              {completedCalls.length} completed tool {completedCalls.length === 1 ? 'call' : 'calls'}
-            </summary>
+            <summary>{subagentToolHistoryLabel(historyCalls, recoveredCallIds)}</summary>
             <div className={styles.toolTimeline}>
-              {completedCalls.map((call, index) => (
+              {historyCalls.map((call, index) => (
                 <SubagentToolCallRow
                   agent={details.agent}
                   call={call}
                   key={`${call.id}:${index}`}
                   onOpenDashboard={onOpenDashboard}
+                  recovered={recoveredCallIds.has(call.id)}
                 />
               ))}
             </div>
@@ -1720,13 +1726,15 @@ function SubagentToolCallRow({
   agent,
   call,
   onOpenDashboard,
+  recovered = false,
 }: {
   agent: SubagentRunDetails['agent'];
   call: SubagentToolCall;
   onOpenDashboard?: DashboardOpenHandler;
+  recovered?: boolean;
 }) {
   const styles = useStyles2(getToolStyles);
-  const shouldAutoOpen = shouldExpandSubagentToolCall(call, agent);
+  const shouldAutoOpen = shouldExpandSubagentToolCall(call, agent, recovered);
   const [manualOpen, setManualOpen] = useState<boolean | undefined>(undefined);
   const isOpen = manualOpen ?? shouldAutoOpen;
   const toolResult = call.result ?? call.partialResult;
@@ -1738,7 +1746,10 @@ function SubagentToolCallRow({
   const error = call.isError ? extractToolError(call.name, resultDetails, resultContent) : undefined;
 
   return (
-    <details className={cx(styles.toolStep, call.status === 'failed' && styles.toolStepError)} open={isOpen}>
+    <details
+      className={cx(styles.toolStep, call.status === 'failed' && !recovered && styles.toolStepError)}
+      open={isOpen}
+    >
       <summary
         aria-expanded={isOpen}
         onClick={(event) => {
@@ -1746,7 +1757,15 @@ function SubagentToolCallRow({
           setManualOpen((open) => !(open ?? shouldAutoOpen));
         }}
       >
-        <span>{call.status === 'running' ? 'Running' : call.status === 'failed' ? 'Failed' : 'Done'}</span>
+        <span>
+          {recovered
+            ? 'Recovered'
+            : call.status === 'running'
+              ? 'Running'
+              : call.status === 'failed'
+                ? 'Failed'
+                : 'Done'}
+        </span>
         <strong>{call.name}</strong>
       </summary>
       {isOpen && (
@@ -1755,7 +1774,7 @@ function SubagentToolCallRow({
             <pre className={styles.toolCallJson}>{formatJson(call.args)}</pre>
           )}
           {(resultContent || error) && (
-            <div className={cx(styles.toolStepResult, call.isError && styles.toolStepResultError)}>
+            <div className={cx(styles.toolStepResult, call.isError && !recovered && styles.toolStepResultError)}>
               {showArtifactCard && artifactResult && (
                 <ArtifactResultView artifact={artifactResult.ref} preview={artifactResult.preview} />
               )}
@@ -1783,13 +1802,40 @@ function SubagentToolCallRow({
   );
 }
 
-function shouldExpandSubagentToolCall(call: SubagentToolCall, agent: SubagentRunDetails['agent']) {
+function shouldExpandSubagentToolCall(call: SubagentToolCall, agent: SubagentRunDetails['agent'], recovered = false) {
   return (
-    call.status === 'failed' ||
-    call.isError ||
+    (!recovered && (call.status === 'failed' || call.isError)) ||
     (agent === 'alerts' && call.status === 'completed' && !call.isError && ALERT_EVIDENCE_TOOL_NAMES.has(call.name)) ||
     (call.status === 'completed' && !call.isError && call.name === 'save_dashboard')
   );
+}
+
+function recoveredSubagentToolCallIds(toolCalls: SubagentToolCall[]) {
+  const laterSuccessfulToolNames = new Set<string>();
+  const recoveredCallIds = new Set<string>();
+
+  for (let index = toolCalls.length - 1; index >= 0; index -= 1) {
+    const call = toolCalls[index];
+    if (call.status === 'completed' && !call.isError) {
+      laterSuccessfulToolNames.add(call.name);
+      continue;
+    }
+    if ((call.status === 'failed' || call.isError) && laterSuccessfulToolNames.has(call.name)) {
+      recoveredCallIds.add(call.id);
+    }
+  }
+
+  return recoveredCallIds;
+}
+
+function subagentToolHistoryLabel(toolCalls: SubagentToolCall[], recoveredCallIds: Set<string>) {
+  const recoveredCount = toolCalls.filter((call) => recoveredCallIds.has(call.id)).length;
+  const completedCount = toolCalls.length - recoveredCount;
+  const labels = [
+    `${completedCount} completed tool ${completedCount === 1 ? 'call' : 'calls'}`,
+    recoveredCount > 0 ? `${recoveredCount} recovered ${recoveredCount === 1 ? 'attempt' : 'attempts'}` : undefined,
+  ];
+  return labels.filter(Boolean).join(' · ');
 }
 
 const ALERT_EVIDENCE_TOOL_NAMES = new Set(['find_panel_alert_rules', 'get_alert_rule', 'query_prometheus']);
