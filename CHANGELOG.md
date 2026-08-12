@@ -1,3 +1,10 @@
+## [2.18.2](https://github.com/elohmeier/grafana-pi-app/compare/v2.18.1...v2.18.2) (2026-08-12)
+
+
+### Bug Fixes
+
+* match official Grafana Assistant title in the variant packaging manifest ([926d67a](https://github.com/elohmeier/grafana-pi-app/commit/926d67a4df9266bff75d64f4c7f2db693912f2fb))
+
 ## [2.18.1](https://github.com/elohmeier/grafana-pi-app/compare/v2.18.0...v2.18.1) (2026-08-12)
 
 
