@@ -8,9 +8,17 @@ import process from 'node:process';
 
 const repoRoot = process.cwd();
 const basePluginId = 'g42-pi-app';
-const variantPluginId = process.env.PLUGIN_VARIANT_ID ?? 'grafana-assistant-app';
+const officialAssistantPluginId = 'grafana-assistant-app';
+const variantPluginId = process.env.PLUGIN_VARIANT_ID ?? officialAssistantPluginId;
 const sidebarExtensionPoint = 'grafana/extension-sidebar/v0-alpha';
-const sidebarTitle = 'Assistant';
+// Must match @grafana/assistant's ASSISTANT_PLUGIN_TITLE exactly for the
+// official-ID variant, the same way src/module.tsx's ASSISTANT_SIDEBAR_TITLE
+// does at runtime - this manifest's addedComponents/addedLinks titles are a
+// separate, static declaration that Grafana core also checks (e.g. to
+// resolve which component to render when opening the sidebar), so it has to
+// stay in sync with the runtime value or the sidebar can be "available" per
+// isAssistantAvailable() yet fail to actually open.
+const sidebarTitle = variantPluginId === officialAssistantPluginId ? 'Grafana Assistant' : 'Assistant';
 const pluginJsonPath = path.join(repoRoot, 'src', 'plugin.json');
 const distDir = path.join(repoRoot, 'dist');
 const packageDir = path.join(repoRoot, variantPluginId);
