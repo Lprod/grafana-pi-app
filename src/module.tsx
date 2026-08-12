@@ -32,7 +32,17 @@ const LazyApp = lazy(() => import('./components/App/App'));
 const LazyAppConfig = lazy(() => import('./components/AppConfig/AppConfig'));
 const LazyAssistantSidebar = lazy(() => import('./pages/Chat/AssistantSidebar'));
 const ASSISTANT_PLUGIN_ID = 'grafana-assistant-app';
-const ASSISTANT_SIDEBAR_TITLE = 'Assistant';
+// The `grafana-assistant-app`-ID build is meant to be a drop-in for the
+// official Grafana Assistant so other plugins can integrate with it via the
+// `@grafana/assistant` npm package. That package's `isAssistantAvailable()`
+// checks the registered ExtensionSidebar component for both the plugin id
+// AND an exact title match against `ASSISTANT_PLUGIN_TITLE = 'Grafana
+// Assistant'` - so this must match that string for the compat variant, or
+// third-party `OpenAssistantButton`/`useAssistant()` consumers silently see
+// `isAvailable: false` and the button never renders, even though the
+// plugin id itself is correct. Keep the shorter "Assistant" label for the
+// default g42-pi-app build, which doesn't need to satisfy that contract.
+const ASSISTANT_SIDEBAR_TITLE = pluginJson.id === ASSISTANT_PLUGIN_ID ? 'Grafana Assistant' : 'Assistant';
 const ASSISTANT_SIDEBAR_OPEN_RETRY_DELAYS_MS = [0, 100, 300];
 
 type OpenExtensionSidebarPayload = {
