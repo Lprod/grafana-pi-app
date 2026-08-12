@@ -1,3 +1,10 @@
+## [2.18.1](https://github.com/elohmeier/grafana-pi-app/compare/v2.18.0...v2.18.1) (2026-08-12)
+
+
+### Bug Fixes
+
+* match official Grafana Assistant title for the grafana-assistant-app variant ([a1a1ea4](https://github.com/elohmeier/grafana-pi-app/commit/a1a1ea4dbbcbf5b1898b7ed3cac64ff0761b1389))
+
 # [2.18.0](https://github.com/elohmeier/grafana-pi-app/compare/v2.17.2...v2.18.0) (2026-08-10)
 
 
